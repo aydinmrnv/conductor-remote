@@ -5,12 +5,12 @@ import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { workspaceDiff } from './git.ts'
 import { Reads } from './reads.ts'
-import { pickActuator } from './writes.ts'
+import { describeActuator, pickActuator } from './writes.ts'
 
 const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
-const actuator = pickActuator(cfg.unsafeDbWrite)
+const actuator = pickActuator(cfg.writeStrategy)
 
 const MIME: Record<string, string> = {
 	'.html': 'text/html; charset=utf-8',
@@ -41,6 +41,12 @@ async function readBody(req: http.IncomingMessage): Promise<string> {
 	return Buffer.concat(chunks).toString('utf8')
 }
 
+/** Hashed Vite assets are immutable and cache-forever; the shell/SW must never go stale. */
+function cacheControl(rel: string): string {
+	if (rel.startsWith('assets/')) return 'public, max-age=31536000, immutable'
+	return 'no-cache'
+}
+
 function serveStatic(_req: http.IncomingMessage, res: http.ServerResponse, pathname: string): void {
 	const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '')
 	const filePath = path.join(cfg.publicDir, rel)
@@ -54,13 +60,13 @@ function serveStatic(_req: http.IncomingMessage, res: http.ServerResponse, pathn
 			// SPA fallback to shell.
 			fs.readFile(path.join(cfg.publicDir, 'index.html'), (e2, shell) => {
 				if (e2) return void res.writeHead(404).end('not found')
-				res.writeHead(200, { 'content-type': MIME['.html'] })
+				res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-cache' })
 				res.end(shell)
 			})
 			return
 		}
 		const ext = path.extname(filePath)
-		res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream' })
+		res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': cacheControl(rel) })
 		res.end(data)
 	})
 }
@@ -79,7 +85,7 @@ const server = http.createServer(async (req, res) => {
 		if (req.method === 'GET' && pathname === '/api/state') {
 			return json(res, 200, {
 				workspaces: reads.listWorkspaces(),
-				actuator: { name: actuator.name, caveat: actuator.caveat }
+				actuator: await describeActuator(actuator)
 			})
 		}
 
@@ -117,7 +123,7 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(res, 404, { error: 'workspace for session not found' })
-			const result = await actuator.send(ws, text)
+			const result = await actuator.send({ workspace: ws, sessionId }, text)
 			return json(res, result.ok ? 200 : 502, result)
 		}
 

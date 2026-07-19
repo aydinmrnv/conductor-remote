@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { Workspace } from './reads.ts'
+import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
 
 const exec = promisify(execFile)
 
@@ -11,33 +12,69 @@ export interface SendResult {
 	error?: string
 }
 
+/** Who to deliver a prompt to. `sessionId` is the precise target; `workspace` carries the worktree + focus context. */
+export interface SendTarget {
+	workspace: Workspace
+	sessionId: string | null
+}
+
 export interface Actuator {
 	readonly name: string
 	/** Human-readable note about this strategy's limits, surfaced in the UI. */
 	readonly caveat: string
-	send: (workspace: Workspace, text: string) => Promise<SendResult>
+	/** True when delivery is addressed to a specific session (no window-focus dependency). */
+	readonly precise: boolean
+	send: (target: SendTarget, text: string) => Promise<SendResult>
+	/** Runtime availability check (e.g. the sidecar socket must be reachable). */
+	available?: () => Promise<boolean>
 }
 
 /**
- * Writes are the ONLY Conductor-coupled surface (reads ride SQLite + git).
+ * The sidecar IPC path — the precise, per-session write. Delivers straight to
+ * `sessionId` over Conductor's own dispatch socket (see sidecar.ts), so it needs
+ * no window focus and the app UI reflects the turn correctly.
  *
- * On this build the webview-injection path from the original plan is closed:
- * the app is hardened/notarized without `get-task-allow`, its frontend is
- * baked into the binary (no index.html to patch, no devtools), and the only
- * exposed IPC commands are stock Tauri plugins — there is no custom
- * `send_message` to invoke. See FINDINGS.md.
- *
- * So the default actuator drives Conductor's real send path via macOS
- * Accessibility (AppleScript). It types into whichever session Conductor has
- * focused — reliable per-workspace targeting needs an AX-tree map of the
- * sidebar and is the next recon step.
+ * Opt-in (WRITE_STRATEGY=sidecar) because it speaks a private, versioned IPC and
+ * hasn't been validated by an automated live send (that would inject a prompt
+ * into a running agent). It is the intended default once you've confirmed it on
+ * your setup.
+ */
+export class SidecarActuator implements Actuator {
+	readonly name = 'sidecar'
+	readonly caveat =
+		'Delivered straight to the target session over Conductor’s dispatch socket — precise per-workspace targeting.'
+	readonly precise = true
+
+	available(): Promise<boolean> {
+		return sidecarAvailable()
+	}
+
+	async send(target: SendTarget, text: string): Promise<SendResult> {
+		const sessionId = target.sessionId ?? target.workspace.active_session_id
+		if (!sessionId) return { ok: false, strategy: this.name, error: 'no session id to target' }
+		try {
+			await sidecarSendUserMessage(sessionId, text)
+			return { ok: true, strategy: this.name }
+		} catch (err) {
+			return { ok: false, strategy: this.name, error: err instanceof Error ? err.message : String(err) }
+		}
+	}
+}
+
+/**
+ * Drives Conductor's real send path via macOS Accessibility (AppleScript):
+ * activate the app, paste the prompt, press Enter. Uses whatever model /
+ * permission mode the session already has (zero risk of altering the agent),
+ * which is why it's the default. Its one limit is that it lands in the session
+ * Conductor currently has focused — bring the target workspace to front first.
  */
 export class AppleScriptActuator implements Actuator {
 	readonly name = 'applescript'
 	readonly caveat =
-		'Sends to the session currently focused in the Conductor window. Bring the target workspace to front first; per-workspace targeting is not yet wired.'
+		'Lands in the session Conductor currently has focused. Bring the target workspace to front first; for precise targeting run with WRITE_STRATEGY=sidecar.'
+	readonly precise = false
 
-	async send(_workspace: Workspace, text: string): Promise<SendResult> {
+	async send(_target: SendTarget, text: string): Promise<SendResult> {
 		// Paste beats keystroke for long/multibyte prompts. We stash the clipboard,
 		// paste, send, and restore.
 		const script = `
@@ -81,27 +118,16 @@ set the clipboard to savedClipboard
 	}
 }
 
-/**
- * Experimental, opt-in (UNSAFE_DB_WRITE=1). Inserts a queued user message
- * straight into conductor.db, mirroring the columns a real prompt writes.
- * UNVERIFIED: it is not yet confirmed that Conductor's backend drains the
- * queue from a DB watcher rather than only on its own in-process IPC — so this
- * may produce a message that shows in the UI but never dispatches. Never runs
- * unless explicitly enabled. See FINDINGS.md.
- */
-export class DbQueueActuator implements Actuator {
-	readonly name = 'db-queue'
-	readonly caveat = 'EXPERIMENTAL raw DB insert — may not dispatch. Enabled via UNSAFE_DB_WRITE=1.'
+export type WriteStrategy = 'applescript' | 'sidecar'
 
-	async send(_workspace: Workspace, _text: string): Promise<SendResult> {
-		return {
-			ok: false,
-			strategy: this.name,
-			error: 'db-queue actuator is a documented stub — implement only after confirming the queue is DB-drained (FINDINGS.md).'
-		}
-	}
+export function pickActuator(strategy: WriteStrategy): Actuator {
+	return strategy === 'sidecar' ? new SidecarActuator() : new AppleScriptActuator()
 }
 
-export function pickActuator(unsafeDbWrite: boolean): Actuator {
-	return unsafeDbWrite ? new DbQueueActuator() : new AppleScriptActuator()
+/** Effective actuator description for the UI, factoring in runtime availability. */
+export async function describeActuator(
+	actuator: Actuator
+): Promise<{ name: string; caveat: string; precise: boolean; available: boolean }> {
+	const available = actuator.available ? await actuator.available().catch(() => false) : true
+	return { name: actuator.name, caveat: actuator.caveat, precise: actuator.precise, available }
 }

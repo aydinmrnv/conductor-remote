@@ -57,7 +57,14 @@ rename of `session_messages`/`sessions` would, and that's rare and cheap to rema
 ### ✗ Webview injection + Tauri `invoke` (the committed plan) — blocked
 - **Frontend is baked into the binary.** `Contents/Resources/` holds only `icon.icns`, a `bin/` (helpers), and the skill bundle — **no `index.html`, no `assets/`.** The Tauri runtime + all web assets are compiled into `Contents/MacOS/conductor`. There is nothing on disk to patch a `<script>` into, so the "patch index.html + launchd re-patch" persistence mechanism has no target.
 - **No devtools.** Entitlements are only `allow-jit`, `allow-unsigned-executable-memory`, `device.audio-input` — **no `com.apple.security.get-task-allow`.** On macOS 13.3+ a `WKWebView` is inspectable only if the app opts in; a hardened, notarized production build without `get-task-allow` won't appear in Safari's Develop menu. **There is no console to run the recon snippet in.**
-- **No custom IPC commands anyway.** Dumping the invoke handlers from the binary shows only stock plugins: `plugin:sql|execute`, `plugin:sql|select`, `plugin:shell|spawn`, `plugin:shell|stdin_write`, `plugin:fs|*`, `plugin:window|*`, etc. Conductor drives the agent by writing the DB via `plugin:sql` and feeding a `claude` subprocess via `plugin:shell`. There is no `send_message`/`create_session` command to reverse-engineer.
+- **No custom IPC commands *in the Tauri webview boundary*.** The Tauri
+  `invoke` ACL exposes only stock plugins (`plugin:sql|*`, `plugin:shell|*`,
+  `plugin:fs|*`, `plugin:window|*`, …) — so there's no `send_message` reachable
+  from inside the webview even if you got there. **But that's not where the send
+  actually happens** (see the sidecar socket below): the frontend talks to a
+  separate `conductor-runtime sidecar` process over a unix socket, and *that*
+  protocol has the real `sendUserMessage`/`query` verbs. The earlier "no custom
+  IPC anywhere" reading was wrong — it was true only of the `invoke` surface.
 
 Getting inside would mean re-signing the app with `get-task-allow` (breaks
 notarization, needs Gatekeeper disabled) or attaching a debugger under disabled
@@ -83,18 +90,58 @@ never runs. Left as an opt-in, clearly-labeled experiment
 (`UNSAFE_DB_WRITE=1` → `DbQueueActuator`, currently a stub) to be validated
 only by live observation, since it risks racing the app's writer.
 
-### ✓ macOS Accessibility (AppleScript) — the viable path, shipped as default
+### ✓ Sidecar IPC socket — the precise path (opt-in `WRITE_STRATEGY=sidecar`)
+Conductor's agents don't run under the Tauri app directly. A single
+**`conductor-runtime sidecar`** process (child of the app) **parents every live
+`claude`/`codex` agent**, and the app drives it over a unix domain socket:
+
+```
+$TMPDIR/conductor-sidecar-v2-<sidecarPid>.sock
+```
+
+The wire protocol (reverse-engineered from `conductor-runtime`, Conductor 0.76):
+
+- **Transport:** newline-delimited **JSON-RPC 2.0** (`{jsonrpc,id,method,params}`)
+  over a raw `net` socket. (Stale socket files from exited sidecars linger in
+  `$TMPDIR`, so discovery is connectivity-based: try candidates newest-first, use
+  the first that accepts a connection.)
+- **Local auth:** the literal `{ userId: "local", auth: "local" }` — local
+  (non-cloud) sessions authenticate with the constant string `"local"`. Verified:
+  the socket accepts it and round-trips zod-validated responses.
+- **Send a prompt:** method `query`, params
+  `{ type:"query", id:<sessionId>, agentType:"claude", message, prompt, options:{ cwd, … } }`.
+  For a session already loaded in the sidecar's store (i.e. a live agent), the
+  message is simply enqueued to that session — addressed by `sessionId`, so no
+  window focus is involved and the app UI updates correctly.
+- **Safe reads** (no turn triggered): `contextUsage`, `fetchSlashCommands`,
+  `getSessionStatus`.
+
+This is the app's **real** dispatch path and gives exact per-session targeting.
+It's opt-in rather than default because (a) it speaks a private, versioned
+(`-v2-`) IPC — the most update-fragile surface here — and (b) `options` carries
+agent-spawn params (`cwd`, `model`, `permissionMode`, `resume`, …); a live send
+was not auto-validated to avoid injecting a prompt into a running agent. The
+socket + auth + protocol *were* validated with the safe read RPCs. Implemented in
+`src/sidecar.ts`; wired as `SidecarActuator` in `src/writes.ts`.
+
+Also on this socket: an `app_actions` HTTP server exists but is gated
+("App actions server is only available for internal users"), and the
+`conductor cli` remains cloud-only (`api.conductor.build`) — both dead for local
+control.
+
+### ✓ macOS Accessibility (AppleScript) — the safe default
 `AppleScriptActuator` activates Conductor and pastes+sends the prompt via
 System Events. It drives the app's **real** send path — no injection, no DB
 poking, works on the hardened build (Accessibility is an OS permission the user
 grants once). Coupling is to the prompt field, not the frontend bundle, so it
 survives UI-bundle updates.
 - **Known gap:** it types into whichever session Conductor currently has
-  focused. Reliable **per-workspace targeting** needs either an AX-tree map of
-  the sidebar rows or a `conductor://` deep-link route to focus a workspace
-  (the scheme is registered — `CFBundleURLSchemes = [conductor]`,
-  `tauri-plugin-deep-link` — but its routes are unmapped). That is the next
-  recon step. Until then, treat writes as "send to the front workspace."
+  focused. It's the safe default because it can't alter the agent (it reuses the
+  session's own model/permission mode) — but for **per-workspace targeting**, use
+  the sidecar path above (`WRITE_STRATEGY=sidecar`), which addresses the session
+  directly. (The `conductor://` scheme is registered — `CFBundleURLSchemes =
+  [conductor]`, `tauri-plugin-deep-link` — but its routes are unmapped and no
+  longer needed for targeting.)
 
 ### ✓ Alternative: drive Claude Code directly (not wired)
 Because `sessions.id == claude_session_id` and the worktree is a normal repo,
@@ -112,11 +159,13 @@ until it re-reads. Noted as a fallback, not the default.
   update-fragile surface is the AX prompt-field target, remapped in minutes.
 
 ## Suggested next steps
-1. Map the write target: bring a workspace to front, inspect Conductor's AX tree
-   (Accessibility Inspector) for the prompt `textarea`, and/or probe
-   `conductor://` deep-link routes → upgrade `AppleScriptActuator` to focus a
-   specific workspace before typing.
-2. Optionally spike the `claude --resume` actuator behind a flag and compare UX.
-3. File the Help ▸ Send Feedback request for a **local** control API — if
-   Conductor exposes the existing `/v0` surface against local workspaces, the
-   whole write path collapses to a supported call.
+1. **Per-workspace targeting — solved** via the sidecar socket (see Writes ▸
+   Sidecar IPC). `SidecarActuator` addresses the session directly; the AX-tree /
+   `conductor://` route mapping is no longer needed.
+2. **Validate the sidecar send live** on your own setup, then consider making
+   `WRITE_STRATEGY=sidecar` the default. The safe read RPCs already confirm the
+   socket + auth; a real `query` send just needs a live sanity check (it will
+   inject a prompt into the target agent, so it wasn't auto-run).
+3. File the Help ▸ Send Feedback request for a supported **local** control API —
+   if Conductor blesses the sidecar verbs (or the `/v0` surface) for local
+   workspaces, the fragile-IPC caveat disappears.
