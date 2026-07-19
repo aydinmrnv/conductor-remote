@@ -1,0 +1,148 @@
+import fs from 'node:fs'
+import http from 'node:http'
+import path from 'node:path'
+import { loadConfig } from './config.ts'
+import { ConductorDb } from './db.ts'
+import { workspaceDiff } from './git.ts'
+import { Reads } from './reads.ts'
+import { pickActuator } from './writes.ts'
+
+const cfg = loadConfig()
+const db = new ConductorDb(cfg.dbPath)
+const reads = new Reads(db, cfg.workspacesRoot)
+const actuator = pickActuator(cfg.unsafeDbWrite)
+
+const MIME: Record<string, string> = {
+	'.html': 'text/html; charset=utf-8',
+	'.js': 'text/javascript; charset=utf-8',
+	'.css': 'text/css; charset=utf-8',
+	'.json': 'application/json; charset=utf-8',
+	'.webmanifest': 'application/manifest+json; charset=utf-8',
+	'.svg': 'image/svg+xml',
+	'.png': 'image/png'
+}
+
+function json(res: http.ServerResponse, status: number, body: unknown): void {
+	const payload = JSON.stringify(body)
+	res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+	res.end(payload)
+}
+
+function authed(req: http.IncomingMessage): boolean {
+	const auth = req.headers.authorization
+	if (auth === `Bearer ${cfg.token}`) return true
+	const url = new URL(req.url ?? '/', 'http://x')
+	return url.searchParams.get('token') === cfg.token
+}
+
+async function readBody(req: http.IncomingMessage): Promise<string> {
+	const chunks: Buffer[] = []
+	for await (const c of req) chunks.push(c as Buffer)
+	return Buffer.concat(chunks).toString('utf8')
+}
+
+function serveStatic(_req: http.IncomingMessage, res: http.ServerResponse, pathname: string): void {
+	const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '')
+	const filePath = path.join(cfg.publicDir, rel)
+	// Contain to publicDir.
+	if (!filePath.startsWith(cfg.publicDir)) {
+		res.writeHead(403).end()
+		return
+	}
+	fs.readFile(filePath, (err, data) => {
+		if (err) {
+			// SPA fallback to shell.
+			fs.readFile(path.join(cfg.publicDir, 'index.html'), (e2, shell) => {
+				if (e2) return void res.writeHead(404).end('not found')
+				res.writeHead(200, { 'content-type': MIME['.html'] })
+				res.end(shell)
+			})
+			return
+		}
+		const ext = path.extname(filePath)
+		res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream' })
+		res.end(data)
+	})
+}
+
+const server = http.createServer(async (req, res) => {
+	const url = new URL(req.url ?? '/', 'http://x')
+	const { pathname } = url
+
+	if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname)
+
+	// Everything under /api requires the shared secret.
+	if (!authed(req)) return json(res, 401, { error: 'unauthorized' })
+
+	try {
+		// GET /api/state — workspace list with active-session status
+		if (req.method === 'GET' && pathname === '/api/state') {
+			return json(res, 200, {
+				workspaces: reads.listWorkspaces(),
+				actuator: { name: actuator.name, caveat: actuator.caveat }
+			})
+		}
+
+		// GET /api/workspaces/:id/sessions
+		let m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
+		if (req.method === 'GET' && m) {
+			return json(res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
+		}
+
+		// GET /api/workspaces/:id/diff
+		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/diff$/)
+		if (req.method === 'GET' && m) {
+			const ws = reads.getWorkspace(decodeURIComponent(m[1]))
+			if (!ws) return json(res, 404, { error: 'workspace not found' })
+			if (!ws.worktree) return json(res, 409, { error: 'worktree path unresolved' })
+			const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
+			return json(res, 200, diff)
+		}
+
+		// GET /api/sessions/:id/messages?after=<rowid>
+		m = pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
+		if (req.method === 'GET' && m) {
+			const after = Number(url.searchParams.get('after') ?? 0)
+			return json(res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
+		}
+
+		// POST /api/sessions/:id/prompt  { text }
+		m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+		if (req.method === 'POST' && m) {
+			const sessionId = decodeURIComponent(m[1])
+			const body = JSON.parse((await readBody(req)) || '{}') as { text?: string; workspaceId?: string }
+			const text = (body.text ?? '').trim()
+			if (!text) return json(res, 400, { error: 'empty prompt' })
+			const ws = body.workspaceId
+				? reads.getWorkspace(body.workspaceId)
+				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+			if (!ws) return json(res, 404, { error: 'workspace for session not found' })
+			const result = await actuator.send(ws, text)
+			return json(res, result.ok ? 200 : 502, result)
+		}
+
+		return json(res, 404, { error: 'no route', pathname })
+	} catch (err) {
+		return json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+	}
+})
+
+server.listen(cfg.port, cfg.host, () => {
+	const base = `http://${cfg.host}:${cfg.port}`
+	const lines = [
+		'conductor-remote relay up',
+		`  db:         ${cfg.dbPath}`,
+		`  worktrees:  ${cfg.workspacesRoot}`,
+		`  actuator:   ${actuator.name}`,
+		'',
+		'  Open on your phone (same Tailnet):',
+		`    ${base}/#token=${cfg.token}`
+	]
+	if (cfg.host === '127.0.0.1') {
+		lines.push(
+			'',
+			'  ⚠ bound to loopback — no Tailscale 100.x NIC found. Set RELAY_HOST to your tailnet IP to reach it from your phone.'
+		)
+	}
+	console.info(lines.join('\n'))
+})

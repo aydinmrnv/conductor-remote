@@ -1,0 +1,33 @@
+{
+  "name": "conductor-remote",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Phone control panel for local Conductor agents. Reads ride SQLite + git; the prompt box is the only Conductor-coupled write.",
+  "license": "MIT",
+  "author": "Eivind Hyldmo",
+  "homepage": "https://github.com/hyldmo/conductor-remote#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hyldmo/conductor-remote.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hyldmo/conductor-remote/issues"
+  },
+  "keywords": [
+    "conductor",
+    "claude-code",
+    "coding-agents",
+    "remote-control",
+    "pwa",
+    "tailscale",
+    "sqlite"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --experimental-transform-types --disable-warning=ExperimentalWarning src/server.ts",
+    "dev": "node --experimental-transform-types --disable-warning=ExperimentalWarning --watch src/server.ts",
+    "verify": "for f in src/*.ts scripts/*.js public/*.js; do node --experimental-transform-types --disable-warning=ExperimentalWarning --check \"$f\" || exit 1; done"
+  }
+}
