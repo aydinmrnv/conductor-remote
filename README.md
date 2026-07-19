@@ -4,45 +4,63 @@ A phone control panel for your **local** Conductor agents. Monitor every
 workspace, read live transcripts, view diffs, and send prompts — from your
 phone, over your Tailnet, no cloud, no App Store.
 
+Installable as a PWA (Add to Home Screen). Reads ride Conductor's on-disk SQLite
++ git worktrees (zero coupling); prompts ride Conductor's **own** dispatch path.
+
 > Built after reconnaissance forced a design change from the original
 > injected-IPC-bridge idea. Read **[FINDINGS.md](./FINDINGS.md)** for why — the
-> short version is that reads ride SQLite + git (zero coupling) and the only
-> Conductor-coupled surface is the prompt write, done via macOS Accessibility
-> because webview injection is closed on the shipped, hardened build.
+> short version is that reads ride SQLite + git and the write path is isolated
+> behind a swappable `Actuator` interface (AppleScript by default, or Conductor's
+> sidecar socket for precise per-session targeting).
 
 ## Architecture
 
 ```
  Phone PWA  ──HTTP/poll──►  Relay (Node, on the Mac, bound to Tailscale)
- (add to home screen)                │
-                                     ├─ reads:  node:sqlite ⟶ conductor.db   (workspaces, sessions, transcripts)
-                                     ├─ reads:  git ⟶ each worktree           (diffs vs target branch)
-                                     └─ writes: osascript ⟶ Accessibility ⟶ Conductor prompt box
+ (React, installable)                 │
+                                      ├─ reads:  node:sqlite ⟶ conductor.db   (workspaces, sessions, transcripts)
+                                      ├─ reads:  git ⟶ each worktree           (diffs vs target branch)
+                                      └─ writes: Actuator ⟶ Conductor
+                                                 ├─ applescript (default): osascript ⟶ focused session
+                                                 └─ sidecar (opt-in):      unix socket ⟶ exact session
 ```
 
+- **Two halves.** A **Node relay** on the Mac (reads Conductor's state, drives
+  the write path) and a **React PWA** the phone installs. Vite builds the PWA to
+  `dist/`, which the relay serves.
 - **Reads are durable.** No Conductor API, no injection — the SQLite schema and
   git worktrees outlive UI changes.
 - **Writes are the one fragile nerve** and are isolated behind a swappable
-  `Actuator` interface (`src/writes.ts`).
+  `Actuator` (`src/writes.ts`).
+
+## Stack
+
+React 19 · React Router 7 · Vite 7 · Tailwind v4 · `vite-plugin-pwa` · TanStack
+Query · Zustand · Biome · lucide. The relay is dependency-free Node 24
+(`node:sqlite` + native TS type-stripping).
 
 ## Requirements
 
-- Node ≥ 24 (uses built-in `node:sqlite` and native TS type-stripping — no build
-  step, no dependencies).
+- Node ≥ 24 and [Yarn](https://yarnpkg.com) (Berry; the repo pins `yarn@4`).
 - Conductor running on the same Mac.
 - [Tailscale](https://tailscale.com) on the Mac and the phone (or any shared
   private network) to reach the relay.
-- **Accessibility permission** for whatever runs the relay (Terminal/node):
-  System Settings ▸ Privacy & Security ▸ Accessibility. Required for the write
-  path; reads work without it.
+- For the **write** path only: macOS **Accessibility** permission for whatever
+  runs the relay (Terminal/node) — System Settings ▸ Privacy & Security ▸
+  Accessibility. Reads work without it.
 
 ## Run
 
 ```bash
 git clone https://github.com/hyldmo/conductor-remote.git
 cd conductor-remote
-yarn start        # or: npm start   (just runs: node src/server.ts — no install needed)
+yarn install
+yarn build          # builds the PWA into dist/
+yarn start          # serves dist/ + the API (node src/server.ts)
 ```
+
+Or in one step: `yarn preview` (build + start). For live development with HMR,
+`yarn dev` runs Vite (`:5173`, proxying `/api`) alongside the relay.
 
 The relay prints a phone URL with an embedded token:
 
@@ -52,8 +70,29 @@ Open on your phone (same Tailnet):
 ```
 
 Open that on the phone and **Add to Home Screen**. The token is stored in
-`localStorage`; every `/api/*` call must carry it, so other devices on the LAN
+`localStorage`; every `/api/*` call carries it, so other devices on the LAN
 can't read your sessions.
+
+### Deploy (run on login as a background service)
+
+The relay must run on the Mac that runs Conductor — it reads the local state DB
+and git worktrees and drives the local sidecar/AX write path, so there is
+nothing to host in the cloud. "Deployment" here means installing it as a macOS
+**LaunchAgent** that starts on login and restarts if it dies:
+
+```bash
+yarn deploy            # build dist/ + install & start the LaunchAgent, prints the phone URL
+yarn service status    # state + pid + phone URL
+yarn service restart   # e.g. after Tailscale comes up late, or a code change
+yarn service uninstall # tear it down
+```
+
+The token is now **persisted** (`~/Library/Application Support/conductor-remote/token`),
+so the home-screen URL stays valid across restarts and reboots. Logs land in
+`~/Library/Logs/conductor-remote/`. Two caveats: the agent bakes the absolute
+`node` path at install time — re-run `yarn deploy` after an nvm node upgrade —
+and the AppleScript write path needs Accessibility permission granted to that
+`node` binary (System Settings ▸ Privacy & Security ▸ Accessibility).
 
 ### Config (env)
 
@@ -61,12 +100,14 @@ can't read your sessions.
 | --- | --- | --- |
 | `RELAY_PORT` | `8787` | Listen port |
 | `RELAY_HOST` | auto (Tailscale `100.x`, else `127.0.0.1`) | Bind address |
-| `RELAY_TOKEN` | random per boot | Set a stable secret so the phone URL doesn't change |
+| `RELAY_TOKEN` | persisted (auto-generated, reused across restarts) | Override the shared secret |
+| `WRITE_STRATEGY` | `applescript` | `applescript` (focused session) or `sidecar` (precise per-session — see below) |
 | `CONDUCTOR_DB` | `~/Library/Application Support/com.conductor.app/conductor.db` | State DB |
 | `CONDUCTOR_WORKSPACES` | `~/conductor/workspaces` | Worktree root |
-| `UNSAFE_DB_WRITE` | unset | Switch to the experimental raw-DB write path (see FINDINGS) |
 
-Set a stable token so the home-screen icon keeps working across restarts:
+The token is auto-generated once and persisted, so the home-screen icon keeps
+working across restarts without any env var. To pin a specific secret (e.g. to
+share a known URL), set `RELAY_TOKEN`:
 
 ```bash
 RELAY_TOKEN=$(openssl rand -hex 16) yarn start
@@ -75,49 +116,60 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 ## What works today
 
 - ✅ Live list of active workspaces with agent status (working / idle / done),
-  branch, repo, unread badge.
+  repo, branch, model, context %, unread badge.
 - ✅ Live transcript per session (assistant text, tool calls, queued messages),
   incremental polling.
-- ✅ Diff vs the workspace's target branch (file list + colorized patch).
-- ⚠️ **Send prompt** via Accessibility — lands in the *focused* Conductor
-  session. Per-workspace write targeting is the next step (see FINDINGS ▸ Writes
-  and `src/writes.ts`).
+- ✅ Diff vs the workspace's target branch (file list + colorized patch,
+  including untracked files).
+- ✅ **Send prompt** — two strategies:
+  - **`applescript`** (default): drives Conductor's real UI send, landing in the
+    *focused* session. Uses the session's own model/permission mode (zero risk of
+    altering the agent). Bring the target workspace to front first.
+  - **`sidecar`** (opt-in, `WRITE_STRATEGY=sidecar`): delivers straight to the
+    target `sessionId` over Conductor's dispatch socket — precise per-workspace
+    targeting, no focus needed. Speaks a private, versioned IPC (see FINDINGS ▸
+    Writes), so it's the more fragile of the two.
 
 ## Layout
 
 ```
-src/
-  server.ts       HTTP router: /api/* (token-gated) + static PWA
-  config.ts       paths, port, Tailscale bind, token
-  db.ts           read-only node:sqlite handle to conductor.db
-  reads.ts        workspaces / sessions / messages + worktree resolution
-  transcript.ts   Claude Code SDK stream JSON → phone-renderable entries
-  git.ts          workspace diff vs target branch
-  writes.ts       Actuator interface + AppleScript (default) + DB-queue (experimental)
-public/           the phone PWA (no build step)
+src/                the Node relay (no build step)
+  server.ts         HTTP router: /api/* (token-gated) + static PWA
+  config.ts         paths, port, Tailscale bind, token, write strategy
+  db.ts             read-only node:sqlite handle to conductor.db
+  reads.ts          workspaces / sessions / messages + worktree resolution
+  transcript.ts     Claude Code SDK stream JSON → phone-renderable entries
+  git.ts            workspace diff vs target branch (incl. untracked)
+  sidecar.ts        Conductor sidecar IPC client (precise write path)
+  writes.ts         Actuator interface + AppleScript (default) + Sidecar (opt-in)
+web/                the React PWA (Vite)
+  index.html, src/  app shell, components, hooks, api client
+  public/           icon.svg (PNGs generated by `yarn gen:icons`)
 scripts/
-  devtools-recon.js   invoke-logger — only usable if a future build ships devtools
+  dev.ts            runs Vite + relay together
+  gen-icons.ts      rasterizes icon.svg → PWA PNGs (sharp)
+  devtools-recon.js invoke-logger — only usable if a future build ships devtools
+dist/               built PWA (gitignored) — what the relay serves
 ```
 
 ## Security notes
 
 - The relay binds to your Tailnet IP (or loopback), not `0.0.0.0`.
 - All data endpoints require the shared token; static shell assets are public
-  but carry no secrets.
+  but carry no secrets. The service worker never caches `/api/*`.
 - The write path can drive your real agents — keep the token private and the
   bind address off untrusted networks.
-- The relay reads Conductor's SQLite DB **read-only** and never writes to it
-  (the experimental DB actuator is opt-in and off by default). Your data stays
-  on your machine — nothing is sent anywhere.
+- The relay reads Conductor's SQLite DB **read-only** and never writes to it.
+  Your data stays on your machine — nothing is sent anywhere.
 
 ## Disclaimer
 
 Unofficial and not affiliated with, endorsed by, or supported by Conductor. It
 reads your own local Conductor data and automates your own machine. It depends
-on Conductor's on-disk layout (a SQLite DB + git worktrees), which is not a
-public API and may change between Conductor releases — see
-[FINDINGS.md](./FINDINGS.md) for how it's structured to keep breakage rare and
-cheap to repair. macOS only.
+on Conductor's on-disk layout (a SQLite DB + git worktrees) and, for the sidecar
+write strategy, a private IPC — neither is a public API and both may change
+between Conductor releases. See [FINDINGS.md](./FINDINGS.md) for how it's
+structured to keep breakage rare and cheap to repair. macOS only.
 
 ## License
 

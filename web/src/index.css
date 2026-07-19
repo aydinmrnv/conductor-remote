@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+@theme {
+	--color-bg: #0a0b0e;
+	--color-surface: #14161b;
+	--color-surface-2: #1b1e26;
+	--color-border: #262a33;
+	--color-border-soft: #1e222a;
+	--color-text: #e7e9ee;
+	--color-muted: #8b909d;
+	--color-faint: #5c616d;
+
+	--color-accent: #8b7dff;
+	--color-accent-soft: #2a2650;
+
+	--color-working: #f5a623;
+	--color-idle: #3ecf8e;
+	--color-done: #5b9dff;
+
+	--color-add: #3ecf8e;
+	--color-del: #ff6b6b;
+
+	--font-sans: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
+}
+
+@layer base {
+	* {
+		-webkit-tap-highlight-color: transparent;
+	}
+	html,
+	body,
+	#root {
+		height: 100%;
+	}
+	body {
+		margin: 0;
+		background: var(--color-bg);
+		color: var(--color-text);
+		font-family: var(--font-sans);
+		-webkit-font-smoothing: antialiased;
+		overscroll-behavior-y: none;
+		overflow-x: hidden;
+	}
+	button {
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+	}
+	::-webkit-scrollbar {
+		width: 0;
+		height: 0;
+	}
+}
+
+@layer components {
+	.card {
+		@apply flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3.5 text-left transition active:scale-[0.985] active:bg-surface-2;
+	}
+	.pill {
+		@apply rounded-full px-3.5 py-1.5 text-sm font-medium text-muted transition;
+	}
+	.pill-active {
+		@apply bg-surface-2 text-text;
+	}
+	.dot {
+		@apply size-2.5 shrink-0 rounded-full bg-faint;
+	}
+	.dot-working {
+		background: var(--color-working);
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-working) 60%, transparent);
+		animation: pulse 1.6s ease-out infinite;
+	}
+	.dot-idle {
+		background: var(--color-idle);
+	}
+	.dot-done {
+		background: var(--color-done);
+	}
+}
+
+@keyframes pulse {
+	0% {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-working) 55%, transparent);
+	}
+	70% {
+		box-shadow: 0 0 0 7px color-mix(in srgb, var(--color-working) 0%, transparent);
+	}
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-working) 0%, transparent);
+	}
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.fade-in {
+	animation: fade-in 0.18s ease-out;
+}
+
+/* Safe-area padding for notches / home indicator. */
+.pt-safe {
+	padding-top: max(env(safe-area-inset-top), 0.5rem);
+}
+.pb-safe {
+	padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+}
