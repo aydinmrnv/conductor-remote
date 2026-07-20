@@ -3,11 +3,12 @@ import { Navigate, Outlet, Route, Routes, useMatch } from 'react-router'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
-import { useEdgeSwipeDrawer } from './hooks.ts'
+import { useEdgeSwipeDrawer, useVisualViewportHeight } from './hooks.ts'
 import { cn } from './lib/cn.ts'
 import { useApp } from './store.ts'
 
 export function App() {
+	useVisualViewportHeight()
 	const token = useApp(s => s.token)
 	if (!token) return <TokenGate />
 	return (
