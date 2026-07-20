@@ -7,6 +7,7 @@ import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
 import type { Session } from '../lib/types.ts'
+import { useApp } from '../store.ts'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
@@ -21,6 +22,7 @@ export function SessionView() {
 	const queryClient = useQueryClient()
 	const { data, isLoading } = useWorkspaces()
 	const { data: sessionsData } = useSessions(workspaceId)
+	const workingHints = useApp(s => s.workingHints)
 
 	// A manual tab pick only applies to the workspace it was made in.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the pick when switching workspaces
@@ -44,6 +46,12 @@ export function SessionView() {
 		ws.active_session_id ??
 		sessions[0]?.id ??
 		null
+	// A fresh send flips the indicator on instantly (the hint); the DB status poll
+	// confirms or, if the send never landed, the hint expires and it drops back off.
+	const workingHint = sessionId ? workingHints[sessionId] : undefined
+	const working =
+		sessions.find(s => s.id === sessionId)?.status === 'working' ||
+		(workingHint !== undefined && Date.now() - workingHint < 15_000)
 
 	const subtitle = [ws.repo_name, ws.branch, shortModel(ws.model)].filter(Boolean).join(' · ')
 
@@ -94,7 +102,7 @@ export function SessionView() {
 						creating={creatingChat}
 					/>
 				) : null}
-				<Transcript sessionId={sessionId} />
+				<Transcript sessionId={sessionId} working={working} />
 				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
 

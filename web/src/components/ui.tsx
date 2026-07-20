@@ -1,4 +1,6 @@
+import { WifiOff } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn.ts'
 import { statusDot } from '../lib/format.ts'
 import type { Workspace } from '../lib/types.ts'
@@ -15,14 +17,31 @@ export function StatusDot({ w, className }: { w: Workspace; className?: string }
 	)
 }
 
-export function ConnDot() {
+function syncedAgo(ms: number): string {
+	const secs = Math.max(0, Math.round(ms / 1000))
+	if (secs < 90) return `${secs}s`
+	const mins = Math.round(secs / 60)
+	if (mins < 60) return `${mins}m`
+	return `${Math.round(mins / 60)}h`
+}
+
+/** Silent while connected; a red strip under the header when relay polls fail. */
+export function OfflineBanner() {
 	const online = useApp(s => s.online)
+	const lastSyncAt = useApp(s => s.lastSyncAt)
+	// Re-render each second while offline so "last synced" counts up.
+	const [now, setNow] = useState(() => Date.now())
+	useEffect(() => {
+		if (online) return
+		const t = setInterval(() => setNow(Date.now()), 1000)
+		return () => clearInterval(t)
+	}, [online])
+	if (online) return null
 	return (
-		<span
-			title={online ? 'connected' : 'offline'}
-			className="dot"
-			style={{ background: online ? 'var(--color-idle)' : 'var(--color-del)' }}
-		/>
+		<div className="fade-in flex items-center gap-1.5 bg-del/10 px-3 py-1.5 text-xs text-del">
+			<WifiOff size={13} />
+			<span>Offline — retrying…{lastSyncAt ? ` last synced ${syncedAgo(now - lastSyncAt)} ago` : ''}</span>
+		</div>
 	)
 }
 

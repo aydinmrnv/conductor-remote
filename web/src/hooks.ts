@@ -140,7 +140,7 @@ export function useSessions(workspaceId: string | undefined) {
 		queryKey: ['sessions', workspaceId],
 		queryFn: () => client.sessions(workspaceId as string),
 		enabled: !!workspaceId,
-		refetchInterval: 4000
+		refetchInterval: 2000
 	})
 	useEffect(() => {
 		if (query.isError) report(false, query.error)
