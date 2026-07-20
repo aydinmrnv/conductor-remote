@@ -220,6 +220,82 @@ dist/               built PWA (gitignored) — what the relay serves
 - The relay reads Conductor's SQLite DB **read-only** and never writes to it.
   Your data stays on your machine — nothing is sent anywhere.
 
+## Troubleshooting
+
+### The relay stops answering when the Mac is on battery
+
+**Symptom.** On battery, the phone loses the relay after a few minutes — even
+though the LaunchAgent is still running and a keep-awake app (Amphetamine,
+KeepingYouAwake, `caffeinate`) is active. Plug into power and it recovers. This
+bites anyone running the relay on an unplugged laptop; it is **not** a bug in
+conductor-remote.
+
+**Cause — it's *Maintenance Sleep*, not idle sleep.** Confirm the reason:
+
+```bash
+pmset -g log | grep "Entering Sleep state due to" | tail
+#  'Maintenance Sleep' / 'Sleep Service Back to Sleep'  ← the culprit
+#  'Idle Sleep'                                          ← NOT what's happening
+```
+
+macOS has two independent sleep paths, and the popular keep-awake tools only
+reach one of them:
+
+| Layer | Sleep type | Controlled by | Keep-awake apps reach it? |
+| --- | --- | --- | --- |
+| Idle timer | `Idle Sleep` | `PreventUserIdleSystemSleep` power assertion | ✅ yes |
+| Standby / Power Nap | **`Maintenance Sleep`** | `pmset` `standby` / `powernap` | ❌ **no** |
+
+Amphetamine, KeepingYouAwake and `caffeinate -i` all hold only the *idle*
+assertion. On battery the Mac isn't idle-sleeping — it's cycling through
+**standby maintenance sleep** (a periodic dark-wake → back-to-sleep loop) that
+lives at the root `pmset` layer no assertion can touch. Running those tools with
+`sudo` changes nothing: the assertion is identical at any privilege, and there is
+no assertion for the standby layer. (Note: lid *closed* on Apple Silicon forces
+sleep regardless — keep the lid open, or attach an external display **and** power.)
+
+**Fix — act at the `pmset` layer (root).** Pick one:
+
+*Always-on relay → a boot LaunchDaemon* (durable across reboots — `disablesleep`
+alone does not survive a restart, which is why this is a daemon, not a one-off):
+
+```bash
+sudo tee /Library/LaunchDaemons/dev.conductor-remote.nosleep.plist >/dev/null <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.conductor-remote.nosleep</string>
+  <key>ProgramArguments</key>
+  <array><string>/usr/bin/pmset</string><string>-b</string><string>disablesleep</string><string>1</string></array>
+  <key>RunAtLoad</key><true/>
+</dict></plist>
+PLIST
+sudo launchctl bootstrap system /Library/LaunchDaemons/dev.conductor-remote.nosleep.plist
+```
+
+*Occasional / time-boxed → a shell function* that blocks battery sleep for a
+bounded window, then auto-reverts (on clean exit, Ctrl-C, or kill):
+
+```bash
+nosleep() {  # nosleep 1h | nosleep 30m | nosleep 90s  (default 1h)
+  local a="${1:-1h}" s
+  case "$a" in *h) s=$(( ${a%h} * 3600 ));; *m) s=$(( ${a%m} * 60 ));; *s) s=${a%s};; *) s=$a;; esac
+  sudo sh -c "pmset -b standby 0 powernap 0 disablesleep 1
+    trap 'pmset -b standby 1 powernap 1 disablesleep 0' EXIT INT TERM
+    sleep $s"
+}
+```
+
+**Check / undo:**
+
+```bash
+pmset -g | grep -i sleepdisabled                    # 1 = sleep blocked
+sudo pmset -b standby 1 powernap 1 disablesleep 0   # restore defaults
+```
+
+Once set, you can quit the keep-awake app entirely — it was only ever asserting on
+the idle layer, which was never the problem.
+
 ## Disclaimer
 
 Unofficial and not affiliated with, endorsed by, or supported by Conductor. It
