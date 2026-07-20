@@ -75,6 +75,12 @@ export default defineConfig({
 				navigateFallback: '/index.html',
 				// Never cache the token-gated API — it must always hit the live relay.
 				navigateFallbackDenylist: [/^\/api\//],
+				// Claim open pages the moment a new worker activates. Still prompt-mode
+				// (skipWaiting stays gated behind ReloadPrompt's SKIP_WAITING message), but
+				// once the user taps Update the activated worker takes control of this page,
+				// so `controllerchange` fires and the reload lands — iOS otherwise leaves the
+				// new worker active-but-not-controlling and the tap looks like a no-op.
+				clientsClaim: true,
 				// Drop prior-build precache entries when a new SW activates, so a stale shell
 				// can't linger and re-serve old hashed assets.
 				cleanupOutdatedCaches: true,

@@ -13,6 +13,31 @@ const POLL_INTERVAL = 60_000
 // not localStorage, so a genuine update in a later session still prompts normally.
 const UPDATE_RETRY_WINDOW = 10_000
 const UPDATE_ATTEMPT_KEY = 'pwa-update-attempted-at'
+// Grace period for the SKIP_WAITING → reload handshake before we force a hard reset.
+const APPLY_FALLBACK = 2500
+
+/**
+ * Last-resort apply: tear the service worker + all caches down and hard-reload with a
+ * cache-bust. This is the same recovery `public/self-heal.js` does, minus the DOM swap —
+ * it does NOT touch localStorage, so the access token survives (no re-scan). Used when the
+ * graceful SKIP_WAITING → controllerchange path doesn't reload (routinely the case on iOS).
+ */
+async function hardReset(): Promise<void> {
+	try {
+		if ('serviceWorker' in navigator) {
+			const regs = await navigator.serviceWorker.getRegistrations()
+			await Promise.all(regs.map(r => r.unregister()))
+		}
+		if ('caches' in window) {
+			const keys = await caches.keys()
+			await Promise.all(keys.map(k => caches.delete(k)))
+		}
+	} catch {
+		// best-effort teardown — reload regardless
+	}
+	const sep = location.search ? '&' : '?'
+	location.replace(`${location.pathname}${location.search}${sep}_v=${Date.now()}`)
+}
 
 /**
  * Keeps the installed PWA off a stale build. iOS standalone apps rarely re-fetch `sw.js`
@@ -26,6 +51,7 @@ const UPDATE_ATTEMPT_KEY = 'pwa-update-attempted-at'
 export function ReloadPrompt() {
 	const token = useApp(s => s.token)
 	const registration = useRef<ServiceWorkerRegistration | null>(null)
+	const reloading = useRef(false)
 	const {
 		needRefresh: [needRefresh, setNeedRefresh],
 		updateServiceWorker
@@ -64,7 +90,32 @@ export function ReloadPrompt() {
 
 	const apply = () => {
 		sessionStorage.setItem(UPDATE_ATTEMPT_KEY, String(Date.now()))
-		void updateServiceWorker(true)
+		const reload = () => {
+			if (reloading.current) return
+			reloading.current = true
+			window.location.reload()
+		}
+		const waiting = registration.current?.waiting
+		if (waiting) {
+			// Tell the waiting worker to take over, then reload the instant it does. iOS
+			// standalone PWAs routinely skip `controllerchange`, so also watch the worker's
+			// own `statechange` reaching `activated` — with `clientsClaim` in the SW that
+			// activation claims this page, so either signal means the new build is live.
+			navigator.serviceWorker?.addEventListener('controllerchange', reload, { once: true })
+			waiting.addEventListener('statechange', () => {
+				if (waiting.state === 'activated') reload()
+			})
+			waiting.postMessage({ type: 'SKIP_WAITING' })
+		} else {
+			void updateServiceWorker(true)
+		}
+		// Never a no-op: if the graceful path hasn't reloaded in time, nuke the SW + caches
+		// and hard-reload. The token lives in localStorage, so it survives.
+		window.setTimeout(() => {
+			if (reloading.current) return
+			reloading.current = true
+			void hardReset()
+		}, APPLY_FALLBACK)
 	}
 
 	return (
