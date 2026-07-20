@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { Navigate, Outlet, Route, Routes, useMatch } from 'react-router'
+import { ReloadPrompt } from './components/ReloadPrompt.tsx'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
@@ -9,15 +10,22 @@ import { useApp } from './store.ts'
 
 export function App() {
 	const token = useApp(s => s.token)
-	if (!token) return <TokenGate />
+	// ReloadPrompt sits above the token gate so SW updates apply on every screen.
 	return (
-		<Routes>
-			<Route element={<Shell />}>
-				<Route index element={<HomePane />} />
-				<Route path="/w/:workspaceId" element={<SessionView />} />
-			</Route>
-			<Route path="*" element={<Navigate to="/" replace />} />
-		</Routes>
+		<>
+			<ReloadPrompt />
+			{!token ? (
+				<TokenGate />
+			) : (
+				<Routes>
+					<Route element={<Shell />}>
+						<Route index element={<HomePane />} />
+						<Route path="/w/:workspaceId" element={<SessionView />} />
+					</Route>
+					<Route path="*" element={<Navigate to="/" replace />} />
+				</Routes>
+			)}
+		</>
 	)
 }
 

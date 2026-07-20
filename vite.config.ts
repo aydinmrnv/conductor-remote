@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
@@ -14,7 +15,19 @@ import { VitePWA } from 'vite-plugin-pwa'
 const webPort = Number(process.env.WEB_PORT) || 5173
 const relayPort = Number(process.env.RELAY_PORT) || 8787
 
+// Baked into the bundle as `__APP_VERSION__` so the running app knows which build it
+// is — shown on the Connect sheet beside the relay version, and compared against the
+// relay's reported version to force a service-worker update when this client is stale.
+// Same package.json the relay reads for its own version (src/autoupdate.ts), so a fresh
+// client and the relay report identical strings; a mismatch means the client is behind.
+// `0.0.0-development` in a dev checkout (semantic-release stamps the real version at publish).
+const appVersion = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string })
+	.version
+
 export default defineConfig({
+	define: {
+		__APP_VERSION__: JSON.stringify(appVersion)
+	},
 	root: 'web',
 	// Repo-root `public/` (outside the `web` root) so Conductor's repo-icon lookup —
 	// which only scans root-level paths like `public/apple-touch-icon.png` — finds
@@ -36,7 +49,10 @@ export default defineConfig({
 		react(),
 		tailwindcss(),
 		VitePWA({
-			registerType: 'autoUpdate',
+			// `prompt`, not `autoUpdate`: autoUpdate forces skipWaiting + reloads the page
+			// the instant a new SW activates, which can interrupt a prompt mid-compose. The
+			// ReloadPrompt banner (web/src/components/ReloadPrompt.tsx) applies updates on tap.
+			registerType: 'prompt',
 			includeAssets: ['icon.svg', 'apple-touch-icon.png'],
 			manifest: {
 				name: 'Conductor Remote',
@@ -59,6 +75,9 @@ export default defineConfig({
 				navigateFallback: '/index.html',
 				// Never cache the token-gated API — it must always hit the live relay.
 				navigateFallbackDenylist: [/^\/api\//],
+				// Drop prior-build precache entries when a new SW activates, so a stale shell
+				// can't linger and re-serve old hashed assets.
+				cleanupOutdatedCaches: true,
 				runtimeCaching: []
 			}
 		})

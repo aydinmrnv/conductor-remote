@@ -13,6 +13,9 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 	const setToken = useApp(s => s.setToken)
 	const [copied, setCopied] = useState(false)
 	const url = token ? `${location.origin}/#token=${token}` : location.origin
+	// Relay is ahead of the build this app booted → a service-worker update is pending
+	// (ReloadPrompt will surface it). Flag it here so the versions explain a stale UI.
+	const stale = !!version && version !== __APP_VERSION__
 
 	const copy = async () => {
 		try {
@@ -59,7 +62,12 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 					{copied ? 'Copied' : 'Copy link'}
 				</button>
 				<div className="flex w-full items-center justify-between text-xs text-faint">
-					<span className="font-mono">{version ? `relay v${version}` : ''}</span>
+					<span className="font-mono">
+						{version ? `relay v${version}` : 'relay v?'}
+						{' · '}
+						<span className={stale ? 'text-working' : undefined}>app v{__APP_VERSION__}</span>
+						{stale ? ' · update pending' : ''}
+					</span>
 					<button
 						type="button"
 						onClick={() => setToken(null)}
