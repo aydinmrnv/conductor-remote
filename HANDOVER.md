@@ -74,14 +74,15 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in)
 web/              React PWA (Vite root)
-  index.html
-  src/main.tsx    root: QueryClient + Router + SW registration
-  src/app.tsx     routes (/ list, /w/:id session) + token gate
+  index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
+  src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
+  src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
   src/lib/        api client, types, format helpers, cn
   src/store.ts    zustand: token + connection status
-  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, ui
+  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, ReloadPrompt, ui
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
+  self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
 dist/             built PWA (gitignored) — what the relay serves
 dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
@@ -140,4 +141,23 @@ assistant/system rows and plain text for user prompts; `queue_order` set +
   (`git push origin --force <main-sha>:refs/tags/vX.Y.Z`), then `npm deprecate` the
   burned version. (This is exactly how the stray `v1.17.0` from a reverted
   merge-button take was cleared; next release is `1.18.0`.)
+- **PWA self-update (the relay updates fine; the phone can get stuck).** The relay
+  auto-updates (`src/autoupdate.ts`) and serves a fresh `dist/`, but an installed
+  iOS home-screen PWA rarely re-fetches `sw.js` on its own, so it can keep running a
+  stale precached shell while `/api/state` still reports the new relay version — the
+  version *label* comes over the network, the *code* from the SW precache, so they
+  disagree. Three-layer defence, all in `web/src/components/ReloadPrompt.tsx` +
+  `public/self-heal.js`: (1) `registerType: 'prompt'` (NOT `autoUpdate`, which reloads
+  mid-compose) + a 60 s `registration.update()` poll to discover a waiting worker;
+  (2) a **version gate** — the app bakes its build version in as `__APP_VERSION__`
+  (`vite.config.ts` `define`, read from the same `package.json` the relay reports), and
+  when `/api/state`'s `version` is ahead it forces an immediate `update()` (recovery in
+  one state-poll, not 60 s) and the Connect sheet shows `relay vX · app vY · update
+  pending`; (3) `self-heal.js` runs before the bundle and, if a removed hashed asset
+  fails to load (the relay's SPA fallback answers `/assets/*` with `index.html` as
+  `text/html` → MIME mismatch), unregisters the SW, clears caches, and hard-reloads with
+  a `_v=` cache-bust. A client too stale to have *any* of this still needs one manual
+  kick (re-add to home screen); after that it self-heals. No `scripts/fix-sw.ts` dance
+  (that's macromaxxing's react-router workaround) — plain Vite already gives `index.html`
+  a content-hash precache revision, so no-op builds don't re-fire the banner.
 ```

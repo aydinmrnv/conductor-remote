@@ -11,6 +11,8 @@
 		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 		<link rel="icon" type="image/svg+xml" href="/icon.svg" />
 		<title>Conductor Remote</title>
+		<!-- Runs before the module bundle so it can catch a stale shell that fails to boot. -->
+		<script src="/self-heal.js"></script>
 	</head>
 	<body>
 		<div id="root"></div>
