@@ -102,12 +102,17 @@ export class AppleScriptActuator implements Actuator {
 		const navigate = navQuery ? FOCUS_WORKSPACE_STEPS : ''
 		// Paste beats keystroke for long/multibyte prompts. Stash the clipboard,
 		// focus the target workspace, paste, send, and restore.
+		// After the palette navigates to the workspace, focus lands on a button, not
+		// the composer — so Cmd+L (Conductor's "focus the composer" shortcut) is the
+		// load-bearing step that puts the caret in the prompt box before we paste.
 		const script = `
 set savedClipboard to the clipboard
 tell application "Conductor" to activate
 delay 0.4
 tell application "System Events"${navigate}
 	set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
+	keystroke "l" using {command down}
+	delay 0.3
 	keystroke "v" using {command down}
 	delay 0.15
 	key code 36
