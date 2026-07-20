@@ -107,23 +107,35 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 }
 
 /**
- * Bind the layout height to the *visual* viewport so the iOS software keyboard
- * shrinks the app instead of scrolling it. On iOS, `dvh`/`vh` ignore the
- * keyboard — only `window.visualViewport` reflects it — so the bottom-pinned
- * composer got scrolled up on focus and iOS failed to fully restore that scroll
- * on dismiss, stranding it above the screen bottom. Sizing html/body/#root to
- * `visualViewport.height` (via the `--app-height` var read in index.css) keeps
- * the whole column fitted above the keyboard and returns it cleanly; forcing any
- * residual page scroll back to 0 kills the leftover offset iOS leaves behind.
+ * Shrink the layout to fit above the iOS software keyboard — but *only* while the
+ * keyboard is actually up. On iOS, `dvh`/`vh` ignore the keyboard (only
+ * `window.visualViewport` reflects it), so a bottom-pinned composer got scrolled
+ * up on focus and stranded above the bottom on dismiss. The obvious fix — always
+ * sizing html/body/#root to `visualViewport.height` — backfires: at rest on a
+ * standalone PWA (viewport-fit=cover), `visualViewport.height` is the *safe*
+ * viewport, short of the home-indicator inset, so binding to it unconditionally
+ * ends the app above the physical bottom (the exact regression #24 fixed).
+ *
+ * So we only write `--app-height` (read by html/body/#root in index.css) when the
+ * keyboard is up — detected by the visual viewport dropping well below the layout
+ * viewport (`innerHeight`, keyboard-independent in standalone). Otherwise we clear
+ * it and let `100dvh` fill the whole screen. Forcing residual page scroll back to
+ * 0 kills the leftover offset iOS leaves behind on dismiss.
  */
 export function useVisualViewportHeight() {
 	useEffect(() => {
 		const vv = window.visualViewport
 		if (!vv) return
+		const root = document.documentElement
 		const apply = () => {
-			document.documentElement.style.setProperty('--app-height', `${Math.round(vv.height)}px`)
-			// The layout exactly fills the visual viewport, so the document can't
-			// legitimately scroll; any offset is iOS's keyboard residual — undo it.
+			// Gap between the layout viewport and the visual viewport ≈ keyboard height.
+			// A small resting gap (home-indicator inset, URL chrome) stays under the
+			// threshold; only a real keyboard (~250–350px) clears it.
+			const keyboardInset = window.innerHeight - vv.height
+			if (keyboardInset > 120) root.style.setProperty('--app-height', `${Math.round(vv.height)}px`)
+			else root.style.removeProperty('--app-height') // no keyboard → 100dvh fills the screen
+			// The column always fits the visible area, so any page scroll is iOS's
+			// keyboard residual — undo it.
 			if (window.scrollY !== 0) window.scrollTo(0, 0)
 		}
 		apply()
