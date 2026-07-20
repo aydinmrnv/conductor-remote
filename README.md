@@ -5,7 +5,6 @@ workspace, read live transcripts, view diffs, and send prompts — from your
 phone, over your Tailnet, no cloud, no App Store.
 
 Installable as a PWA (Add to Home Screen). Reads ride Conductor's on-disk SQLite
-+ git worktrees (zero coupling); prompts ride Conductor's **own** dispatch path.
 
 <img width="600" height="800" alt="demo-workspaces" src="https://github.com/user-attachments/assets/e098f964-29b2-4614-b200-9dc977799eb8" />
 
