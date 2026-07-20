@@ -1,0 +1,18 @@
+# Shared Conductor settings for conductor-remote.
+# Committed so every teammate's workspaces get the same setup/run scripts.
+# Docs: https://conductor.build/docs/reference/scripts/share-with-teammates
+# Personal overrides go in .conductor/settings.local.toml (gitignored).
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+# yarn@4 is pinned via package.json's packageManager field; corepack provides it.
+setup = "corepack enable && yarn install"
+
+# scripts/dev.ts derives per-workspace ports from $CONDUCTOR_PORT (Vite takes it,
+# the relay gets a free port on loopback), so workspaces can run dev concurrently.
+run_mode = "concurrent"
+
+[scripts.run.dev]
+command = "yarn dev"
+default = true
+icon = "play"
