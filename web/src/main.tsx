@@ -8,6 +8,9 @@ import './index.css'
 
 registerSW({ immediate: true })
 
+// Ask the browser to keep our storage (the access token) from being evicted — best-effort, no-op where unsupported.
+if (navigator.storage?.persist) void navigator.storage.persist().catch(() => {})
+
 const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: { staleTime: 1000, retry: 1, refetchOnWindowFocus: true }
