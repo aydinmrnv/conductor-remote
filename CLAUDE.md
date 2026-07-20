@@ -107,7 +107,9 @@ unit test.
 - **TS strict**, `verbatimModuleSyntax` (use `import type`), `.ts`/`.tsx` extensions
   in imports are required (`allowImportingTsExtensions`).
 - **Layout:** `src/` = Node relay (server, db, reads, git, transcript, sidecar,
-  writes, config). `web/` = Vite-root React PWA (`web/src/`). `scripts/` = dev,
+  writes, config). `web/` = Vite-root React PWA (`web/src/`). `public/` = static
+  PWA assets at the **repo root** (not under `web/`) so Conductor's repo-icon lookup
+  finds them (`vite.config.ts` sets `publicDir: '../public'`); `scripts/` = dev,
   icon-gen, service installer. `dist/` = build output (gitignored, relay-served).
 - **Utility scripts** run under plain `node` (default type-stripping), stdlib-only —
   keep them strip-clean too (no param-property constructors/enums/namespaces).

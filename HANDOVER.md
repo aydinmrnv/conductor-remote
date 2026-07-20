@@ -80,7 +80,7 @@ web/              React PWA (Vite root)
   src/lib/        api client, types, format helpers, cn
   src/store.ts    zustand: token + connection status
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, ui
-  public/icon.svg source icon (PNGs via `yarn gen:icons`)
+public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
 dist/             built PWA (gitignored) — what the relay serves
 dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball

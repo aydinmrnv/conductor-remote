@@ -2,8 +2,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
 
-// Rasterize web/public/icon.svg into the PNG sizes the PWA manifest + iOS need.
-const pub = path.join(import.meta.dirname, '..', 'web', 'public')
+// Rasterize public/icon.svg into the PNG sizes the PWA manifest + iOS need.
+const pub = path.join(import.meta.dirname, '..', 'public')
 const svg = await readFile(path.join(pub, 'icon.svg'))
 
 const targets: { name: string; size: number; background?: string }[] = [
