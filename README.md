@@ -13,6 +13,28 @@ Installable as a PWA (Add to Home Screen). Reads ride Conductor's on-disk SQLite
 > behind a swappable `Actuator` interface (AppleScript by default, or Conductor's
 > sidecar socket for precise per-session targeting).
 
+## Install
+
+Needs [Conductor](https://conductor.build) running on the same Mac, Node ≥ 24, and
+[Tailscale](https://tailscale.com) on the Mac + phone. Then:
+
+```bash
+npm i -g conductor-remote
+conductor-remote service install    # run on login; prints your phone URL
+```
+
+Or the one-liner (checks Node, offers `brew install node` if missing, installs,
+registers the service):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hyldmo/conductor-remote/main/install.sh | bash
+```
+
+The published package is **dependency-free** — no build step and no native addons
+on your machine, so `npm i -g` finishes in about a second. `service install`
+prints a phone URL with an embedded token; open it and **Add to Home Screen**.
+Manage the service with `conductor-remote service status|restart|uninstall`.
+
 ## Architecture
 
 ```
@@ -41,7 +63,8 @@ Query · Zustand · Biome · lucide. The relay is dependency-free Node 24
 
 ## Requirements
 
-- Node ≥ 24 and [Yarn](https://yarnpkg.com) (Berry; the repo pins `yarn@4`).
+- Node ≥ 24. ([Yarn](https://yarnpkg.com) — Berry, the repo pins `yarn@4` — is
+  only needed to run from source; the published package installs with plain npm.)
 - Conductor running on the same Mac.
 - [Tailscale](https://tailscale.com) on the Mac and the phone (or any shared
   private network) to reach the relay.
@@ -49,14 +72,17 @@ Query · Zustand · Biome · lucide. The relay is dependency-free Node 24
   runs the relay (Terminal/node) — System Settings ▸ Privacy & Security ▸
   Accessibility. Reads work without it.
 
-## Run
+## Run from source
+
+For contributing or running an unpublished checkout (the `npm i -g` path above
+needs neither a clone nor a build):
 
 ```bash
 git clone https://github.com/hyldmo/conductor-remote.git
 cd conductor-remote
 yarn install
 yarn build          # builds the PWA into dist/
-yarn start          # serves dist/ + the API (node src/server.ts)
+yarn start          # serves dist/ + the API (node bin/cli.js)
 ```
 
 Or in one step: `yarn preview` (build + start). For live development with HMR,
@@ -86,6 +112,10 @@ yarn service status    # state + pid + phone URL
 yarn service restart   # e.g. after Tailscale comes up late, or a code change
 yarn service uninstall # tear it down
 ```
+
+From a global install the same commands are `conductor-remote service
+<status|restart|uninstall>` (and `conductor-remote service install` in place of
+`yarn deploy`, since `dist/` ships prebuilt in the package).
 
 The token is now **persisted** (`~/Library/Application Support/conductor-remote/token`),
 so the home-screen URL stays valid across restarts and reboots. Logs land in

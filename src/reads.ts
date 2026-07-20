@@ -90,10 +90,13 @@ function resolveWorktree(
 }
 
 export class Reads {
-	constructor(
-		private readonly db: ConductorDb,
-		private readonly workspacesRoot: string
-	) {}
+	private readonly db: ConductorDb
+	private readonly workspacesRoot: string
+
+	constructor(db: ConductorDb, workspacesRoot: string) {
+		this.db = db
+		this.workspacesRoot = workspacesRoot
+	}
 
 	listWorkspaces(): Workspace[] {
 		const rows = this.db.query<WorkspaceRow>(

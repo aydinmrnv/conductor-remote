@@ -3,7 +3,8 @@
  * on the Mac that runs Conductor (local SQLite DB, git worktrees, and the sidecar unix socket all
  * live there). Installs a per-user agent that starts the relay on login and keeps it alive.
  *
- *   node --experimental-transform-types scripts/service.ts <install|uninstall|status|restart>
+ *   node scripts/service.ts <install|uninstall|status|restart>
+ *   (or, once installed globally: `conductor-remote service <...>`)
  *
  * `yarn deploy` builds dist/ first, then runs `install`.
  */
@@ -73,7 +74,7 @@ function reloadAgent(): void {
 	launchctl('kickstart', '-k', `${domain}/${LABEL}`)
 }
 
-/** Node runs the relay with the same flags as `yarn start`; the absolute execPath is baked at install time. */
+/** Node runs the relay via the flag-free CLI shim; the absolute execPath is baked at install time. */
 function buildPlist(): string {
 	const node = xml(process.execPath)
 	const proj = xml(projectDir)
@@ -94,9 +95,7 @@ function buildPlist(): string {
 	<key>ProgramArguments</key>
 	<array>
 		<string>${node}</string>
-		<string>--experimental-transform-types</string>
-		<string>--disable-warning=ExperimentalWarning</string>
-		<string>${proj}/src/server.ts</string>
+		<string>${proj}/bin/cli.js</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>${proj}</string>
@@ -222,7 +221,20 @@ function printUrl(): void {
 	)
 }
 
+/** npx unpacks into a throwaway cache that gets purged; a LaunchAgent baked against it would rot. */
+function isEphemeralInstall(dir: string): boolean {
+	return /[\\/]_npx[\\/]|[\\/]\.npm[\\/]_npx[\\/]/.test(dir)
+}
+
 function install(): void {
+	if (isEphemeralInstall(projectDir)) {
+		console.error(
+			`✗ refusing to install from an npx cache path:\n    ${projectDir}\n` +
+				'  That directory is temporary and gets purged, which would break the LaunchAgent.\n' +
+				'  Install globally first: `npm i -g conductor-remote`, then `conductor-remote service install`.'
+		)
+		process.exit(1)
+	}
 	if (!distBuilt()) {
 		console.error('✗ dist/ not built. Run `yarn build` first (or use `yarn deploy`, which builds).')
 		process.exit(1)

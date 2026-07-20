@@ -29,12 +29,6 @@ const webPort = conductorPort || 5173
 // Loopback bind + Vite proxy target must match; only prod auto-binds the Tailscale NIC.
 const relayPort = conductorPort ? await freePort() : 8787
 
-const relayArgs = [
-	'--experimental-transform-types',
-	'--disable-warning=ExperimentalWarning',
-	'--watch',
-	'src/server.ts'
-]
 const procs = [
 	{
 		name: 'web  ',
@@ -46,7 +40,7 @@ const procs = [
 	{
 		name: 'relay',
 		cmd: 'node',
-		args: relayArgs,
+		args: ['--watch', 'bin/cli.js'],
 		color: '\x1b[36m',
 		env: { ...process.env, RELAY_PORT: String(relayPort), RELAY_HOST: process.env.RELAY_HOST ?? '127.0.0.1' }
 	}
