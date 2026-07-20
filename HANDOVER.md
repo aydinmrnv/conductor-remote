@@ -128,4 +128,16 @@ assistant/system rows and plain text for user prompts; `queue_order` set +
   Classic builtin, so the script is `verify`.
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public
   commits.
+- **Releases key off reachable version tags — never rewind `main` after a tagged
+  release.** CI's `release` job runs `semantic-release` on every `main` push: it
+  takes the highest `vX.Y.Z` tag *reachable from `main`* as the last release and
+  bumps from there. Drop an already-released commit from `main` (force-reset /
+  rewind) and its tag goes unreachable — semantic-release recomputes the *same*
+  next version and dies on `git tag vX.Y.Z already exists`, wedging every later
+  release. npm publishes are immutable, so that number is **burned**. Recovery:
+  move the colliding tag onto a commit that *is* on `main` — co-locate it with the
+  current release tag as a skip-marker — so the next run advances past it
+  (`git push origin --force <main-sha>:refs/tags/vX.Y.Z`), then `npm deprecate` the
+  burned version. (This is exactly how the stray `v1.17.0` from a reverted
+  merge-button take was cleared; next release is `1.18.0`.)
 ```
