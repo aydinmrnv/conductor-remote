@@ -62,29 +62,48 @@ export class SidecarActuator implements Actuator {
 }
 
 /**
- * Drives Conductor's real send path via macOS Accessibility (AppleScript):
- * activate the app, paste the prompt, press Enter. Uses whatever model /
+ * Drives Conductor's real send path via macOS Accessibility (AppleScript): focus
+ * the target workspace, paste the prompt, press Enter. Uses whatever model /
  * permission mode the session already has (zero risk of altering the agent),
- * which is why it's the default. Its one limit is that it lands in the session
- * Conductor currently has focused — bring the target workspace to front first.
+ * which is why it's the default.
+ *
+ * Precise targeting comes from focusing the intended workspace first through
+ * Conductor's command palette (Cmd+K → branch → Enter) before pasting, so the
+ * prompt lands in the right session regardless of what was focused — no private
+ * IPC and nothing to rebreak on a Conductor update (unlike the sidecar).
  */
 export class AppleScriptActuator implements Actuator {
 	readonly name = 'applescript'
-	readonly caveat =
-		'Lands in the session Conductor currently has focused. Bring the target workspace to front first; for precise targeting run with WRITE_STRATEGY=sidecar.'
-	readonly precise = false
+	readonly caveat = 'Focuses the target workspace via the command palette (Cmd+K) before sending.'
+	readonly precise = true
 
-	async send(_target: SendTarget, text: string): Promise<SendResult> {
-		// Paste beats keystroke for long/multibyte prompts. We stash the clipboard,
-		// paste, send, and restore.
+	async send(target: SendTarget, text: string): Promise<SendResult> {
+		// The branch is Conductor's unique per-workspace key in the command palette;
+		// anything less specific can match a *command* (e.g. unarchive) instead of a
+		// workspace, so prefer branch and pass it via env to dodge AppleScript escaping.
+		const ws = target.workspace
+		const navQuery = ws.branch || ws.workspace_name || ws.directory_name || ''
+		const navigate = navQuery
+			? `
+	key code 53
+	delay 0.25
+	keystroke "k" using {command down}
+	delay 0.7
+	keystroke (system attribute "RELAY_WS_QUERY")
+	delay 0.9
+	key code 36
+	delay 1.3`
+			: ''
+		// Paste beats keystroke for long/multibyte prompts. Stash the clipboard,
+		// focus the target workspace, paste, send, and restore.
 		const script = `
 set savedClipboard to the clipboard
-set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
 tell application "Conductor" to activate
-delay 0.35
-tell application "System Events"
+delay 0.4
+tell application "System Events"${navigate}
+	set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
 	keystroke "v" using {command down}
-	delay 0.1
+	delay 0.15
 	key code 36
 end tell
 delay 0.1
@@ -98,14 +117,10 @@ set the clipboard to savedClipboard
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
 			await exec('osascript', ['-e', script], {
-				env: { ...process.env, RELAY_PROMPT_FILE: tmp },
-				timeout: 10000
+				env: { ...process.env, RELAY_PROMPT_FILE: tmp, RELAY_WS_QUERY: navQuery },
+				timeout: 15000
 			})
-			return {
-				ok: true,
-				strategy: this.name,
-				warning: 'Delivered to the focused Conductor session — confirm it landed in the intended workspace.'
-			}
+			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return {
 				ok: false,

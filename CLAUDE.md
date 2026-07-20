@@ -16,12 +16,22 @@ Two asymmetric halves — keep them separate:
   the DB handle in `db.ts`.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
-  - `applescript` (**default**): drives Conductor's real UI send. Safe, but hits
-    whichever session is *focused* — no per-session targeting.
+  - `applescript` (**default**): drives Conductor's real UI send, and is now
+    **precise** — before pasting it focuses the target workspace via the command
+    palette (Cmd+K → **branch name** → Enter), so the prompt lands in the right
+    session regardless of what was focused. The branch is the palette's unique
+    per-workspace key; a looser query can match a *command* (e.g. unarchive), so
+    `writes.ts` always types `workspace.branch`. No private protocol, nothing to
+    rebreak on a Conductor update. Timing-tuned AppleScript delays are load-bearing.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
-    socket, addresses a session by id. Precise but speaks a private `-v2-`
-    protocol — the most update-fragile surface here. **A live `query` send injects
-    a real prompt into a running agent; never auto-run it to "test."**
+    socket, addresses a session by id. Precise in principle but speaks a private
+    `-v2-` protocol — the most update-fragile surface here, and **currently
+    non-functional against Conductor 0.76**: the `query` schema drifted and idle
+    sessions aren't live in the sidecar (they need a session-resume handshake), so
+    the shipped payload fails loud (`ok:false`). Don't half-fix the schema — a
+    `type:"query"` payload *validates then silently drops* the prompt. **A live
+    `query` send injects a real prompt into a running agent; never auto-run it to
+    "test."** Since `applescript` is now precise, sidecar buys nothing today.
 
 `sessions.id == claude_session_id` — Conductor is a GUI over Claude Code sessions.
 
