@@ -1,4 +1,4 @@
-import { WifiOff } from 'lucide-react'
+import { RefreshCw, WifiOff } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { cn } from '../lib/cn.ts'
@@ -25,10 +25,18 @@ function syncedAgo(ms: number): string {
 	return `${Math.round(mins / 60)}h`
 }
 
-/** Silent while connected; a red strip under the header when relay polls fail. */
+/**
+ * Silent while connected. When the relay is auto-updating it restarts to apply, briefly dropping every
+ * client — show a calm "Updating…" through that window (the last snapshot reads `mode:auto,
+ * available:true` from before the restart until a fresh poll clears it) rather than the alarming red
+ * "Offline". A genuine drop (no update in flight) still shows the red strip. `check` mode leaves
+ * `available` set with no restart, so it keeps the normal offline behaviour.
+ */
 export function OfflineBanner() {
 	const online = useApp(s => s.online)
 	const lastSyncAt = useApp(s => s.lastSyncAt)
+	const update = useApp(s => s.update)
+	const updating = update?.mode === 'auto' && update.available
 	// Re-render each second while offline so "last synced" counts up.
 	const [now, setNow] = useState(() => Date.now())
 	useEffect(() => {
@@ -36,6 +44,13 @@ export function OfflineBanner() {
 		const t = setInterval(() => setNow(Date.now()), 1000)
 		return () => clearInterval(t)
 	}, [online])
+	if (updating)
+		return (
+			<div className="fade-in flex items-center gap-1.5 bg-accent/10 px-3 py-1.5 text-xs text-accent">
+				<RefreshCw size={13} className="animate-spin" />
+				<span>Updating relay to {update?.latest ?? 'latest'}… reconnecting</span>
+			</div>
+		)
 	if (online) return null
 	return (
 		<div className="fade-in flex items-center gap-1.5 bg-del/10 px-3 py-1.5 text-xs text-del">

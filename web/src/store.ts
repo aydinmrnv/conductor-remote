@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
+import type { UpdateStatus } from './lib/types.ts'
 
 /** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
 export type GroupBy = 'status' | 'repo' | 'none'
@@ -47,6 +48,12 @@ interface AppState {
 	/** Epoch ms of the last successful relay call — the banner's "last synced". */
 	lastSyncAt: number | null
 	/**
+	 * Last self-update snapshot the relay reported (src/autoupdate.ts). Held across the offline blip an
+	 * auto-update restart causes — while it reads `mode:auto, available:true` the banner shows a calm
+	 * "Updating…" instead of the alarming red "Offline". Null until the first successful state poll.
+	 */
+	update: UpdateStatus | null
+	/**
 	 * Per-session epoch ms of the last successful send — treats the session as
 	 * working immediately, bridging the gap until the status poll catches up.
 	 */
@@ -58,6 +65,7 @@ interface AppState {
 	view: ViewPrefs
 	setToken: (token: string | null) => void
 	setOnline: (online: boolean) => void
+	setUpdate: (update: UpdateStatus | null) => void
 	markWorking: (sessionId: string) => void
 	/** Add (or reset, by id — used by Retry) an optimistic prompt in the `sending` state. */
 	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string }) => void
@@ -77,6 +85,7 @@ export const useApp = create<AppState>((set, get) => {
 		token: bootstrapToken(),
 		online: true,
 		lastSyncAt: null,
+		update: null,
 		workingHints: {},
 		pending: [],
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
@@ -89,6 +98,7 @@ export const useApp = create<AppState>((set, get) => {
 			set({ token })
 		},
 		setOnline: online => set(online ? { online, lastSyncAt: Date.now() } : { online }),
+		setUpdate: update => set({ update }),
 		markWorking: sessionId => set({ workingHints: { ...get().workingHints, [sessionId]: Date.now() } }),
 		addPending: m =>
 			set({

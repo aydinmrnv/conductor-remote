@@ -163,15 +163,19 @@ function useOnline() {
 
 export function useWorkspaces() {
 	const report = useOnline()
+	const setUpdate = useApp(s => s.setUpdate)
 	const query = useQuery({
 		queryKey: ['state'],
 		queryFn: () => client.state(),
 		refetchInterval: 2500
 	})
 	useEffect(() => {
-		if (query.isSuccess) report(true)
+		if (query.isSuccess) {
+			report(true)
+			setUpdate(query.data.update ?? null)
+		}
 		if (query.isError) report(false, query.error)
-	}, [query.isSuccess, query.isError, query.error, report])
+	}, [query.isSuccess, query.isError, query.error, query.data, report, setUpdate])
 	return query
 }
 

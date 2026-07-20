@@ -127,6 +127,19 @@ function isNewer(candidate: string, base: string): boolean {
 	return false
 }
 
+/**
+ * The effective installed version: the newer of the version this process booted as (`CURRENT`) and
+ * what's on disk right now. A restart that raced npm's global write can boot us reading the pre-install
+ * `package.json`, so comparing the registry's `latest` against `CURRENT` alone re-declares an update we
+ * already applied to disk — and reinstall→restart→boot-stale loops, dropping every connected client on
+ * each restart (one release once became three restarts this way). Comparing against disk too closes that
+ * loop; the disk-skew heal then reloads us into the newer on-disk code.
+ */
+function installedVersion(): string {
+	const onDisk = diskVersion()
+	return onDisk && isNewer(onDisk, CURRENT) ? onDisk : CURRENT
+}
+
 async function fetchLatest(): Promise<string | null> {
 	// The `/latest` sub-endpoint serves the full manifest as application/json; the abbreviated
 	// `vnd.npm.install-v1+json` media type is only valid on the packument root and 406s here.
@@ -150,6 +163,22 @@ async function installLatest(): Promise<void> {
 		timeout: 300_000,
 		env: { ...process.env, npm_config_yes: 'true' }
 	})
+}
+
+/**
+ * Block until the installed package.json on disk reports `want`, or `timeoutMs` elapses. npm's global
+ * swap can lag `execFile`'s resolve by a beat (nvm symlink/fs caching); restarting before disk reflects
+ * the install boots the successor into the *old* version, which then re-triggers the same update — the
+ * restart loop. Waiting makes the successor deterministically boot into `want`. Bounded so a mis-resolved
+ * install can't hang the updater; the 60s disk-skew heal is the backstop if this returns false.
+ */
+async function waitForDiskVersion(want: string, timeoutMs = 5000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs
+	for (;;) {
+		if (diskVersion() === want) return true
+		if (Date.now() >= deadline) return false
+		await new Promise(resolve => setTimeout(resolve, 200))
+	}
 }
 
 function log(msg: string): void {
@@ -200,22 +229,29 @@ function restartIfDiskSkewed(): void {
 let inFlight = false
 
 async function runCheck(mode: 'check' | 'auto'): Promise<void> {
-	if (inFlight) return
+	if (inFlight || restarting) return
 	inFlight = true
 	try {
 		const latest = await fetchLatest()
 		status.latest = latest
 		status.checkedAt = Date.now()
-		status.available = latest != null && isNewer(latest, CURRENT)
+		// Compare against the effective installed version (the boot version, or a newer one already on
+		// disk), never `CURRENT` alone — otherwise a restart that booted us stale reinstalls a version disk
+		// already has, looping. See installedVersion().
+		const base = installedVersion()
+		status.available = latest != null && isNewer(latest, base)
 		status.lastError = null
 		if (!status.available || latest == null) return
 		if (mode === 'check') {
-			log(`update available: ${CURRENT} → ${latest} (AUTO_UPDATE=check — not installing)`)
+			log(`update available: ${base} → ${latest} (AUTO_UPDATE=check — not installing)`)
 			return
 		}
-		log(`updating ${CURRENT} → ${latest} via \`npm i -g ${NAME}@latest\`…`)
+		log(`updating ${base} → ${latest} via \`npm i -g ${NAME}@latest\`…`)
 		await installLatest()
-		scheduleRestart(`installed ${latest}`)
+		// Restart only once the install is visible on disk, so the successor boots into `latest` instead of
+		// re-reading the pre-install version and re-triggering this update (the restart loop).
+		const settled = await waitForDiskVersion(latest)
+		scheduleRestart(settled ? `installed ${latest}` : `installed ${latest} (disk still settling)`)
 	} catch (err) {
 		status.lastError = err instanceof Error ? err.message : String(err)
 		log(`check/update failed: ${status.lastError}`)
