@@ -54,6 +54,10 @@ export interface Workspace extends WorkspaceRow {
 	icon: RepoIcon | null
 	/** PR state of `branch` (null when unknown / no PR / not GitHub); set by src/pr.ts. */
 	pr_status?: PrStatus | null
+	/** Open/closed PR number for `branch`, when one exists; set by src/pr.ts. */
+	pr_number?: number | null
+	/** PR web URL for the `#N ↗` link; set by src/pr.ts. */
+	pr_url?: string | null
 }
 
 const worktreeCache = new Map<string, string | null>()

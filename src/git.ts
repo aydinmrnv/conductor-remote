@@ -15,6 +15,10 @@ export interface WorkspaceDiff {
 	files: DiffFile[]
 	patch: string
 	truncated: boolean
+	/** Uncommitted changes in the worktree (drives the "Commit & push" action). */
+	dirty: boolean
+	/** Commits on HEAD not yet on the remote-tracking branch (also drives "Commit & push"). */
+	unpushed: boolean
 }
 
 const MAX_PATCH_BYTES = 400_000
@@ -112,5 +116,26 @@ export async function workspaceDiff(worktree: string, base: string): Promise<Wor
 	const truncated = patch.length > MAX_PATCH_BYTES
 	if (truncated) patch = `${patch.slice(0, MAX_PATCH_BYTES)}\n\n… diff truncated (${patch.length} bytes) …`
 
-	return { base: ref, mergeBase, files, patch, truncated }
+	const { dirty, unpushed } = await localState(worktree)
+
+	return { base: ref, mergeBase, files, patch, truncated, dirty, unpushed }
+}
+
+/**
+ * Local publish state of the worktree: does it have uncommitted changes, and are
+ * there commits not yet on its remote-tracking branch? Together these drive the
+ * bar's "Commit & push" action (you must land local work before a PR reflects it).
+ */
+async function localState(worktree: string): Promise<{ dirty: boolean; unpushed: boolean }> {
+	const status = await git(worktree, ['status', '--porcelain']).catch(() => '')
+	const dirty = status.trim() !== ''
+	let unpushed = false
+	try {
+		// `@{upstream}` throws when no upstream is configured — then there's nothing to compare against.
+		const count = (await git(worktree, ['rev-list', '--count', '@{upstream}..HEAD'])).trim()
+		unpushed = Number(count) > 0
+	} catch {
+		unpushed = false
+	}
+	return { dirty, unpushed }
 }
