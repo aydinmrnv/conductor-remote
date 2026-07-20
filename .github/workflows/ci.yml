@@ -13,6 +13,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      # Zero runtime deps — nothing to install. Syntax + type-strip check only;
-      # the relay itself needs macOS + a running Conductor to exercise fully.
+      # package.json pins yarn@4 via the packageManager field; corepack provides it.
+      # The relay itself has zero runtime deps, but `verify` (tsc + biome) needs the
+      # devDependency toolchain, so we install. Build scripts stay disabled (sharp's
+      # native binary is only needed by gen:icons, not by typecheck/lint).
+      - run: corepack enable
+      - run: yarn install --immutable
       - run: yarn verify
