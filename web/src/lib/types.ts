@@ -7,6 +7,7 @@ export interface Workspace {
 	branch: string | null
 	derived_status: string | null
 	manual_status: string | null
+	created_at: string
 	updated_at: string
 	unread: number | null
 	pinned_at: string | null

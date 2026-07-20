@@ -20,6 +20,27 @@ export function statusLabel(w: Workspace): string {
 	return w.session_status || 'idle'
 }
 
+/**
+ * The workspace lifecycle status the desktop sidebar groups by — a manual
+ * override beats the derived one (same precedence as the app).
+ */
+export function workspaceStatus(w: Workspace): string {
+	return w.manual_status || w.derived_status || 'in-progress'
+}
+
+/** Group order matches the desktop sidebar (Done → In review → In progress → Backlog). */
+export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'backlog']
+
+export function workspaceStatusLabel(status: string): string {
+	const labels: Record<string, string> = {
+		done: 'Done',
+		'in-review': 'In review',
+		'in-progress': 'In progress',
+		backlog: 'Backlog'
+	}
+	return labels[status] ?? status
+}
+
 /** Compact model name: strip the `claude-`/date noise for the phone. */
 export function shortModel(model: string | null): string {
 	if (!model) return ''
