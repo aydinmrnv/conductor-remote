@@ -27,9 +27,22 @@ export interface ActuatorInfo {
 	available: boolean
 }
 
+export interface UpdateStatus {
+	current: string
+	latest: string | null
+	available: boolean
+	checkedAt: number | null
+	mode: 'off' | 'check' | 'auto'
+	lastError: string | null
+}
+
 export interface StateResponse {
 	workspaces: Workspace[]
 	actuator: ActuatorInfo
+	/** Relay version this daemon is running. */
+	version?: string
+	/** Self-update state (see src/autoupdate.ts). */
+	update?: UpdateStatus
 }
 
 export interface Session {
