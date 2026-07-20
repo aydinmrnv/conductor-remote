@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { workspaceDiff } from './git.ts'
@@ -92,9 +93,12 @@ const server = http.createServer(async (req, res) => {
 	try {
 		// GET /api/state — workspace list with active-session status
 		if (req.method === 'GET' && pathname === '/api/state') {
+			const update = updateStatus()
 			return json(res, 200, {
 				workspaces: reads.listWorkspaces(),
-				actuator: await describeActuator(actuator)
+				actuator: await describeActuator(actuator),
+				version: update.current,
+				update
 			})
 		}
 
@@ -185,4 +189,6 @@ server.listen(cfg.port, cfg.host, () => {
 			'  Phone:  fronted by `tailscale funnel`/`serve` — run `yarn service status` for the HTTPS URL'
 		].join('\n')
 	)
+	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
+	startAutoUpdate()
 })

@@ -81,11 +81,20 @@ function buildPlist(): string {
 	const proj = xml(projectDir)
 	const out = xml(path.join(logDir, 'relay.log'))
 	const err = xml(path.join(logDir, 'relay.err.log'))
-	// Optional overrides carried into the daemon's environment.
-	const envEntries: Array<[string, string]> = [['PATH', '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin']]
+	// node's own dir leads so the daemon can find `npm` (adjacent to node) for self-update under launchd's
+	// bare PATH; Homebrew's bin is appended for tailscale/node on Apple Silicon.
+	const nodeDir = path.dirname(process.execPath)
+	const daemonPath = `${nodeDir}:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin`
+	// MANAGED marks this as the launchd-supervised instance: autoupdate.ts only self-restarts (exit →
+	// KeepAlive respawn) when it sees this, so a dev `yarn start` or worktree run never auto-updates.
+	const envEntries: Array<[string, string]> = [
+		['PATH', daemonPath],
+		['CONDUCTOR_REMOTE_MANAGED', '1']
+	]
 	if (process.env.WRITE_STRATEGY) envEntries.push(['WRITE_STRATEGY', process.env.WRITE_STRATEGY])
 	if (process.env.RELAY_HOST) envEntries.push(['RELAY_HOST', process.env.RELAY_HOST])
 	if (process.env.RELAY_PORT) envEntries.push(['RELAY_PORT', process.env.RELAY_PORT])
+	if (process.env.AUTO_UPDATE) envEntries.push(['AUTO_UPDATE', process.env.AUTO_UPDATE])
 	const envXml = envEntries.map(([k, v]) => `\t\t<key>${xml(k)}</key>\n\t\t<string>${xml(v)}</string>`).join('\n')
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

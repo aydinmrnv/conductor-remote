@@ -28,6 +28,20 @@ export function clearToken(): void {
 	localStorage.removeItem(TOKEN_KEY)
 }
 
+/** Persist a token that arrived outside the URL flow (e.g. pasted into the TokenGate). */
+export function setStoredToken(token: string): void {
+	localStorage.setItem(TOKEN_KEY, token)
+}
+
+/** Accept a bare token or anything containing `token=…` (a full `/#token=` URL, say); null if neither. */
+export function parseTokenInput(raw: string): string | null {
+	const s = raw.trim()
+	if (!s) return null
+	const m = s.match(/token=([^&\s]+)/)
+	if (m) return decodeURIComponent(m[1])
+	return /\s/.test(s) ? null : s
+}
+
 export class ApiError extends Error {
 	constructor(
 		message: string,

@@ -381,8 +381,13 @@ function render(m: boolean[][], indent: string): string[] {
 	return lines
 }
 
+/** Encode `text` into its QR module matrix (`true` = dark). Shared by the terminal and web SVG renderers. */
+export function qrMatrix(text: string): boolean[][] {
+	const { version, bits } = encodeText(text)
+	return buildMatrix(version, bits)
+}
+
 /** Encode `text` and return the terminal lines that draw its QR code (each already indented). */
 export function qrLines(text: string, indent = '    '): string[] {
-	const { version, bits } = encodeText(text)
-	return render(buildMatrix(version, bits), indent)
+	return render(qrMatrix(text), indent)
 }

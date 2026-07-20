@@ -37,7 +37,7 @@ function usage() {
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
 			'',
-			'Env: RELAY_HOST, RELAY_PORT, RELAY_TOKEN, WRITE_STRATEGY, CONDUCTOR_DB, CONDUCTOR_WORKSPACES'
+			'Env: RELAY_HOST, RELAY_PORT, RELAY_TOKEN, WRITE_STRATEGY, AUTO_UPDATE, CONDUCTOR_DB, CONDUCTOR_WORKSPACES'
 		].join('\n')
 	)
 }

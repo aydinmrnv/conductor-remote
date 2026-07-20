@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { bootstrapToken } from './lib/api.ts'
+import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 
 /** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
 export type GroupBy = 'status' | 'repo' | 'none'
@@ -49,7 +49,12 @@ export const useApp = create<AppState>((set, get) => {
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
-		setToken: token => set({ token }),
+		// Keep localStorage in sync so a paste survives reload and a 401 doesn't re-load a dead token.
+		setToken: token => {
+			if (token) setStoredToken(token)
+			else clearToken()
+			set({ token })
+		},
 		setOnline: online => set({ online }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),

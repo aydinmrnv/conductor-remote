@@ -1,4 +1,4 @@
-import { ChevronDown, SlidersHorizontal, X } from 'lucide-react'
+import { ChevronDown, QrCode, SlidersHorizontal, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
@@ -17,6 +17,7 @@ import {
 } from '../lib/format.ts'
 import type { Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
+import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { Badge, Chip, Empty, Spinner, StatusDot } from './ui.tsx'
 
@@ -65,6 +66,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const view = useApp(s => s.view)
 	const toggleGroup = useApp(s => s.toggleGroup)
 	const [controlsOpen, setControlsOpen] = useState(false)
+	const [connectOpen, setConnectOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
@@ -100,6 +102,14 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 							>
 								<SlidersHorizontal size={18} />
 								{view.repo ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" /> : null}
+							</button>
+							<button
+								type="button"
+								onClick={() => setConnectOpen(true)}
+								aria-label="Connect a device"
+								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+							>
+								<QrCode size={18} />
 							</button>
 							<button
 								type="button"
@@ -168,6 +178,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					})
 				)}
 			</nav>
+			{connectOpen ? <ConnectSheet version={data?.version} onClose={() => setConnectOpen(false)} /> : null}
 		</div>
 	)
 }
