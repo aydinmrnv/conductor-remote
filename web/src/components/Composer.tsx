@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, Info, WifiOff } from 'lucide-react'
+import { ArrowUp, Info, Loader2, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -142,10 +142,16 @@ export function Composer({
 					type="button"
 					onClick={send}
 					disabled={disabled || sending || !text.trim() || !online}
-					aria-label="Send"
-					className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
+					aria-label={sending ? 'Sending' : 'Send'}
+					aria-busy={sending}
+					className={cn(
+						'mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90',
+						// Keep the accent fill while sending so the spinner stays prominent;
+						// only gray out when there's genuinely nothing to send.
+						!sending && 'disabled:bg-surface-2 disabled:text-faint'
+					)}
 				>
-					<ArrowUp size={19} />
+					{sending ? <Loader2 size={19} className="animate-spin" /> : <ArrowUp size={19} />}
 				</button>
 			</div>
 		</div>
