@@ -23,6 +23,15 @@ npm i -g conductor-remote
 conductor-remote service install    # run on login; prints your phone URL
 ```
 
+**Private tailnet only?** Pass `--expose tailnet` to skip public Funnel, so the URL
+is reachable only from devices logged into your tailnet:
+
+```bash
+conductor-remote service install --expose tailnet
+```
+
+The choice is remembered across re-deploys; see **Reachability** below for the trade-off.
+
 Or the one-liner (checks Node, offers `brew install node` if missing, installs,
 registers the service):
 
@@ -35,12 +44,24 @@ on your machine, so `npm i -g` finishes in about a second. `service install`
 prints a phone URL with an embedded token; open it and **Add to Home Screen**.
 Manage the service with `conductor-remote service status|restart|uninstall`.
 
-**Reachability (`EXPOSE`).** By default the URL is exposed publicly via
+**Install flags.** `service install` takes flags for the install-time knobs (each
+also settable via the env var in brackets — the flag wins when both are given).
+Run `conductor-remote --help` for the full list. The common ones:
+
+| Flag | Env | Purpose |
+| --- | --- | --- |
+| `--expose public\|tailnet` | `EXPOSE` | Reachability (public Funnel default, or tailnet-only) |
+| `--port <n>` | `RELAY_PORT` | Listen port (default `8787`) |
+| `--token <secret>` | `RELAY_TOKEN` | Pin the shared secret (default: generated + persisted) |
+| `--write-strategy <s>` | `WRITE_STRATEGY` | `applescript` (default) or `sidecar` |
+
+**Reachability (`--expose`).** By default the URL is exposed publicly via
 [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) — reachable from any
 browser, gated by the embedded 128-bit token (so the phone needs **no** Tailscale
 app). Funnel must be enabled once for your tailnet (Admin console). To keep it
 tailnet-only instead (devices logged into your tailnet, via `tailscale serve`),
-install with `EXPOSE=tailnet`. The choice is remembered across re-deploys.
+install with `--expose tailnet` (or `EXPOSE=tailnet`). The choice is remembered
+across re-deploys.
 
 ## Architecture
 
@@ -131,16 +152,21 @@ so the home-screen URL stays valid across restarts and reboots. Logs land in
 and the AppleScript write path needs Accessibility permission granted to that
 `node` binary (System Settings ▸ Privacy & Security ▸ Accessibility).
 
-### Config (env)
+### Config (env / flags)
 
-| Var | Default | Purpose |
-| --- | --- | --- |
-| `RELAY_PORT` | `8787` | Listen port |
-| `RELAY_HOST` | auto (Tailscale `100.x`, else `127.0.0.1`) | Bind address |
-| `RELAY_TOKEN` | persisted (auto-generated, reused across restarts) | Override the shared secret |
-| `WRITE_STRATEGY` | `applescript` | `applescript` (focused session) or `sidecar` (precise per-session — see below) |
-| `CONDUCTOR_DB` | `~/Library/Application Support/com.conductor.app/conductor.db` | State DB |
-| `CONDUCTOR_WORKSPACES` | `~/conductor/workspaces` | Worktree root |
+Each knob is an env var (honored by `yarn start` and `service install`) and, for
+`service install`, the CLI flag in the second column. A flag wins over the ambient
+env. `EXPOSE`/`--expose` is documented under Install above.
+
+| Var | Flag | Default | Purpose |
+| --- | --- | --- | --- |
+| `RELAY_PORT` | `--port` | `8787` | Listen port |
+| `RELAY_HOST` | `--host` | auto (Tailscale `100.x`, else `127.0.0.1`) | Bind address |
+| `RELAY_TOKEN` | `--token` | persisted (auto-generated, reused across restarts) | Override the shared secret |
+| `WRITE_STRATEGY` | `--write-strategy` | `applescript` | `applescript` (focused session) or `sidecar` (precise per-session — see below) |
+| `AUTO_UPDATE` | `--auto-update` | `auto` | Self-update mode: `auto` / `check` / `off` |
+| `CONDUCTOR_DB` | `--db` | `~/Library/Application Support/com.conductor.app/conductor.db` | State DB |
+| `CONDUCTOR_WORKSPACES` | `--workspaces` | `~/conductor/workspaces` | Worktree root |
 
 The token is auto-generated once and persisted, so the home-screen icon keeps
 working across restarts without any env var. To pin a specific secret (e.g. to

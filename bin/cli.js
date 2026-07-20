@@ -37,7 +37,17 @@ function usage() {
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
 			'',
-			'Env: RELAY_HOST, RELAY_PORT, RELAY_TOKEN, WRITE_STRATEGY, AUTO_UPDATE, CONDUCTOR_DB, CONDUCTOR_WORKSPACES'
+			'Install flags (each also settable via the env var in [brackets]):',
+			'  --expose public|tailnet   reachability: public Funnel (default) or tailnet-only  [EXPOSE]',
+			'  --port <n>                listen port (default 8787)                             [RELAY_PORT]',
+			'  --host <addr>             bind address (default 127.0.0.1)                       [RELAY_HOST]',
+			'  --token <secret>          pin the shared secret (default: generated + persisted) [RELAY_TOKEN]',
+			'  --write-strategy <s>      applescript (default) | sidecar                        [WRITE_STRATEGY]',
+			'  --auto-update <mode>      auto (default) | check | off                           [AUTO_UPDATE]',
+			'  --db <path>               Conductor state DB                                     [CONDUCTOR_DB]',
+			'  --workspaces <path>       worktree root                                          [CONDUCTOR_WORKSPACES]',
+			'',
+			'e.g.  conductor-remote service install --expose tailnet --port 9000'
 		].join('\n')
 	)
 }

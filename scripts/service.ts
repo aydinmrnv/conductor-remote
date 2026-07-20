@@ -21,6 +21,45 @@ const logDir = path.join(os.homedir(), 'Library', 'Logs', 'conductor-remote')
 const uid = process.getuid?.() ?? 0
 const domain = `gui/${uid}`
 
+/**
+ * Install-time knobs are accepted as documented CLI flags OR the matching env var — a flag wins over the
+ * ambient env. Parsed flags are folded back into process.env so everything downstream (and the plist we
+ * bake) keeps reading a single source. Runs before any module-level env read below.
+ */
+const FLAG_ENV: Record<string, string> = {
+	'--expose': 'EXPOSE',
+	'--port': 'RELAY_PORT',
+	'--host': 'RELAY_HOST',
+	'--token': 'RELAY_TOKEN',
+	'--write-strategy': 'WRITE_STRATEGY',
+	'--auto-update': 'AUTO_UPDATE',
+	'--db': 'CONDUCTOR_DB',
+	'--workspaces': 'CONDUCTOR_WORKSPACES'
+}
+
+function applyFlags(argv: string[]): void {
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i]
+		if (!arg.startsWith('--')) continue
+		const eq = arg.indexOf('=')
+		const name = eq === -1 ? arg : arg.slice(0, eq)
+		const envKey = FLAG_ENV[name]
+		if (!envKey) {
+			console.error(`unknown flag: ${name}\n  known: ${Object.keys(FLAG_ENV).join(', ')}`)
+			process.exit(1)
+		}
+		const value = eq === -1 ? argv[++i] : arg.slice(eq + 1)
+		if (value === undefined) {
+			console.error(`flag ${name} needs a value (e.g. ${name} <value>)`)
+			process.exit(1)
+		}
+		process.env[envKey] = value
+	}
+}
+
+// argv[2] is the subcommand (see bottom); flags follow it.
+applyFlags(process.argv.slice(3))
+
 function xml(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
@@ -95,6 +134,8 @@ function buildPlist(): string {
 	if (process.env.RELAY_HOST) envEntries.push(['RELAY_HOST', process.env.RELAY_HOST])
 	if (process.env.RELAY_PORT) envEntries.push(['RELAY_PORT', process.env.RELAY_PORT])
 	if (process.env.AUTO_UPDATE) envEntries.push(['AUTO_UPDATE', process.env.AUTO_UPDATE])
+	if (process.env.CONDUCTOR_DB) envEntries.push(['CONDUCTOR_DB', process.env.CONDUCTOR_DB])
+	if (process.env.CONDUCTOR_WORKSPACES) envEntries.push(['CONDUCTOR_WORKSPACES', process.env.CONDUCTOR_WORKSPACES])
 	const envXml = envEntries.map(([k, v]) => `\t\t<key>${xml(k)}</key>\n\t\t<string>${xml(v)}</string>`).join('\n')
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -132,17 +173,33 @@ function distBuilt(): boolean {
 	return fs.existsSync(path.join(projectDir, 'dist', 'index.html'))
 }
 
+function tokenStorePath(): string {
+	return path.join(os.homedir(), 'Library', 'Application Support', 'conductor-remote', 'token')
+}
+
 /** Read the persisted token (or env override) purely to print the phone URL — never mints one. */
 function currentToken(): string | null {
 	if (process.env.RELAY_TOKEN) return process.env.RELAY_TOKEN
 	try {
-		return (
-			fs
-				.readFileSync(path.join(os.homedir(), 'Library', 'Application Support', 'conductor-remote', 'token'), 'utf8')
-				.trim() || null
-		)
+		return fs.readFileSync(tokenStorePath(), 'utf8').trim() || null
 	} catch {
 		return null
+	}
+}
+
+/**
+ * A pinned token (`--token` / `RELAY_TOKEN`) is persisted to the token file, not baked into the plist —
+ * the launchd daemon has no such env, so it resolves the secret from this file (config.ts ▸ resolveToken).
+ * Writing it here keeps the daemon, the printed URL, and later `status` all in agreement.
+ */
+function persistPinnedToken(): void {
+	const token = process.env.RELAY_TOKEN
+	if (!token) return
+	try {
+		fs.mkdirSync(path.dirname(tokenStorePath()), { recursive: true })
+		fs.writeFileSync(tokenStorePath(), token, { mode: 0o600 })
+	} catch (err) {
+		console.info(`  ⚠ could not persist --token (${err instanceof Error ? err.message : err})`)
 	}
 }
 
@@ -354,6 +411,7 @@ function install(): void {
 		console.error('✗ dist/ not built. Run `yarn build` first (or use `yarn deploy`, which builds).')
 		process.exit(1)
 	}
+	persistPinnedToken()
 	fs.mkdirSync(path.dirname(plistPath), { recursive: true })
 	fs.mkdirSync(logDir, { recursive: true })
 	fs.writeFileSync(plistPath, buildPlist())
@@ -418,6 +476,10 @@ switch (cmd) {
 		status()
 		break
 	default:
-		console.error(`unknown command: ${cmd}\nusage: service.ts <install|uninstall|restart|status>`)
+		console.error(
+			`unknown command: ${cmd}\n` +
+				'usage: service.ts <install|uninstall|restart|status> [flags]\n' +
+				`  flags (install): ${Object.keys(FLAG_ENV).join(', ')}`
+		)
 		process.exit(1)
 }
