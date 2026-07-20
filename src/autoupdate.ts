@@ -37,10 +37,20 @@ const execFileP = promisify(execFile)
 const NAME = 'conductor-remote'
 const projectDir = packageRoot(import.meta.dirname)
 const REGISTRY = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org'
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+// Registry poll cadence. The poll is a single cheap GET off npm's CDN, so a tight loop costs nothing;
+// a coarse interval, by contrast, left the phone serving a stale build for hours when several versions
+// ship in quick succession (the poll only fires ~90s after boot, then on this interval). 2 min keeps the
+// phone within a couple minutes of `latest`. `AUTO_UPDATE_INTERVAL_MINUTES` retunes it with no code change;
+// values are floored at 1 min (below that you're just racing the 60s disk-skew heal and the CDN's tag TTL).
+function resolveIntervalMs(): number {
+	const raw = Number(process.env.AUTO_UPDATE_INTERVAL_MINUTES)
+	const minutes = Number.isFinite(raw) && raw > 0 ? raw : 2
+	return Math.max(minutes, 1) * 60 * 1000
+}
+const CHECK_INTERVAL_MS = resolveIntervalMs()
 const FIRST_DELAY_MS = 90 * 1000
 // A local package.json read is free next to a network poll, so reconcile disk↔process skew often —
-// this heals an out-of-band upgrade in ~a minute instead of waiting up to 6h for the registry poll.
+// this heals an out-of-band upgrade in ~a minute instead of waiting for the next registry poll.
 const DISK_CHECK_INTERVAL_MS = 60 * 1000
 
 export type UpdateMode = 'off' | 'check' | 'auto'
@@ -219,7 +229,8 @@ export function startAutoUpdate(): void {
 	const mode = resolveMode()
 	status.mode = mode
 	if (mode === 'off') return
-	log(`enabled (mode=${mode}, current=${CURRENT}); first check in ${FIRST_DELAY_MS / 1000}s, then every 6h.`)
+	const everyMin = Math.round(CHECK_INTERVAL_MS / 60_000)
+	log(`enabled (mode=${mode}, current=${CURRENT}); first check in ${FIRST_DELAY_MS / 1000}s, then every ${everyMin}m.`)
 	setTimeout(() => void runCheck(mode), FIRST_DELAY_MS).unref()
 	setInterval(() => void runCheck(mode), CHECK_INTERVAL_MS).unref()
 	// Only `auto` may exit()→restart (KeepAlive is guaranteed there); `check` reports but never acts,

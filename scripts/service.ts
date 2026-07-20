@@ -34,6 +34,7 @@ const FLAG_ENV: Record<string, string> = {
 	'--token': 'RELAY_TOKEN',
 	'--write-strategy': 'WRITE_STRATEGY',
 	'--auto-update': 'AUTO_UPDATE',
+	'--auto-update-interval': 'AUTO_UPDATE_INTERVAL_MINUTES',
 	'--db': 'CONDUCTOR_DB',
 	'--workspaces': 'CONDUCTOR_WORKSPACES'
 }
@@ -135,6 +136,8 @@ function buildPlist(): string {
 	if (process.env.RELAY_HOST) envEntries.push(['RELAY_HOST', process.env.RELAY_HOST])
 	if (process.env.RELAY_PORT) envEntries.push(['RELAY_PORT', process.env.RELAY_PORT])
 	if (process.env.AUTO_UPDATE) envEntries.push(['AUTO_UPDATE', process.env.AUTO_UPDATE])
+	if (process.env.AUTO_UPDATE_INTERVAL_MINUTES)
+		envEntries.push(['AUTO_UPDATE_INTERVAL_MINUTES', process.env.AUTO_UPDATE_INTERVAL_MINUTES])
 	if (process.env.CONDUCTOR_DB) envEntries.push(['CONDUCTOR_DB', process.env.CONDUCTOR_DB])
 	if (process.env.CONDUCTOR_WORKSPACES) envEntries.push(['CONDUCTOR_WORKSPACES', process.env.CONDUCTOR_WORKSPACES])
 	const envXml = envEntries.map(([k, v]) => `\t\t<key>${xml(k)}</key>\n\t\t<string>${xml(v)}</string>`).join('\n')
