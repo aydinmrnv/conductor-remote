@@ -84,9 +84,12 @@ function cacheControl(rel: string): string {
 
 function serveStatic(_req: http.IncomingMessage, res: http.ServerResponse, pathname: string): void {
 	const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '')
-	const filePath = path.join(cfg.publicDir, rel)
-	// Contain to publicDir.
-	if (!filePath.startsWith(cfg.publicDir)) {
+	const filePath = path.resolve(cfg.publicDir, rel)
+	// Contain to publicDir. The URL parser already collapses `..`/`%2e%2e` dot-segments, but don't lean on
+	// that: reject anything that resolves outside the dir (a bare `startsWith` would also admit a sibling
+	// like `dist-node/`). An empty relative (filePath === publicDir) falls through to the SPA shell below.
+	const within = path.relative(cfg.publicDir, filePath)
+	if (within.startsWith('..') || path.isAbsolute(within)) {
 		res.writeHead(403).end()
 		return
 	}
@@ -199,7 +202,9 @@ const server = http.createServer(async (req, res) => {
 
 		return json(req, res, 404, { error: 'no route', pathname })
 	} catch (err) {
-		return json(req, res, 500, { error: err instanceof Error ? err.message : String(err) })
+		// Log the detail locally; don't reflect internals (paths, stack strings) back over the wire.
+		console.error(`[relay] ${req.method} ${pathname} failed:`, err)
+		return json(req, res, 500, { error: 'internal error' })
 	}
 })
 

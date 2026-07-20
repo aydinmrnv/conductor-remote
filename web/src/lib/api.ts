@@ -68,11 +68,32 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 	return res.json() as Promise<T>
 }
 
+/**
+ * Fetch an image endpoint with the auth header and hand back an object URL — keeps the token out of the
+ * image `src` (a `?token=` query string can leak into proxy/Funnel access logs and browser history). One
+ * fetch per key is shared and its object URL reused for the session (icons rarely change); a failed fetch
+ * is evicted so it can be retried.
+ */
+const objectUrlCache = new Map<string, Promise<string>>()
+async function fetchObjectUrl(path: string): Promise<string> {
+	const token = getToken()
+	const res = await fetch(path, { headers: { authorization: `Bearer ${token ?? ''}` } })
+	if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status)
+	return URL.createObjectURL(await res.blob())
+}
+
 export const client = {
 	state: () => api<StateResponse>('/api/state'),
-	/** Image URL for a repo's icon. `<img>` can't send the auth header, so carry the token as a query param. */
-	repoIconUrl: (repoName: string) =>
-		`/api/repos/${encodeURIComponent(repoName)}/icon?token=${encodeURIComponent(getToken() ?? '')}`,
+	/** A repo's icon as an object URL, fetched with the auth header (token never rides in the URL). Cached per repo. */
+	repoIcon: (repoName: string): Promise<string> => {
+		let p = objectUrlCache.get(repoName)
+		if (!p) {
+			p = fetchObjectUrl(`/api/repos/${encodeURIComponent(repoName)}/icon`)
+			p.catch(() => objectUrlCache.delete(repoName))
+			objectUrlCache.set(repoName, p)
+		}
+		return p
+	},
 	sessions: (workspaceId: string) =>
 		api<SessionsResponse>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`),
 	messages: (sessionId: string, after: number) =>

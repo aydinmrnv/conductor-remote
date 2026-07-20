@@ -1,8 +1,7 @@
 import { ChevronDown, QrCode, SlidersHorizontal, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useWorkspaces } from '../hooks.ts'
-import { client } from '../lib/api.ts'
+import { useRepoIcon, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	relativeTime,
@@ -284,10 +283,9 @@ const AVATAR_TILE = 'grid size-8 place-items-center overflow-hidden rounded-lg b
  * monogram.
  */
 function RepoAvatar({ w }: { w: Workspace }) {
-	const [failed, setFailed] = useState(false)
 	const { icon } = w
 	const monogram = <div className={cn(AVATAR_TILE, 'text-xs')}>{repoMonogram(w)}</div>
-	if (!icon || failed) return monogram
+	if (!icon) return monogram
 
 	if (icon.kind === 'emoji') return <div className={cn(AVATAR_TILE, 'text-lg leading-none')}>{icon.value}</div>
 
@@ -302,25 +300,42 @@ function RepoAvatar({ w }: { w: Workspace }) {
 		)
 	}
 
-	// Raster images: the relay-served repo file, or the GitHub owner's square avatar.
-	const src =
-		icon.kind === 'file'
-			? w.repo_name
-				? client.repoIconUrl(w.repo_name)
-				: null
-			: `https://github.com/${encodeURIComponent(icon.owner)}.png?size=64`
-	if (!src) return monogram
+	// GitHub owner avatar: public, external, no token — loads straight from github.com.
+	if (icon.kind === 'github')
+		return (
+			<ImgTile
+				src={`https://github.com/${encodeURIComponent(icon.owner)}.png?size=64`}
+				fit="cover"
+				fallback={monogram}
+			/>
+		)
+
+	// Relay-served repo file: fetched with the auth header (token stays out of the URL). Monogram until then.
+	return <RepoFileIcon repoName={w.repo_name} fallback={monogram} />
+}
+
+/** A raster avatar tile that falls back to the monogram if the image fails to load. */
+function ImgTile({ src, fit, fallback }: { src: string; fit: 'cover' | 'contain'; fallback: ReactNode }) {
+	const [failed, setFailed] = useState(false)
+	if (failed) return <>{fallback}</>
 	return (
 		<div className={AVATAR_TILE}>
 			<img
 				src={src}
 				alt=""
 				loading="lazy"
-				className={cn('size-full', icon.kind === 'github' ? 'object-cover' : 'object-contain')}
+				className={cn('size-full', fit === 'cover' ? 'object-cover' : 'object-contain')}
 				onError={() => setFailed(true)}
 			/>
 		</div>
 	)
+}
+
+/** Repo icon served by the relay, fetched with the auth header. Shows the monogram while loading or on error. */
+function RepoFileIcon({ repoName, fallback }: { repoName: string | null; fallback: ReactNode }) {
+	const { data, isError } = useRepoIcon(repoName)
+	if (!repoName || isError || !data) return <>{fallback}</>
+	return <ImgTile src={data} fit="contain" fallback={fallback} />
 }
 
 function WorkspaceCard({ w }: { w: Workspace }) {
