@@ -162,6 +162,22 @@ export function useDiff(workspaceId: string | undefined, enabled: boolean) {
 	return query
 }
 
+/**
+ * A repo's icon as an object URL, fetched with the auth header so the token stays out of the image URL
+ * (query strings can leak into proxy/Funnel logs). Deduped and cached for the session across every card
+ * that shares the repo — icons rarely change, so it never refetches or revokes within a session.
+ */
+export function useRepoIcon(repoName: string | null | undefined) {
+	return useQuery({
+		queryKey: ['repoIcon', repoName],
+		queryFn: () => client.repoIcon(repoName as string),
+		enabled: !!repoName,
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
+
 export interface TranscriptState {
 	entries: TranscriptEntry[]
 	loading: boolean
