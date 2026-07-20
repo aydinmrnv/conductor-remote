@@ -6,6 +6,7 @@ import zlib from 'node:zlib'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
 import { mergePr } from './merge.ts'
 import { attachPrStatus } from './pr.ts'
@@ -263,4 +264,7 @@ server.listen(cfg.port, cfg.host, () => {
 	)
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
+	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a
+	// network change. No-ops unless managed + public (Funnel) posture (see funnel-watchdog.ts).
+	startFunnelWatchdog()
 })
