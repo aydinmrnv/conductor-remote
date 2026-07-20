@@ -39,8 +39,14 @@
 	#root {
 		/* height:100% resolves to the *safe* viewport on iOS standalone (it excludes
 		   the bottom home-indicator inset), so the app stopped where the phone's
-		   rounded corners begin. 100dvh fills the full screen. */
-		height: 100dvh;
+		   rounded corners begin. 100dvh fills the full screen.
+		   --app-height (set from window.visualViewport by useVisualViewportHeight)
+		   overrides it while it exists: on iOS dvh/vh ignore the software keyboard, so
+		   the bottom-pinned composer got scrolled up on focus and stranded there on
+		   dismiss. Sizing to the *visual* viewport shrinks the layout for the keyboard
+		   instead, keeping the composer above it and returning it cleanly. 100dvh is
+		   the first-paint fallback (identical to visualViewport.height with no keyboard). */
+		height: var(--app-height, 100dvh);
 	}
 	html {
 		/* Paint the app bg on <html> too, so any sub-pixel gap in the safe area
