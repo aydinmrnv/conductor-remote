@@ -38,6 +38,10 @@ export interface Workspace {
 	icon: RepoIcon | null
 	/** PR state of `branch`, or null when unknown / no PR / not a GitHub repo. */
 	pr_status?: PrStatus | null
+	/** PR number for `branch`, when one exists. */
+	pr_number?: number | null
+	/** PR web URL for the `#N ↗` link. */
+	pr_url?: string | null
 }
 
 export interface ActuatorInfo {
@@ -124,5 +128,15 @@ export interface NewChatResult {
 	ok: boolean
 	/** Id of the freshly-created session, if the relay detected it in time. */
 	sessionId?: string | null
+	error?: string
+}
+
+export type MergeMethod = 'squash' | 'merge' | 'rebase'
+
+/** Result of POST /api/workspaces/:id/merge — merges the branch's open PR via `gh`. */
+export interface MergeResult {
+	ok: boolean
+	branch: string
+	method?: MergeMethod
 	error?: string
 }

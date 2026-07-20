@@ -1,9 +1,21 @@
 import { useMemo } from 'react'
-import { useDiff } from '../hooks.ts'
+import { useDiff, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
+import { MergeBanner } from './MergeBanner.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function DiffView({ workspaceId }: { workspaceId: string }) {
+	const { data: state } = useWorkspaces()
+	const ws = state?.workspaces.find(w => w.id === workspaceId)
+	return (
+		<div className="pb-safe flex flex-1 flex-col overflow-y-auto">
+			{ws ? <MergeBanner ws={ws} /> : null}
+			<DiffBody workspaceId={workspaceId} />
+		</div>
+	)
+}
+
+function DiffBody({ workspaceId }: { workspaceId: string }) {
 	const { data, isLoading, isError, error } = useDiff(workspaceId, true)
 
 	if (isLoading && !data) return <Spinner label="Computing diff…" />
@@ -17,7 +29,7 @@ export function DiffView({ workspaceId }: { workspaceId: string }) {
 		)
 
 	return (
-		<div className="pb-safe flex-1 overflow-y-auto">
+		<>
 			<div className="border-b border-border-soft px-3 py-2 text-xs text-muted">
 				vs <span className="font-mono text-faint">{data.base}</span> · {data.files.length} file
 				{data.files.length === 1 ? '' : 's'}
@@ -32,7 +44,7 @@ export function DiffView({ workspaceId }: { workspaceId: string }) {
 				))}
 			</ul>
 			<Patch patch={data.patch} truncated={data.truncated} />
-		</div>
+		</>
 	)
 }
 

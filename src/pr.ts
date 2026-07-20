@@ -19,6 +19,8 @@ const exec = promisify(execFile)
 
 interface GhPr {
 	headRefName: string
+	number: number
+	url: string
 	state: 'OPEN' | 'CLOSED' | 'MERGED'
 	isDraft: boolean
 	updatedAt: string
@@ -44,10 +46,14 @@ export function attachPrStatus(workspaces: Workspace[]): void {
 	const repos = new Set<string>()
 	for (const w of workspaces) {
 		w.pr_status = null
+		w.pr_number = null
+		w.pr_url = null
 		if (!w.branch || !w.repo_root) continue
 		repos.add(w.repo_root)
 		const pr = repoCache.get(w.repo_root)?.prs?.get(w.branch)
 		if (!pr) continue
+		w.pr_number = pr.number
+		w.pr_url = pr.url
 		if (pr.state === 'MERGED') w.pr_status = 'merged'
 		else if (pr.state === 'OPEN') {
 			if (pr.isDraft) w.pr_status = 'draft'
@@ -79,7 +85,7 @@ async function fetchRepoPRs(root: string): Promise<Map<string, GhPr> | null> {
 	try {
 		const { stdout } = await exec(
 			'gh',
-			['pr', 'list', '--state', 'all', '--limit', '100', '--json', 'headRefName,state,isDraft,updatedAt'],
+			['pr', 'list', '--state', 'all', '--limit', '100', '--json', 'headRefName,number,url,state,isDraft,updatedAt'],
 			{ cwd: root, encoding: 'utf8', timeout: 15_000 }
 		)
 		const list = JSON.parse(stdout) as GhPr[]
