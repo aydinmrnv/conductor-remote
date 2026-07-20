@@ -31,7 +31,15 @@
 	html,
 	body,
 	#root {
-		height: 100%;
+		/* height:100% resolves to the *safe* viewport on iOS standalone (it excludes
+		   the bottom home-indicator inset), so the app stopped where the phone's
+		   rounded corners begin. 100dvh fills the full screen. */
+		height: 100dvh;
+	}
+	html {
+		/* Paint the app bg on <html> too, so any sub-pixel gap in the safe area
+		   reads as the app color rather than a seam. */
+		background: var(--color-bg);
 	}
 	body {
 		margin: 0;
