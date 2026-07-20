@@ -7,11 +7,7 @@ phone, over your Tailnet, no cloud, no App Store.
 Installable as a PWA (Add to Home Screen). Reads ride Conductor's on-disk SQLite
 + git worktrees (zero coupling); prompts ride Conductor's **own** dispatch path.
 
-> Built after reconnaissance forced a design change from the original
-> injected-IPC-bridge idea. Read **[FINDINGS.md](./FINDINGS.md)** for why — the
-> short version is that reads ride SQLite + git and the write path is isolated
-> behind a swappable `Actuator` interface (AppleScript by default, or Conductor's
-> sidecar socket for precise per-session targeting).
+<img width="600" height="800" alt="demo-workspaces" src="https://github.com/user-attachments/assets/e098f964-29b2-4614-b200-9dc977799eb8" />
 
 ## Install
 
