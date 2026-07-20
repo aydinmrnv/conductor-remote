@@ -1,7 +1,21 @@
 import type { Workspace } from './types.ts'
 
 export function workspaceLabel(w: Workspace): string {
-	return w.workspace_name || w.directory_name || w.id.slice(0, 8)
+	return w.workspace_name || humanizeBranch(w.branch) || w.directory_name || w.id.slice(0, 8)
+}
+
+/**
+ * Conductor's own workspace title: the branch minus its prefix, sentence-cased.
+ * Prefix-agnostic (works for github_username/custom/none) — we strip the first
+ * path segment rather than read Conductor's `branch_prefix_type` setting, since
+ * the branch already embeds the resolved prefix. Falls back to directory_name
+ * (the worktree codename, e.g. "managua-v2") only for a branchless workspace.
+ */
+function humanizeBranch(branch: string | null): string {
+	if (!branch) return ''
+	const slug = branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch
+	const words = slug.replace(/[-_]/g, ' ').trim()
+	return words ? words[0].toUpperCase() + words.slice(1) : ''
 }
 
 /** Normalize the many status sources into one of three UI states. */
