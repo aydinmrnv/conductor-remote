@@ -18,6 +18,8 @@ export interface Workspace {
 	session_title: string | null
 	model: string | null
 	context_used_percent: number | null
+	/** Whether the repo has a resolvable icon — fetch it via `client.repoIconUrl(repo_name)`. */
+	hasRepoIcon: boolean
 }
 
 export interface ActuatorInfo {

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ConductorDb } from './db.ts'
+import { type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import { parseMessage, type TranscriptEntry } from './transcript.ts'
 
 export interface WorkspaceRow {
@@ -43,6 +44,8 @@ export interface Workspace extends WorkspaceRow {
 	/** Absolute path to the git worktree on disk, or null if it can't be resolved. */
 	worktree: string | null
 	baseBranch: string
+	/** Whether the repo has a resolvable icon (fetch it from `/api/repos/:name/icon`). */
+	hasRepoIcon: boolean
 }
 
 const worktreeCache = new Map<string, string | null>()
@@ -115,12 +118,22 @@ export class Reads {
 		return rows.map(r => ({
 			...r,
 			worktree: resolveWorktree(this.workspacesRoot, r.repo_name, r.directory_name, r.branch, r.repo_root),
-			baseBranch: r.intended_target_branch || r.default_branch || 'main'
+			baseBranch: r.intended_target_branch || r.default_branch || 'main',
+			hasRepoIcon: !!(r.repo_root && resolveRepoIcon(r.repo_root))
 		}))
 	}
 
 	getWorkspace(id: string): Workspace | null {
 		return this.listWorkspaces().find(w => w.id === id) ?? null
+	}
+
+	/** Resolve a repo's icon by its name (the sidebar avatar) — null if the repo or icon is unknown. */
+	resolveRepoIcon(repoName: string): ResolvedIcon | null {
+		const rows = this.db.query<{ root_path: string | null }>('SELECT root_path FROM repos WHERE name = ? LIMIT 1', [
+			repoName
+		])
+		const root = rows[0]?.root_path
+		return root ? resolveRepoIcon(root) : null
 	}
 
 	listSessions(workspaceId: string): SessionRow[] {

@@ -49,6 +49,9 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const client = {
 	state: () => api<StateResponse>('/api/state'),
+	/** Image URL for a repo's icon. `<img>` can't send the auth header, so carry the token as a query param. */
+	repoIconUrl: (repoName: string) =>
+		`/api/repos/${encodeURIComponent(repoName)}/icon?token=${encodeURIComponent(getToken() ?? '')}`,
 	sessions: (workspaceId: string) =>
 		api<SessionsResponse>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`),
 	messages: (sessionId: string, after: number) =>

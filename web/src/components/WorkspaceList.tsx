@@ -2,9 +2,11 @@ import { ChevronDown, SlidersHorizontal, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
+import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	relativeTime,
+	repoMonogram,
 	STATUS_ORDER,
 	shortModel,
 	statusLabel,
@@ -263,13 +265,37 @@ function ViewSelect({
 	)
 }
 
+/** Repo avatar: the resolved repo icon, or a monogram tile as a fallback. */
+function RepoAvatar({ w }: { w: Workspace }) {
+	const [failed, setFailed] = useState(false)
+	const showIcon = w.hasRepoIcon && !!w.repo_name && !failed
+	return (
+		<div className="grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 text-xs font-semibold text-muted">
+			{showIcon ? (
+				<img
+					src={client.repoIconUrl(w.repo_name as string)}
+					alt=""
+					loading="lazy"
+					className="size-full object-contain"
+					onError={() => setFailed(true)}
+				/>
+			) : (
+				repoMonogram(w)
+			)}
+		</div>
+	)
+}
+
 function WorkspaceCard({ w }: { w: Workspace }) {
 	const status = uiStatus(w)
 	const model = shortModel(w.model)
 	const ctx = w.context_used_percent
 	return (
 		<>
-			<StatusDot status={status} className="mt-1.5 self-start" />
+			<div className="relative shrink-0 self-start">
+				<RepoAvatar w={w} />
+				<StatusDot status={status} className="absolute -right-0.5 -bottom-0.5 ring-2 ring-surface" />
+			</div>
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<div className="flex items-center gap-2">
 					<span className="min-w-0 flex-1 truncate font-medium">{workspaceLabel(w)}</span>
