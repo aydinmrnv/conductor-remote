@@ -88,3 +88,10 @@ export interface SendResult {
 	warning?: string
 	error?: string
 }
+
+export interface NewChatResult {
+	ok: boolean
+	/** Id of the freshly-created session, if the relay detected it in time. */
+	sessionId?: string | null
+	error?: string
+}
