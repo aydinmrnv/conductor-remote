@@ -9,6 +9,25 @@ interface Feedback {
 	msg: string
 }
 
+// Persist an unsent prompt per workspace so a force-quit (or reload) never loses
+// typing. Keyed by workspace id; cleared on a successful send.
+const DRAFT_PREFIX = 'conductor-remote-draft:'
+
+function loadDraft(workspaceId: string): string {
+	try {
+		return localStorage.getItem(DRAFT_PREFIX + workspaceId) ?? ''
+	} catch {
+		return ''
+	}
+}
+
+function saveDraft(workspaceId: string, value: string) {
+	try {
+		if (value) localStorage.setItem(DRAFT_PREFIX + workspaceId, value)
+		else localStorage.removeItem(DRAFT_PREFIX + workspaceId)
+	} catch {}
+}
+
 export function Composer({
 	sessionId,
 	workspaceId,
@@ -18,7 +37,7 @@ export function Composer({
 	workspaceId: string
 	actuator?: ActuatorInfo
 }) {
-	const [text, setText] = useState('')
+	const [text, setText] = useState(() => loadDraft(workspaceId))
 	const [sending, setSending] = useState(false)
 	const [feedback, setFeedback] = useState<Feedback | null>(null)
 	const ref = useRef<HTMLTextAreaElement>(null)
@@ -36,6 +55,15 @@ export function Composer({
 		el.style.height = `${Math.min(el.scrollHeight, 160)}px`
 	}
 
+	// Grow the box to fit a restored draft on mount (SessionView keys us per workspace).
+	useEffect(autosize, [])
+
+	const edit = (value: string) => {
+		setText(value)
+		saveDraft(workspaceId, value)
+		autosize()
+	}
+
 	const send = async () => {
 		const value = text.trim()
 		if (!value || !sessionId || sending) return
@@ -44,6 +72,7 @@ export function Composer({
 			const r = await client.sendPrompt(sessionId, value, workspaceId)
 			if (r.ok) {
 				setText('')
+				saveDraft(workspaceId, '')
 				requestAnimationFrame(autosize)
 				setFeedback({ kind: r.warning ? 'warn' : 'ok', msg: r.warning || 'Sent' })
 			} else {
@@ -88,10 +117,7 @@ export function Composer({
 					disabled={disabled}
 					placeholder={disabled ? 'No active session' : 'Send a prompt…'}
 					className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[15px] outline-none placeholder:text-faint disabled:opacity-50"
-					onChange={e => {
-						setText(e.target.value)
-						autosize()
-					}}
+					onChange={e => edit(e.target.value)}
 					onKeyDown={e => {
 						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
 							e.preventDefault()

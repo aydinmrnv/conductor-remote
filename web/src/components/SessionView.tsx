@@ -100,7 +100,7 @@ export function SessionView() {
 					<SessionTabs sessions={sessions} activeId={sessionId} onSelect={setPickedSession} />
 				) : null}
 				<Transcript sessionId={sessionId} />
-				<Composer sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
+				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
 
 			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}
