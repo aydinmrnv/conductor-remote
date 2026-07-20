@@ -53,11 +53,18 @@ unit test.
   assignments for exactly this reason (they once used `constructor(private readonly …)`).
   The one experimental bit left, `node:sqlite`, only warns — `bin/cli.js` silences
   just that warning (no re-exec).
-- **The relay binds loopback; the tailnet-facing URL comes from `tailscale serve`.**
-  `server.listen` uses `127.0.0.1` (override with `RELAY_HOST`), and `yarn deploy`
-  wires `tailscale serve --bg 8787` so the phone reaches a stable `https://<magicdns>/`
-  (tailnet-only, real TLS — which the PWA service worker needs). `curl 127.0.0.1:8787`
-  now works for local checks; `yarn service status` prints the phone URL.
+- **The relay binds loopback; the HTTPS URL comes from Tailscale, and `EXPOSE` picks
+  who can reach it.** `server.listen` uses `127.0.0.1` (override with `RELAY_HOST`), and
+  `yarn deploy` (`service.ts` → `ensureTailscale`) fronts a stable `https://<magicdns>/`
+  with real TLS (which the PWA service worker needs). Two modes, `EXPOSE=public|tailnet`:
+  `public` (**default**) = `tailscale funnel` — reachable from **any browser on the
+  internet**, gated only by the 128-bit token (`server.ts` compares it constant-time);
+  `tailnet` = `tailscale serve` — tailnet devices only. The chosen mode is persisted
+  next to the token (`…/conductor-remote/expose`) so a bare re-deploy keeps posture;
+  switching to `tailnet` runs `funnel reset` first. Funnel must be enabled for the
+  tailnet (Admin console nodeAttr) or it falls back to tailnet-only and says so.
+  `curl 127.0.0.1:8787` works for local checks; `yarn service status` prints the URL
+  and whether it's public or tailnet-only.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
@@ -28,11 +29,19 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
 	res.end(payload)
 }
 
+/** Constant-time string compare — the token is the sole internet-facing gate when exposed via Funnel. */
+function tokenEq(candidate: string | null): boolean {
+	if (candidate == null) return false
+	const a = Buffer.from(candidate)
+	const b = Buffer.from(cfg.token)
+	return a.length === b.length && crypto.timingSafeEqual(a, b)
+}
+
 function authed(req: http.IncomingMessage): boolean {
 	const auth = req.headers.authorization
-	if (auth === `Bearer ${cfg.token}`) return true
+	if (auth?.startsWith('Bearer ')) return tokenEq(auth.slice('Bearer '.length))
 	const url = new URL(req.url ?? '/', 'http://x')
-	return url.searchParams.get('token') === cfg.token
+	return tokenEq(url.searchParams.get('token'))
 }
 
 async function readBody(req: http.IncomingMessage): Promise<string> {
@@ -143,7 +152,7 @@ server.listen(cfg.port, cfg.host, () => {
 			`  bound:      ${cfg.host}:${cfg.port}`,
 			'',
 			`  Local:  http://${cfg.host}:${cfg.port}/#token=${cfg.token}`,
-			'  Phone:  fronted over the tailnet by `tailscale serve` — run `yarn service status` for the HTTPS URL'
+			'  Phone:  fronted by `tailscale funnel`/`serve` — run `yarn service status` for the HTTPS URL'
 		].join('\n')
 	)
 })
