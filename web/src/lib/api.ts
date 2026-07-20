@@ -1,4 +1,6 @@
 import type {
+	MergePrecheck,
+	MergeResult,
 	MessagesResponse,
 	NewChatResult,
 	SendResult,
@@ -85,5 +87,11 @@ export const client = {
 		}),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
 	newChat: (workspaceId: string) =>
-		api<NewChatResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`, { method: 'POST' })
+		api<NewChatResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`, { method: 'POST' }),
+	/** Can this workspace's branch merge into its base? (advisory, for the confirm sheet) */
+	mergePrecheck: (workspaceId: string) =>
+		api<MergePrecheck>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`),
+	/** Merge the workspace branch into its base — local `git merge`, like Conductor's button. */
+	merge: (workspaceId: string) =>
+		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' })
 }

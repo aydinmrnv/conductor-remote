@@ -7,6 +7,7 @@ import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { workspaceDiff } from './git.ts'
+import { mergePrecheck, mergeWorkspace } from './merge.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads } from './reads.ts'
 import { describeActuator, newChat, pickActuator } from './writes.ts'
@@ -173,6 +174,17 @@ const server = http.createServer(async (req, res) => {
 			if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
 			const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
 			return json(req, res, 200, diff)
+		}
+
+		// GET /api/workspaces/:id/merge — precheck: can this branch merge into its base?
+		// POST /api/workspaces/:id/merge — do it (local `git merge`, mirroring Conductor’s merge button)
+		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/merge$/)
+		if ((req.method === 'GET' || req.method === 'POST') && m) {
+			const ws = reads.getWorkspace(decodeURIComponent(m[1]))
+			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+			if (req.method === 'GET') return json(req, res, 200, await mergePrecheck(ws))
+			const result = await mergeWorkspace(ws)
+			return json(req, res, result.ok ? 200 : 409, result)
 		}
 
 		// GET /api/sessions/:id/messages?after=<rowid>

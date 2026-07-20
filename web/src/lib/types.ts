@@ -126,3 +126,37 @@ export interface NewChatResult {
 	sessionId?: string | null
 	error?: string
 }
+
+/** Why a merge is blocked (or `ok`) — mirrors `MergeReason` in src/merge.ts. */
+export type MergeReason =
+	| 'ok'
+	| 'no-branch'
+	| 'no-repo'
+	| 'not-on-base'
+	| 'dirty-base'
+	| 'nothing-to-merge'
+	| 'conflicts'
+	| 'error'
+
+/** Advisory state for the merge confirm sheet (GET /api/workspaces/:id/merge). */
+export interface MergePrecheck {
+	base: string
+	branch: string
+	canMerge: boolean
+	reason: MergeReason
+	detail?: string
+	ahead: number
+	/** Uncommitted worktree changes a merge of committed history won't include. */
+	uncommitted: number
+	headBranch?: string
+}
+
+/** Result of POST /api/workspaces/:id/merge. */
+export interface MergeResult {
+	ok: boolean
+	base: string
+	branch: string
+	summary?: string
+	error?: string
+	reason?: MergeReason
+}

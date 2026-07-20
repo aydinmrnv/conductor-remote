@@ -162,6 +162,21 @@ export function useDiff(workspaceId: string | undefined, enabled: boolean) {
 	return query
 }
 
+/** Merge precheck for the confirm sheet — polled only while the sheet is open. */
+export function useMergePrecheck(workspaceId: string | undefined, enabled: boolean) {
+	const report = useOnline()
+	const query = useQuery({
+		queryKey: ['merge-precheck', workspaceId],
+		queryFn: () => client.mergePrecheck(workspaceId as string),
+		enabled: enabled && !!workspaceId,
+		refetchInterval: 4000
+	})
+	useEffect(() => {
+		if (query.isError) report(false, query.error)
+	}, [query.isError, query.error, report])
+	return query
+}
+
 export interface TranscriptState {
 	entries: TranscriptEntry[]
 	loading: boolean

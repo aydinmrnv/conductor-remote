@@ -70,6 +70,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   reads.ts        workspaces / sessions / messages + worktree resolution
   transcript.ts   Claude Code SDK stream JSON → phone-renderable entries
   git.ts          workspace diff vs target branch (incl. untracked via --no-index)
+  merge.ts        local `git merge` into the base checkout (mirrors Conductor's merge button); precheck + do
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in)
 web/              React PWA (Vite root)
