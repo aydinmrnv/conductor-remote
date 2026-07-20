@@ -6,6 +6,14 @@ import { VitePWA } from 'vite-plugin-pwa'
 // The relay (src/server.ts) serves the built `dist/` in production and does its
 // own SPA fallback. In dev, Vite serves `web/` with HMR and proxies /api to the
 // relay so the phone can hit one origin.
+//
+// Ports are injected by `scripts/dev.ts` (WEB_PORT / RELAY_PORT) so Conductor
+// workspaces can run concurrently on per-workspace ports; both default to the
+// classic 5173 / 8787 pair. This `server` block is dev-only — `vite build`
+// ignores it, so the prod bundle is unaffected.
+const webPort = Number(process.env.WEB_PORT) || 5173
+const relayPort = Number(process.env.RELAY_PORT) || 8787
+
 export default defineConfig({
 	root: 'web',
 	publicDir: 'public',
@@ -15,9 +23,10 @@ export default defineConfig({
 	},
 	server: {
 		host: true,
-		port: 5173,
+		port: webPort,
+		strictPort: true,
 		proxy: {
-			'/api': { target: 'http://127.0.0.1:8787', changeOrigin: true }
+			'/api': { target: `http://127.0.0.1:${relayPort}`, changeOrigin: true }
 		}
 	},
 	plugins: [

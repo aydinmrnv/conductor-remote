@@ -31,6 +31,21 @@ export function useWorkspaces() {
 	return query
 }
 
+/** All (non-hidden) sessions in a workspace — the desktop app's "tabs". */
+export function useSessions(workspaceId: string | undefined) {
+	const report = useOnline()
+	const query = useQuery({
+		queryKey: ['sessions', workspaceId],
+		queryFn: () => client.sessions(workspaceId as string),
+		enabled: !!workspaceId,
+		refetchInterval: 4000
+	})
+	useEffect(() => {
+		if (query.isError) report(false, query.error)
+	}, [query.isError, query.error, report])
+	return query
+}
+
 export function useDiff(workspaceId: string | undefined, enabled: boolean) {
 	const report = useOnline()
 	const query = useQuery({

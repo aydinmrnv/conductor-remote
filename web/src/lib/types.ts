@@ -31,6 +31,23 @@ export interface StateResponse {
 	actuator: ActuatorInfo
 }
 
+export interface Session {
+	id: string
+	status: string | null
+	title: string | null
+	model: string | null
+	permission_mode: string | null
+	context_used_percent: number | null
+	unread_count: number | null
+	created_at: string
+	updated_at: string
+	last_user_message_at: string | null
+}
+
+export interface SessionsResponse {
+	sessions: Session[]
+}
+
 export type Role = 'user' | 'assistant' | 'tool' | 'thinking' | 'system'
 
 export interface TranscriptEntry {

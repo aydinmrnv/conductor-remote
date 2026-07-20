@@ -33,6 +33,47 @@ function launchctl(...args: string[]): void {
 	}
 }
 
+/** Block the main thread briefly — used to let launchd settle between bootout and bootstrap. */
+function sleepSync(ms: number): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** Is the agent currently bootstrapped into the user domain? */
+function serviceLoaded(): boolean {
+	try {
+		execFileSync('launchctl', ['print', `${domain}/${LABEL}`], { stdio: 'pipe' })
+		return true
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Reload the agent from the freshly written plist. `bootout` of a *running* instance is asynchronous,
+ * so we wait for it to fully unload before `bootstrap` — otherwise bootstrap races the teardown and
+ * fails silently, leaving the relay down after a re-deploy. Bootstrap is retried and its failure is fatal.
+ */
+function reloadAgent(): void {
+	launchctl('bootout', `${domain}/${LABEL}`)
+	for (let i = 0; i < 30 && serviceLoaded(); i++) sleepSync(100)
+	let bootstrapped = false
+	for (let i = 0; i < 10 && !bootstrapped; i++) {
+		try {
+			execFileSync('launchctl', ['bootstrap', domain, plistPath], { stdio: 'pipe' })
+			bootstrapped = true
+		} catch {
+			sleepSync(150)
+		}
+	}
+	if (!bootstrapped) {
+		console.error(`✗ launchctl bootstrap failed for ${plistPath}`)
+		console.error(`  Inspect with: launchctl print ${domain}/${LABEL}`)
+		process.exit(1)
+	}
+	launchctl('enable', `${domain}/${LABEL}`)
+	launchctl('kickstart', '-k', `${domain}/${LABEL}`)
+}
+
 /** Node runs the relay via the flag-free CLI shim; the absolute execPath is baked at install time. */
 function buildPlist(): string {
 	const node = xml(process.execPath)
@@ -95,24 +136,89 @@ function currentToken(): string | null {
 	}
 }
 
-function tailscaleHost(): string | null {
-	for (const addrs of Object.values(os.networkInterfaces())) {
-		for (const a of addrs ?? []) {
-			if (a.family === 'IPv4' && !a.internal && a.address.startsWith('100.')) return a.address
+const RELAY_PORT = process.env.RELAY_PORT ?? '8787'
+
+/** Locate the tailscale CLI: PATH first, then the common macOS install locations. Null if absent. */
+function tailscaleBin(): string | null {
+	for (const bin of [
+		'tailscale',
+		'/opt/homebrew/bin/tailscale',
+		'/usr/local/bin/tailscale',
+		'/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+	]) {
+		try {
+			execFileSync(bin, ['version'], { stdio: 'pipe' })
+			return bin
+		} catch {
+			// try the next candidate
 		}
 	}
 	return null
 }
 
-function printUrl(): void {
-	const host = process.env.RELAY_HOST ?? tailscaleHost() ?? '127.0.0.1'
-	const port = process.env.RELAY_PORT ?? '8787'
-	const token = currentToken()
-	console.info(`\n  Phone URL (same Tailnet):\n    http://${host}:${port}/#token=${token ?? '<starts on first run>'}`)
-	if (host === '127.0.0.1') {
-		console.info('\n  ⚠ No Tailscale 100.x NIC found right now. If Tailscale was down at login the relay bound')
-		console.info('    loopback and is unreachable from your phone — bring Tailscale up and `yarn service restart`.')
+/** This node's MagicDNS name without the trailing dot, e.g. `mac.taila6dcd6.ts.net`. */
+function magicDnsName(bin: string): string | null {
+	try {
+		const out = execFileSync(bin, ['status', '--json'], { encoding: 'utf8', stdio: 'pipe' })
+		return (JSON.parse(out)?.Self?.DNSName ?? '').replace(/\.$/, '') || null
+	} catch {
+		return null
 	}
+}
+
+/** Is `tailscale serve` already proxying https://<dns>/ to the loopback relay? Keeps the wiring idempotent. */
+function serveConfigured(bin: string, dns: string): boolean {
+	try {
+		const out = execFileSync(bin, ['serve', 'status', '--json'], { encoding: 'utf8', stdio: 'pipe' })
+		const proxy = JSON.parse(out)?.Web?.[`${dns}:443`]?.Handlers?.['/']?.Proxy
+		return proxy === `http://127.0.0.1:${RELAY_PORT}`
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Wire the relay to a stable HTTPS tailnet URL via `tailscale serve` (tailnet-only — NOT Funnel).
+ * Idempotent and non-fatal: the relay binds loopback regardless, so a failure here just means the phone
+ * URL isn't set up yet, and we print how to do it by hand. Real TLS also satisfies the PWA's secure-context
+ * requirement (a service worker won't register over plain http on a 100.x IP).
+ */
+function ensureServe(): void {
+	const bin = tailscaleBin()
+	if (!bin) {
+		console.info('\n  ⚠ tailscale CLI not found — skipped serve setup. Once Tailscale is installed, run:')
+		console.info(`      tailscale serve --bg ${RELAY_PORT}`)
+		return
+	}
+	const dns = magicDnsName(bin)
+	if (dns && serveConfigured(bin, dns)) {
+		console.info(`✓ tailscale serve already fronts https://${dns}/ → 127.0.0.1:${RELAY_PORT}`)
+		return
+	}
+	try {
+		execFileSync(bin, ['serve', '--bg', RELAY_PORT], { stdio: 'pipe' })
+		console.info(`✓ tailscale serve → https://${dns ?? '<node>'}/ now proxies 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
+	} catch (err) {
+		console.info(
+			`\n  ⚠ could not configure tailscale serve (${err instanceof Error ? err.message : err}). Run by hand:`
+		)
+		console.info(`      tailscale serve --bg ${RELAY_PORT}`)
+	}
+}
+
+function printUrl(): void {
+	const frag = `#token=${currentToken() ?? '<starts on first run>'}`
+	const bin = tailscaleBin()
+	const dns = bin ? magicDnsName(bin) : null
+	if (bin && dns && serveConfigured(bin, dns)) {
+		console.info(`\n  Phone URL (same Tailnet, HTTPS):\n    https://${dns}/${frag}`)
+		return
+	}
+	// Serve not wired yet — the relay is only on loopback.
+	console.info(`\n  Local URL:\n    http://127.0.0.1:${RELAY_PORT}/${frag}`)
+	console.info(
+		`\n  ⚠ Not reachable from your phone yet. Run \`tailscale serve --bg ${RELAY_PORT}\`${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
+	)
 }
 
 /** npx unpacks into a throwaway cache that gets purged; a LaunchAgent baked against it would rot. */
@@ -136,15 +242,12 @@ function install(): void {
 	fs.mkdirSync(path.dirname(plistPath), { recursive: true })
 	fs.mkdirSync(logDir, { recursive: true })
 	fs.writeFileSync(plistPath, buildPlist())
-	// Reload cleanly: tear down any prior instance, then bootstrap the fresh definition and kick it.
-	launchctl('bootout', `${domain}/${LABEL}`)
-	launchctl('bootstrap', domain, plistPath)
-	launchctl('enable', `${domain}/${LABEL}`)
-	launchctl('kickstart', '-k', `${domain}/${LABEL}`)
+	reloadAgent()
 	console.info(`✓ installed LaunchAgent ${LABEL}`)
 	console.info(`  plist: ${plistPath}`)
 	console.info(`  logs:  ${logDir}/relay.log`)
 	console.info(`  node:  ${process.execPath}`)
+	ensureServe()
 	printUrl()
 	console.info(
 		'\n  Note: a node version change (nvm) invalidates the baked path — re-run `yarn deploy` after upgrading node.'

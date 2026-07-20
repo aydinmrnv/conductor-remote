@@ -31,7 +31,7 @@ Two asymmetric halves — keep them separate:
 yarn verify   # typecheck (tsc) + lint (Biome) — run before every commit
 yarn fix      # Biome autofix (format + safe lints)
 yarn build    # Vite → dist/ (what the relay serves)
-yarn start    # run the relay (node src/server.ts)
+yarn start    # run the relay (node bin/cli.js)
 yarn dev      # Vite :5173 (HMR) proxying /api → relay :8787
 yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
@@ -43,22 +43,30 @@ unit test.
 
 ## Traps (these will bite)
 
-- **Node flags are mandatory — and it's the *transform* flag, not strip.** The
-  relay and scripts run under `node --experimental-transform-types
-  --disable-warning=ExperimentalWarning`. `--experimental-transform-types`
-  *transforms* runtime TS syntax, so enums and parameter properties work — `db.ts`
-  relies on `constructor(private readonly dbPath)`. Do **not** switch to
-  `--experimental-strip-types` (strip-only): it rejects those and breaks `db.ts`.
-- **The relay binds the Tailscale NIC, not loopback.** `server.listen` uses the
-  auto-detected `100.x` address, so `curl 127.0.0.1:8787` **refuses** — curl the
-  tailnet IP the relay prints (or set `RELAY_HOST`). This surprises every time.
+- **The relay is kept strip-clean so it runs flag-free — don't reintroduce the
+  transform flag.** The relay, `bin/cli.js`, and scripts run under plain `node`
+  (Node 24's default TS *type-stripping*), no `--experimental-transform-types`. This
+  is load-bearing for the npm package: `bin/cli.js` is a zero-flag entrypoint and the
+  published tarball has zero runtime deps. Strip-only erases types but rejects
+  syntax that must be *transformed* — so keep the code free of **parameter-property
+  constructors, enums, and namespaces**. `db.ts`/`reads.ts` use explicit field
+  assignments for exactly this reason (they once used `constructor(private readonly …)`).
+  The one experimental bit left, `node:sqlite`, only warns — `bin/cli.js` silences
+  just that warning (no re-exec).
+- **The relay binds loopback; the tailnet-facing URL comes from `tailscale serve`.**
+  `server.listen` uses `127.0.0.1` (override with `RELAY_HOST`), and `yarn deploy`
+  wires `tailscale serve --bg 8787` so the phone reaches a stable `https://<magicdns>/`
+  (tailnet-only, real TLS — which the PWA service worker needs). `curl 127.0.0.1:8787`
+  now works for local checks; `yarn service status` prints the phone URL.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.
-- **Yarn is standalone here.** An empty-marker `yarn.lock` + `.yarnrc.yml`
+- **Yarn is standalone here.** Its own `yarn.lock` + `.yarnrc.yml`
   (`nodeLinker: node-modules`) makes this its own project despite a `package.json`
-  higher up in `$HOME`. The verify script is named `verify`, not `check` (collides
-  with a Yarn Classic builtin).
+  higher up in `$HOME`. `package.json` pins `yarn@4` via `packageManager`, so
+  contexts without a corepack shim (CI, a bare shell) must `corepack enable` first
+  — see `.github/workflows/ci.yml`. The verify script is named `verify`, not `check`
+  (collides with a Yarn Classic builtin).
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."
@@ -72,5 +80,6 @@ unit test.
 - **Layout:** `src/` = Node relay (server, db, reads, git, transcript, sidecar,
   writes, config). `web/` = Vite-root React PWA (`web/src/`). `scripts/` = dev,
   icon-gen, service installer. `dist/` = build output (gitignored, relay-served).
-- **Utility scripts** default to `node --experimental-transform-types` TS, stdlib-only.
+- **Utility scripts** run under plain `node` (default type-stripping), stdlib-only —
+  keep them strip-clean too (no param-property constructors/enums/namespaces).
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public commits.

@@ -18,8 +18,9 @@ jobs:
         with:
           node-version: 24
           cache: yarn
-      # devDeps carry tsc + biome + the Vite toolchain; the published package
-      # itself has zero runtime deps.
+      # corepack (above) provides the pinned yarn@4. devDeps carry tsc + biome +
+      # the Vite toolchain; the published package itself has zero runtime deps.
+      # (Build scripts stay disabled — sharp's native binary is only for gen:icons.)
       - run: yarn install --immutable
       - run: yarn verify
       # Build here too: it's the only thing that exercises the React/PWA side,

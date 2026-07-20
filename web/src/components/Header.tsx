@@ -1,28 +1,31 @@
-import { ChevronLeft } from 'lucide-react'
+import { PanelLeft } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { useApp } from '../store.ts'
 import { ConnDot } from './ui.tsx'
 
 export function Header({
 	title,
 	subtitle,
-	onBack,
+	menu,
 	right
 }: {
 	title: ReactNode
 	subtitle?: ReactNode
-	onBack?: () => void
+	/** Show the workspace-drawer toggle (phones only — the rail is static on md+). */
+	menu?: boolean
 	right?: ReactNode
 }) {
+	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	return (
 		<header className="pt-safe sticky top-0 z-10 flex items-center gap-2 border-b border-border-soft bg-bg/80 px-3 pb-2.5 backdrop-blur-xl">
-			{onBack ? (
+			{menu ? (
 				<button
 					type="button"
-					onClick={onBack}
-					aria-label="Back"
-					className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+					onClick={() => setSidebarOpen(true)}
+					aria-label="Open workspaces"
+					className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 md:hidden"
 				>
-					<ChevronLeft size={22} />
+					<PanelLeft size={20} />
 				</button>
 			) : (
 				<span className="w-1" />
