@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ConductorDb } from './db.ts'
-import { type ResolvedIcon, resolveRepoIcon } from './icons.ts'
+import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import { parseMessage, type TranscriptEntry } from './transcript.ts'
 
 export interface WorkspaceRow {
@@ -20,6 +20,8 @@ export interface WorkspaceRow {
 	intended_target_branch: string | null
 	repo_name: string | null
 	repo_root: string | null
+	repo_icon: string | null
+	remote_url: string | null
 	default_branch: string | null
 	session_status: string | null
 	session_title: string | null
@@ -44,8 +46,8 @@ export interface Workspace extends WorkspaceRow {
 	/** Absolute path to the git worktree on disk, or null if it can't be resolved. */
 	worktree: string | null
 	baseBranch: string
-	/** Whether the repo has a resolvable icon (fetch it from `/api/repos/:name/icon`). */
-	hasRepoIcon: boolean
+	/** How to render the repo's sidebar avatar; null → letter monogram. See `describeRepoIcon`. */
+	icon: RepoIcon | null
 }
 
 const worktreeCache = new Map<string, string | null>()
@@ -106,7 +108,8 @@ export class Reads {
 		const rows = this.db.query<WorkspaceRow>(
 			`SELECT w.id, w.directory_name, w.workspace_name, w.branch, w.derived_status, w.manual_status,
 			        w.created_at, w.updated_at, w.unread, w.pinned_at, w.active_session_id, w.intended_target_branch,
-			        r.name AS repo_name, r.root_path AS repo_root, r.default_branch AS default_branch,
+			        r.name AS repo_name, r.root_path AS repo_root, r.icon AS repo_icon,
+			        r.remote_url AS remote_url, r.default_branch AS default_branch,
 			        s.status AS session_status, s.title AS session_title, s.model AS model,
 			        s.context_used_percent AS context_used_percent
 			 FROM workspaces w
@@ -119,7 +122,7 @@ export class Reads {
 			...r,
 			worktree: resolveWorktree(this.workspacesRoot, r.repo_name, r.directory_name, r.branch, r.repo_root),
 			baseBranch: r.intended_target_branch || r.default_branch || 'main',
-			hasRepoIcon: !!(r.repo_root && resolveRepoIcon(r.repo_root))
+			icon: describeRepoIcon({ icon: r.repo_icon, repoRoot: r.repo_root, remoteUrl: r.remote_url })
 		}))
 	}
 
