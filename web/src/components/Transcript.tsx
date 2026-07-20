@@ -61,20 +61,42 @@ function Entry({ e }: { e: TranscriptEntry }) {
 		)
 	}
 	if (e.role === 'tool') {
+		if (e.error) {
+			return (
+				<div className="overflow-hidden rounded-xl border border-del/30 bg-del/5 px-3 py-2">
+					{/* biome-ignore format: keep {e.text} inline so <pre> doesn't render JSX indentation */}
+					<pre className="line-clamp-4 whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-del/80 [overflow-wrap:anywhere]">{e.text}</pre>
+				</div>
+			)
+		}
 		return (
-			<div className="overflow-hidden rounded-xl border border-border-soft bg-surface/60 px-3 py-2">
-				{/* biome-ignore format: keep {e.text} inline so <pre> doesn't render JSX indentation */}
-				<pre className="whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-muted [overflow-wrap:anywhere]">{e.text}</pre>
+			<div className="flex min-w-0 items-baseline gap-2 overflow-hidden whitespace-nowrap rounded-xl border border-border-soft bg-surface/60 px-3 py-1.5">
+				<span className="shrink-0 font-mono text-[11px] text-faint">▸</span>
+				<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
+				{e.detail ? <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{e.detail}</span> : null}
 			</div>
+		)
+	}
+	if (e.role === 'thinking') {
+		return (
+			<details className="group px-1">
+				<summary className="cursor-pointer select-none list-none text-[11px] font-semibold uppercase tracking-wide text-faint [&::-webkit-details-marker]:hidden">
+					<span className="mr-1 inline-block transition-transform group-open:rotate-90">▸</span>
+					Thinking
+				</summary>
+				<div className="mt-1 border-l-2 border-border-soft pl-3 text-[13px] italic leading-relaxed text-muted">
+					<Markdown>{e.text}</Markdown>
+				</div>
+			</details>
 		)
 	}
 	if (e.role === 'system') {
 		return <div className="px-2 text-center text-[11px] text-faint">{e.text}</div>
 	}
-	// assistant / thinking
+	// assistant
 	return (
 		<div className="flex justify-start">
-			<Bubble className={cn('max-w-[92%] bg-surface', e.role === 'thinking' && 'italic text-muted')}>
+			<Bubble className="max-w-[92%] bg-surface">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
 		</div>
