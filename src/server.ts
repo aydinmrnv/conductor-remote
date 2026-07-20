@@ -6,6 +6,7 @@ import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { workspaceDiff } from './git.ts'
+import { attachPrStatus } from './pr.ts'
 import { Reads } from './reads.ts'
 import { describeActuator, newChat, pickActuator } from './writes.ts'
 
@@ -94,8 +95,10 @@ const server = http.createServer(async (req, res) => {
 		// GET /api/state — workspace list with active-session status
 		if (req.method === 'GET' && pathname === '/api/state') {
 			const update = updateStatus()
+			const workspaces = reads.listWorkspaces()
+			attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
 			return json(res, 200, {
-				workspaces: reads.listWorkspaces(),
+				workspaces,
 				actuator: await describeActuator(actuator),
 				version: update.current,
 				update

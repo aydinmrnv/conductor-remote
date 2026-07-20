@@ -43,12 +43,17 @@ export interface SessionRow {
 	last_user_message_at: string | null
 }
 
+/** GitHub PR state of a workspace's branch, attached best-effort by src/pr.ts. */
+export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'mergeable'
+
 export interface Workspace extends WorkspaceRow {
 	/** Absolute path to the git worktree on disk, or null if it can't be resolved. */
 	worktree: string | null
 	baseBranch: string
 	/** How to render the repo's sidebar avatar; null → letter monogram. See `describeRepoIcon`. */
 	icon: RepoIcon | null
+	/** PR state of `branch` (null when unknown / no PR / not GitHub); set by src/pr.ts. */
+	pr_status?: PrStatus | null
 }
 
 const worktreeCache = new Map<string, string | null>()

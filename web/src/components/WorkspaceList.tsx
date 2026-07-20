@@ -9,8 +9,6 @@ import {
 	repoMonogram,
 	STATUS_ORDER,
 	shortModel,
-	statusLabel,
-	uiStatus,
 	workspaceLabel,
 	workspaceStatus,
 	workspaceStatusLabel
@@ -326,21 +324,19 @@ function RepoAvatar({ w }: { w: Workspace }) {
 }
 
 function WorkspaceCard({ w }: { w: Workspace }) {
-	const status = uiStatus(w)
 	const model = shortModel(w.model)
 	const ctx = w.context_used_percent
 	return (
 		<>
 			<div className="relative shrink-0 self-start">
 				<RepoAvatar w={w} />
-				<StatusDot status={status} className="absolute -right-0.5 -bottom-0.5 ring-2 ring-surface" />
+				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 ring-2 ring-surface" />
 			</div>
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<div className="flex items-center gap-2">
 					<span className="min-w-0 flex-1 truncate font-medium">{workspaceLabel(w)}</span>
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
 					{w.unread ? <Badge>{w.unread}</Badge> : null}
-					<span className="shrink-0 text-xs capitalize text-muted">{statusLabel(w)}</span>
 				</div>
 				{/* Row 1: repo + branch (branch flexes to fill and truncates). Row 2: model · ctx · time. */}
 				<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">

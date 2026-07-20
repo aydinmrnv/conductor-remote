@@ -17,6 +17,12 @@
 	--color-idle: #3ecf8e;
 	--color-done: #5b9dff;
 
+	/* Workspace dot by PR state (src/pr.ts). */
+	--color-pr-merged: #ac47ff;
+	--color-pr-draft: #a4a3a2;
+	--color-pr-conflicts: #fd9a00;
+	--color-pr-mergeable: #49de80;
+
 	--color-add: #3ecf8e;
 	--color-del: #ff6b6b;
 
@@ -65,6 +71,13 @@
 	}
 	.dot {
 		@apply size-2.5 shrink-0 rounded-full bg-faint;
+		/* The colour a `.dot-pulse` halo mixes from; overridden inline per dot. */
+		--pulse-color: var(--color-working);
+	}
+	/* Pulsing halo in the dot's own colour — used while the agent is working. */
+	.dot-pulse {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color) 60%, transparent);
+		animation: pulse 1.6s ease-out infinite;
 	}
 	.dot-working {
 		background: var(--color-working);
@@ -193,13 +206,13 @@
 
 @keyframes pulse {
 	0% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-working) 55%, transparent);
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color) 55%, transparent);
 	}
 	70% {
-		box-shadow: 0 0 0 7px color-mix(in srgb, var(--color-working) 0%, transparent);
+		box-shadow: 0 0 0 7px color-mix(in srgb, var(--pulse-color) 0%, transparent);
 	}
 	100% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-working) 0%, transparent);
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color) 0%, transparent);
 	}
 }
 
