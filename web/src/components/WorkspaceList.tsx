@@ -15,6 +15,7 @@ import {
 	workspaceStatus,
 	workspaceStatusLabel
 } from '../lib/format.ts'
+import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
 import type { Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ConnectSheet } from './ConnectSheet.tsx'
@@ -276,23 +277,50 @@ function ViewSelect({
 	)
 }
 
-/** Repo avatar: the resolved repo icon, or a monogram tile as a fallback. */
+const AVATAR_TILE = 'grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 font-semibold text-muted'
+
+/**
+ * Repo avatar, mirroring Conductor's resolution: an emoji or named glyph the user
+ * picked, else the repo's own icon file, else the GitHub owner's avatar, else a
+ * letter monogram. `failed` demotes a broken image (missing file / avatar) to the
+ * monogram.
+ */
 function RepoAvatar({ w }: { w: Workspace }) {
 	const [failed, setFailed] = useState(false)
-	const showIcon = w.hasRepoIcon && !!w.repo_name && !failed
+	const { icon } = w
+	const monogram = <div className={cn(AVATAR_TILE, 'text-xs')}>{repoMonogram(w)}</div>
+	if (!icon || failed) return monogram
+
+	if (icon.kind === 'emoji') return <div className={cn(AVATAR_TILE, 'text-lg leading-none')}>{icon.value}</div>
+
+	if (icon.kind === 'named') {
+		const Glyph = LUCIDE_ICONS[icon.value]
+		return Glyph ? (
+			<div className={AVATAR_TILE}>
+				<Glyph size={18} className="text-muted" />
+			</div>
+		) : (
+			monogram
+		)
+	}
+
+	// Raster images: the relay-served repo file, or the GitHub owner's square avatar.
+	const src =
+		icon.kind === 'file'
+			? w.repo_name
+				? client.repoIconUrl(w.repo_name)
+				: null
+			: `https://github.com/${encodeURIComponent(icon.owner)}.png?size=64`
+	if (!src) return monogram
 	return (
-		<div className="grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 text-xs font-semibold text-muted">
-			{showIcon ? (
-				<img
-					src={client.repoIconUrl(w.repo_name as string)}
-					alt=""
-					loading="lazy"
-					className="size-full object-contain"
-					onError={() => setFailed(true)}
-				/>
-			) : (
-				repoMonogram(w)
-			)}
+		<div className={AVATAR_TILE}>
+			<img
+				src={src}
+				alt=""
+				loading="lazy"
+				className={cn('size-full', icon.kind === 'github' ? 'object-cover' : 'object-contain')}
+				onError={() => setFailed(true)}
+			/>
 		</div>
 	)
 }

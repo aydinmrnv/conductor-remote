@@ -1,5 +1,16 @@
 // Mirrors the relay's JSON responses (src/reads.ts, src/git.ts, src/writes.ts).
 
+/**
+ * How to render a repo's sidebar avatar (mirrors `RepoIcon` in src/icons.ts).
+ * `emoji`/`named` render inline; `file` is fetched from `/api/repos/:name/icon`;
+ * `github` loads `github.com/<owner>.png`. Null → letter monogram.
+ */
+export type RepoIcon =
+	| { kind: 'emoji'; value: string }
+	| { kind: 'named'; value: string }
+	| { kind: 'file' }
+	| { kind: 'github'; owner: string }
+
 export interface Workspace {
 	id: string
 	directory_name: string | null
@@ -20,8 +31,8 @@ export interface Workspace {
 	session_title: string | null
 	model: string | null
 	context_used_percent: number | null
-	/** Whether the repo has a resolvable icon — fetch it via `client.repoIconUrl(repo_name)`. */
-	hasRepoIcon: boolean
+	/** How to render the repo's sidebar avatar; null → letter monogram. */
+	icon: RepoIcon | null
 }
 
 export interface ActuatorInfo {
