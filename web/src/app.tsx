@@ -1,7 +1,9 @@
+import { useRef } from 'react'
 import { Navigate, Outlet, Route, Routes, useMatch } from 'react-router'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
+import { useEdgeSwipeDrawer } from './hooks.ts'
 import { cn } from './lib/cn.ts'
 import { useApp } from './store.ts'
 
@@ -29,12 +31,15 @@ function Shell() {
 	const match = useMatch('/w/:workspaceId')
 	const sidebarOpen = useApp(s => s.sidebarOpen)
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
+	const drawerRef = useRef<HTMLElement>(null)
+	useEdgeSwipeDrawer(drawerRef)
 	return (
 		<div className="flex h-full overflow-hidden">
 			{sidebarOpen ? (
 				<div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
 			) : null}
 			<aside
+				ref={drawerRef}
 				className={cn(
 					'fixed inset-y-0 left-0 z-50 flex w-[85%] max-w-80 flex-col border-r border-border-soft bg-bg transition-transform duration-200 ease-out',
 					'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:transition-none lg:w-80',
