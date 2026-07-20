@@ -1,19 +1,30 @@
+import { QrCode } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { parseTokenInput } from '../lib/api.ts'
 import { useApp } from '../store.ts'
+import { QRScanner } from './QRScanner.tsx'
 
 export function TokenGate() {
 	const setToken = useApp(s => s.setToken)
 	const [value, setValue] = useState('')
 	const [error, setError] = useState(false)
+	const [scanning, setScanning] = useState(false)
 
-	const submit = (e: FormEvent) => {
-		e.preventDefault()
-		const token = parseTokenInput(value)
-		// setToken persists it; a wrong token just 401s and bounces back here.
+	// Both the paste form and a scanned QR resolve through the same parser; setToken persists it and a
+	// wrong token just 401s and bounces back here.
+	const accept = (raw: string): void => {
+		const token = parseTokenInput(raw)
+		setScanning(false)
 		if (token) setToken(token)
 		else setError(true)
 	}
+
+	const submit = (e: FormEvent) => {
+		e.preventDefault()
+		accept(value)
+	}
+
+	if (scanning) return <QRScanner onResult={accept} onClose={() => setScanning(false)} />
 
 	return (
 		<div className="pt-safe pb-safe flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
@@ -46,14 +57,26 @@ export function TokenGate() {
 				<button type="submit" className="pill pill-active justify-center py-2.5">
 					Connect
 				</button>
+				<button
+					type="button"
+					onClick={() => {
+						setError(false)
+						setScanning(true)
+					}}
+					className="pill justify-center gap-2 py-2.5"
+				>
+					<QrCode size={16} />
+					Scan QR
+				</button>
 				{error ? (
 					<p className="text-xs" style={{ color: 'var(--color-del)' }}>
-						Couldn’t find a token in that — paste the token or the full URL.
+						Couldn’t find a token in that — paste the token or the full URL, or scan the QR.
 					</p>
 				) : null}
 			</form>
 			<p className="max-w-xs text-xs leading-relaxed text-faint">
-				Lost it? Run <span className="font-mono">yarn service status</span> on your Mac to reprint the URL and QR.
+				Lost it? Run <span className="font-mono">yarn service status</span> on your Mac to reprint the QR, then scan it
+				above — no need to retype anything.
 			</p>
 		</div>
 	)
