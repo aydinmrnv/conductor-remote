@@ -13,6 +13,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { packageRoot } from '../src/pkg-root.ts'
+import type { ExposeMode } from '../src/tailscale.ts'
+import { exposeStorePath, magicDnsName, normalizeExposeMode, relayPort, tailscaleBin } from '../src/tailscale.ts'
 import { qrLines } from './qr.ts'
 
 const LABEL = 'no.adluna.conductor-remote'
@@ -35,6 +37,8 @@ const FLAG_ENV: Record<string, string> = {
 	'--write-strategy': 'WRITE_STRATEGY',
 	'--auto-update': 'AUTO_UPDATE',
 	'--auto-update-interval': 'AUTO_UPDATE_INTERVAL_MINUTES',
+	'--funnel-watchdog': 'FUNNEL_WATCHDOG',
+	'--funnel-watchdog-interval': 'FUNNEL_WATCHDOG_INTERVAL_SECONDS',
 	'--db': 'CONDUCTOR_DB',
 	'--workspaces': 'CONDUCTOR_WORKSPACES'
 }
@@ -138,6 +142,9 @@ function buildPlist(): string {
 	if (process.env.AUTO_UPDATE) envEntries.push(['AUTO_UPDATE', process.env.AUTO_UPDATE])
 	if (process.env.AUTO_UPDATE_INTERVAL_MINUTES)
 		envEntries.push(['AUTO_UPDATE_INTERVAL_MINUTES', process.env.AUTO_UPDATE_INTERVAL_MINUTES])
+	if (process.env.FUNNEL_WATCHDOG) envEntries.push(['FUNNEL_WATCHDOG', process.env.FUNNEL_WATCHDOG])
+	if (process.env.FUNNEL_WATCHDOG_INTERVAL_SECONDS)
+		envEntries.push(['FUNNEL_WATCHDOG_INTERVAL_SECONDS', process.env.FUNNEL_WATCHDOG_INTERVAL_SECONDS])
 	if (process.env.CONDUCTOR_DB) envEntries.push(['CONDUCTOR_DB', process.env.CONDUCTOR_DB])
 	if (process.env.CONDUCTOR_WORKSPACES) envEntries.push(['CONDUCTOR_WORKSPACES', process.env.CONDUCTOR_WORKSPACES])
 	const envXml = envEntries.map(([k, v]) => `\t\t<key>${xml(k)}</key>\n\t\t<string>${xml(v)}</string>`).join('\n')
@@ -207,61 +214,15 @@ function persistPinnedToken(): void {
 	}
 }
 
-const RELAY_PORT = process.env.RELAY_PORT ?? '8787'
-
-/** Locate the tailscale CLI: PATH first, then the common macOS install locations. Null if absent. */
-function tailscaleBin(): string | null {
-	for (const bin of [
-		'tailscale',
-		'/opt/homebrew/bin/tailscale',
-		'/usr/local/bin/tailscale',
-		'/Applications/Tailscale.app/Contents/MacOS/Tailscale'
-	]) {
-		try {
-			execFileSync(bin, ['version'], { stdio: 'pipe' })
-			return bin
-		} catch {
-			// try the next candidate
-		}
-	}
-	return null
-}
-
-/** This node's MagicDNS name without the trailing dot, e.g. `mac.taila6dcd6.ts.net`. */
-function magicDnsName(bin: string): string | null {
-	try {
-		const out = execFileSync(bin, ['status', '--json'], { encoding: 'utf8', stdio: 'pipe' })
-		return (JSON.parse(out)?.Self?.DNSName ?? '').replace(/\.$/, '') || null
-	} catch {
-		return null
-	}
-}
-
-/**
- * How the stable HTTPS URL is fronted:
- *   'public'  → `tailscale funnel` — reachable from ANY browser on the internet (token-gated).
- *   'tailnet' → `tailscale serve`  — reachable only by devices logged into this tailnet.
- */
-type ExposeMode = 'public' | 'tailnet'
-
-/** Where the chosen expose mode is persisted so a later bare `yarn deploy` keeps the same posture. */
-function exposeStorePath(): string {
-	return path.join(os.homedir(), 'Library', 'Application Support', 'conductor-remote', 'expose')
-}
-
-function normalizeMode(raw: string | undefined): ExposeMode | null {
-	const v = raw?.trim().toLowerCase()
-	if (v === 'public' || v === 'funnel') return 'public'
-	if (v === 'tailnet' || v === 'serve' || v === 'private') return 'tailnet'
-	return null
-}
+const RELAY_PORT = relayPort()
 
 /**
  * Resolve the expose mode. Precedence: `EXPOSE` env (public|funnel / tailnet|serve|private) > persisted
  * choice > 'public' default. An explicit env value is persisted so re-deploys don't silently flip posture.
+ * (The read-only counterpart used by the runtime watchdog is readExposeMode() in src/tailscale.ts.)
  */
 function resolveExposeMode(): ExposeMode {
-	const fromEnv = normalizeMode(process.env.EXPOSE)
+	const fromEnv = normalizeExposeMode(process.env.EXPOSE)
 	if (fromEnv) {
 		try {
 			const file = exposeStorePath()
@@ -274,7 +235,7 @@ function resolveExposeMode(): ExposeMode {
 	}
 	if (process.env.EXPOSE) console.info(`  ⚠ unrecognized EXPOSE=${process.env.EXPOSE} — expected public|tailnet.`)
 	try {
-		const saved = normalizeMode(fs.readFileSync(exposeStorePath(), 'utf8'))
+		const saved = normalizeExposeMode(fs.readFileSync(exposeStorePath(), 'utf8'))
 		if (saved) return saved
 	} catch {
 		// no saved choice yet
