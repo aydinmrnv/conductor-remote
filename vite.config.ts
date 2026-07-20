@@ -16,7 +16,10 @@ const relayPort = Number(process.env.RELAY_PORT) || 8787
 
 export default defineConfig({
 	root: 'web',
-	publicDir: 'public',
+	// Repo-root `public/` (outside the `web` root) so Conductor's repo-icon lookup —
+	// which only scans root-level paths like `public/apple-touch-icon.png` — finds
+	// the same assets the PWA serves, with no duplicated icon file.
+	publicDir: '../public',
 	build: {
 		outDir: '../dist',
 		emptyOutDir: true
