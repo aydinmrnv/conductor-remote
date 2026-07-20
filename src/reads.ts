@@ -10,6 +10,7 @@ export interface WorkspaceRow {
 	directory_name: string | null
 	workspace_name: string | null
 	branch: string | null
+	pr_title: string | null
 	derived_status: string | null
 	manual_status: string | null
 	created_at: string
@@ -104,7 +105,7 @@ export class Reads {
 
 	listWorkspaces(): Workspace[] {
 		const rows = this.db.query<WorkspaceRow>(
-			`SELECT w.id, w.directory_name, w.workspace_name, w.branch, w.derived_status, w.manual_status,
+			`SELECT w.id, w.directory_name, w.workspace_name, w.branch, w.pr_title, w.derived_status, w.manual_status,
 			        w.created_at, w.updated_at, w.unread, w.pinned_at, w.active_session_id, w.intended_target_branch,
 			        r.name AS repo_name, r.root_path AS repo_root, r.default_branch AS default_branch,
 			        s.status AS session_status, s.title AS session_title, s.model AS model,

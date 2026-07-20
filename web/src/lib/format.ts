@@ -1,15 +1,20 @@
 import type { Workspace } from './types.ts'
 
 export function workspaceLabel(w: Workspace): string {
-	return w.workspace_name || humanizeBranch(w.branch) || w.directory_name || w.id.slice(0, 8)
+	return w.workspace_name || w.pr_title || humanizeBranch(w.branch) || w.directory_name || w.id.slice(0, 8)
 }
 
 /**
- * Conductor's own workspace title: the branch minus its prefix, sentence-cased.
- * Prefix-agnostic (works for github_username/custom/none) — we strip the first
- * path segment rather than read Conductor's `branch_prefix_type` setting, since
- * the branch already embeds the resolved prefix. Falls back to directory_name
- * (the worktree codename, e.g. "managua-v2") only for a branchless workspace.
+ * Conductor's own workspace title precedence, reproduced:
+ *   manual name → PR title → humanized branch → worktree codename → id.
+ * `pr_title` is Conductor's cached PR title, present exactly when the workspace
+ * has a PR (in-review or done) and cleared back to empty otherwise — so it's the
+ * live sidebar title, not a stale value. The branch minus its prefix, sentence-
+ * cased, is Conductor's own fallback while a workspace is still in-progress:
+ * prefix-agnostic (github_username/custom/none), stripping the first path segment
+ * rather than reading Conductor's `branch_prefix_type` setting since the branch
+ * already embeds the resolved prefix. directory_name (the worktree codename, e.g.
+ * "managua-v2") is a last resort for a branchless workspace.
  */
 function humanizeBranch(branch: string | null): string {
 	if (!branch) return ''
