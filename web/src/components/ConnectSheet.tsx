@@ -1,12 +1,15 @@
 import { Check, Copy, X } from 'lucide-react'
 import { useState } from 'react'
 import { useApp } from '../store.ts'
-import { QRCode } from './QRCode.tsx'
 
 /**
- * Connection sheet — shows a QR + copyable link for THIS device's token URL so you can re-scan it onto
- * another phone or re-add it to the home screen, and disconnect (clears the stored token → TokenGate).
- * The gate itself is tokenless and can't draw this, so the QR lives here. Reached from the sidebar header.
+ * Connection sheet — copy this device's access link (to open Conductor Remote on another device or re-add
+ * it to the home screen) and disconnect (clears the stored token → TokenGate). Reached from the sidebar
+ * header.
+ *
+ * No QR here on purpose: a phone can't scan its own screen, and the copy link covers device-to-device
+ * hand-off. The scannable QR lives where a camera can actually reach it — the Mac's `yarn service status`
+ * terminal output, which the phone scans via the TokenGate's in-app scanner.
  */
 export function ConnectSheet({ version, onClose }: { version?: string; onClose: () => void }) {
 	const token = useApp(s => s.token)
@@ -31,7 +34,7 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 				role="dialog"
 				aria-modal="true"
 				aria-label="Connect a device"
-				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-w-sm flex-col items-center gap-4 rounded-t-3xl border border-border-soft bg-surface p-5 shadow-xl md:inset-0 md:m-auto md:h-fit md:rounded-3xl"
+				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-w-sm flex-col gap-4 rounded-t-3xl border border-border-soft bg-surface p-5 shadow-xl md:inset-0 md:m-auto md:h-fit md:rounded-3xl"
 			>
 				<div className="flex w-full items-center justify-between">
 					<h2 className="text-base font-semibold">Connect a device</h2>
@@ -44,20 +47,22 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 						<X size={18} />
 					</button>
 				</div>
-				<p className="text-center text-sm text-muted">
-					Scan on another phone, or re-add this to your home screen. The link carries your access token.
+				<p className="text-sm text-muted">
+					Copy this device’s access link to open Conductor Remote on another device, or to re-add it to your home
+					screen. The link carries your access token.
 				</p>
-				<div className="rounded-2xl bg-white p-3">
-					<QRCode text={url} size={216} />
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2">
+					<span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">{url}</span>
+					<button
+						type="button"
+						onClick={copy}
+						aria-label="Copy link"
+						className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-text active:bg-surface"
+					>
+						{copied ? <Check size={16} /> : <Copy size={16} />}
+						{copied ? 'Copied' : 'Copy'}
+					</button>
 				</div>
-				<button
-					type="button"
-					onClick={copy}
-					className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-sm active:bg-surface"
-				>
-					{copied ? <Check size={16} /> : <Copy size={16} />}
-					{copied ? 'Copied' : 'Copy link'}
-				</button>
 				<div className="flex w-full items-center justify-between text-xs text-faint">
 					<span className="font-mono">{version ? `relay v${version}` : ''}</span>
 					<button
