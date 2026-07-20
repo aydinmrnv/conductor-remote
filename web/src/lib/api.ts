@@ -1,4 +1,4 @@
-import type { MessagesResponse, SendResult, StateResponse, WorkspaceDiff } from './types.ts'
+import type { MessagesResponse, SendResult, SessionsResponse, StateResponse, WorkspaceDiff } from './types.ts'
 
 const TOKEN_KEY = 'conductor-remote-token'
 
@@ -49,6 +49,8 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const client = {
 	state: () => api<StateResponse>('/api/state'),
+	sessions: (workspaceId: string) =>
+		api<SessionsResponse>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`),
 	messages: (sessionId: string, after: number) =>
 		api<MessagesResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${after}`),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`),

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useTranscript } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import type { TranscriptEntry } from '../lib/types.ts'
+import { Markdown } from './Markdown.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function Transcript({ sessionId }: { sessionId: string | null }) {
@@ -54,7 +55,7 @@ function Entry({ e }: { e: TranscriptEntry }) {
 			<div className="flex justify-end">
 				<Bubble className={cn('max-w-[85%] bg-accent-soft text-text', e.queued && 'opacity-60')}>
 					{e.queued ? <Label>queued</Label> : null}
-					{e.text}
+					<Markdown>{e.text}</Markdown>
 				</Bubble>
 			</div>
 		)
@@ -73,7 +74,9 @@ function Entry({ e }: { e: TranscriptEntry }) {
 	// assistant / thinking
 	return (
 		<div className="flex justify-start">
-			<Bubble className={cn('max-w-[92%] bg-surface', e.role === 'thinking' && 'italic text-muted')}>{e.text}</Bubble>
+			<Bubble className={cn('max-w-[92%] bg-surface', e.role === 'thinking' && 'italic text-muted')}>
+				<Markdown>{e.text}</Markdown>
+			</Bubble>
 		</div>
 	)
 }
@@ -82,7 +85,7 @@ function Bubble({ children, className }: { children: React.ReactNode; className?
 	return (
 		<div
 			className={cn(
-				'whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[14px] leading-relaxed [overflow-wrap:anywhere]',
+				'min-w-0 rounded-2xl px-3.5 py-2.5 text-[14px] leading-relaxed [overflow-wrap:anywhere]',
 				className
 			)}
 		>
