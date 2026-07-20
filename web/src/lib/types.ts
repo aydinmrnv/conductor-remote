@@ -11,6 +11,9 @@ export type RepoIcon =
 	| { kind: 'file' }
 	| { kind: 'github'; owner: string }
 
+/** GitHub PR state of the branch (see src/pr.ts) — drives the workspace dot colour. */
+export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'mergeable'
+
 export interface Workspace {
 	id: string
 	directory_name: string | null
@@ -33,6 +36,8 @@ export interface Workspace {
 	context_used_percent: number | null
 	/** How to render the repo's sidebar avatar; null → letter monogram. */
 	icon: RepoIcon | null
+	/** PR state of `branch`, or null when unknown / no PR / not a GitHub repo. */
+	pr_status?: PrStatus | null
 }
 
 export interface ActuatorInfo {

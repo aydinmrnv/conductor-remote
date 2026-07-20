@@ -45,6 +45,22 @@ export function statusLabel(w: Workspace): string {
 	return w.session_status || 'idle'
 }
 
+const PR_DOT_COLORS: Record<NonNullable<Workspace['pr_status']>, string> = {
+	merged: 'var(--color-pr-merged)',
+	draft: 'var(--color-pr-draft)',
+	conflicts: 'var(--color-pr-conflicts)',
+	mergeable: 'var(--color-pr-mergeable)'
+}
+
+/**
+ * The workspace dot: PR state drives the colour (merged/draft/conflicts/mergeable),
+ * everything else falls back to the accent. It pulses while the agent is working.
+ */
+export function statusDot(w: Workspace): { color: string; pulse: boolean } {
+	const color = (w.pr_status && PR_DOT_COLORS[w.pr_status]) || 'var(--color-accent)'
+	return { color, pulse: w.session_status === 'working' }
+}
+
 /**
  * The workspace lifecycle status the desktop sidebar groups by — a manual
  * override beats the derived one (same precedence as the app).

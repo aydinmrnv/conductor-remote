@@ -1,10 +1,18 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { cn } from '../lib/cn.ts'
-import type { UiStatus } from '../lib/format.ts'
+import { statusDot } from '../lib/format.ts'
+import type { Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
-export function StatusDot({ status, className }: { status: UiStatus; className?: string }) {
-	return <span className={cn('dot', `dot-${status}`, className)} />
+/** Workspace dot: coloured by PR state (src/pr.ts), pulsing while the agent works. */
+export function StatusDot({ w, className }: { w: Workspace; className?: string }) {
+	const { color, pulse } = statusDot(w)
+	return (
+		<span
+			className={cn('dot', pulse && 'dot-pulse', className)}
+			style={{ background: color, '--pulse-color': color } as CSSProperties}
+		/>
+	)
 }
 
 export function ConnDot() {
