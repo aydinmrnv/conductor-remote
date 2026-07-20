@@ -161,6 +161,33 @@ export class Reads {
 		)
 	}
 
+	/** Session → worktree path, cached: it's stable for a session's lifetime and polled every tick. */
+	private readonly worktreeBySession = new Map<string, string | null>()
+
+	private sessionWorktree(sessionId: string): string | null {
+		const cached = this.worktreeBySession.get(sessionId)
+		if (cached !== undefined) return cached
+		const rows = this.db.query<{
+			directory_name: string | null
+			branch: string | null
+			repo_name: string | null
+			repo_root: string | null
+		}>(
+			`SELECT w.directory_name, w.branch, r.name AS repo_name, r.root_path AS repo_root
+			 FROM sessions s
+			 JOIN workspaces w ON w.id = s.workspace_id
+			 LEFT JOIN repos r ON r.id = w.repository_id
+			 WHERE s.id = ? LIMIT 1`,
+			[sessionId]
+		)
+		const r = rows[0]
+		const worktree = r
+			? resolveWorktree(this.workspacesRoot, r.repo_name, r.directory_name, r.branch, r.repo_root)
+			: null
+		this.worktreeBySession.set(sessionId, worktree)
+		return worktree
+	}
+
 	/** Incremental transcript fetch. `afterRowid` is the cursor from a prior call. */
 	getMessages(sessionId: string, afterRowid = 0): { entries: TranscriptEntry[]; cursor: number } {
 		const rows = this.db.query<{
@@ -179,12 +206,12 @@ export class Reads {
 			 ORDER BY rowid ASC`,
 			[sessionId, afterRowid]
 		)
+		const worktree = this.sessionWorktree(sessionId)
 		const entries: TranscriptEntry[] = []
 		let cursor = afterRowid
 		for (const row of rows) {
 			cursor = row.rowid
-			const entry = parseMessage(row)
-			if (entry) entries.push(entry)
+			entries.push(...parseMessage(row, worktree))
 		}
 		return { entries, cursor }
 	}

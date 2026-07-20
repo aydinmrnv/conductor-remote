@@ -94,6 +94,10 @@ export interface TranscriptEntry {
 	role: Role
 	text: string
 	tool?: string
+	/** Mono secondary line for tool rows (command, path, pattern, …). */
+	detail?: string
+	/** True when this row is a failed tool result. */
+	error?: boolean
 	ts: string
 	queued: boolean
 }
