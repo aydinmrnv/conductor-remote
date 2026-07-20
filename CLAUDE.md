@@ -49,9 +49,11 @@ unit test.
   *transforms* runtime TS syntax, so enums and parameter properties work — `db.ts`
   relies on `constructor(private readonly dbPath)`. Do **not** switch to
   `--experimental-strip-types` (strip-only): it rejects those and breaks `db.ts`.
-- **The relay binds the Tailscale NIC, not loopback.** `server.listen` uses the
-  auto-detected `100.x` address, so `curl 127.0.0.1:8787` **refuses** — curl the
-  tailnet IP the relay prints (or set `RELAY_HOST`). This surprises every time.
+- **The relay binds loopback; the tailnet-facing URL comes from `tailscale serve`.**
+  `server.listen` uses `127.0.0.1` (override with `RELAY_HOST`), and `yarn deploy`
+  wires `tailscale serve --bg 8787` so the phone reaches a stable `https://<magicdns>/`
+  (tailnet-only, real TLS — which the PWA service worker needs). `curl 127.0.0.1:8787`
+  now works for local checks; `yarn service status` prints the phone URL.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.

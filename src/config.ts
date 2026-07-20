@@ -13,7 +13,7 @@ export interface Config {
 	workspacesRoot: string
 	/** TCP port the relay listens on. */
 	port: number
-	/** Host to bind. Defaults to the Tailscale interface if found, else loopback. */
+	/** Host to bind. Loopback by default; the tailnet-facing URL is fronted by `tailscale serve`. Override with RELAY_HOST. */
 	host: string
 	/** Shared secret required on every /api/* request. Auto-generated if unset. */
 	token: string
@@ -21,17 +21,6 @@ export interface Config {
 	writeStrategy: WriteStrategy
 	/** Directory of built PWA assets to serve. */
 	publicDir: string
-}
-
-/** Tailscale hands out addresses in the 100.64.0.0/10 CGNAT range. Prefer that NIC. */
-function detectTailscaleHost(): string | null {
-	const nics = os.networkInterfaces()
-	for (const addrs of Object.values(nics)) {
-		for (const a of addrs ?? []) {
-			if (a.family === 'IPv4' && !a.internal && a.address.startsWith('100.')) return a.address
-		}
-	}
-	return null
 }
 
 /** Where a generated token is persisted so a phone's saved URL stays valid across relay restarts. */
@@ -75,8 +64,8 @@ function resolvePublicDir(): string {
 }
 
 export function loadConfig(): Config {
-	const explicitHost = process.env.RELAY_HOST
-	const host = explicitHost ?? detectTailscaleHost() ?? '127.0.0.1'
+	// Bind loopback; `tailscale serve` (wired by `yarn deploy`) fronts it with a stable HTTPS tailnet URL.
+	const host = process.env.RELAY_HOST ?? '127.0.0.1'
 	const writeStrategy: WriteStrategy = process.env.WRITE_STRATEGY === 'sidecar' ? 'sidecar' : 'applescript'
 	return {
 		dbPath:

@@ -134,21 +134,16 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(cfg.port, cfg.host, () => {
-	const base = `http://${cfg.host}:${cfg.port}`
-	const lines = [
-		'conductor-remote relay up',
-		`  db:         ${cfg.dbPath}`,
-		`  worktrees:  ${cfg.workspacesRoot}`,
-		`  actuator:   ${actuator.name}`,
-		'',
-		'  Open on your phone (same Tailnet):',
-		`    ${base}/#token=${cfg.token}`
-	]
-	if (cfg.host === '127.0.0.1') {
-		lines.push(
+	console.info(
+		[
+			'conductor-remote relay up',
+			`  db:         ${cfg.dbPath}`,
+			`  worktrees:  ${cfg.workspacesRoot}`,
+			`  actuator:   ${actuator.name}`,
+			`  bound:      ${cfg.host}:${cfg.port}`,
 			'',
-			'  ⚠ bound to loopback — no Tailscale 100.x NIC found. Set RELAY_HOST to your tailnet IP to reach it from your phone.'
-		)
-	}
-	console.info(lines.join('\n'))
+			`  Local:  http://${cfg.host}:${cfg.port}/#token=${cfg.token}`,
+			'  Phone:  fronted over the tailnet by `tailscale serve` — run `yarn service status` for the HTTPS URL'
+		].join('\n')
+	)
 })
