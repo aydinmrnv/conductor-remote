@@ -7,6 +7,9 @@ dist/
 # browser-test artifacts
 .playwright-mcp/
 
+# Conductor: personal per-workspace overrides (shared settings.toml is committed)
+.conductor/settings.local.toml
+
 # yarn (berry, node-modules linker)
 .yarn/*
 !.yarn/patches
