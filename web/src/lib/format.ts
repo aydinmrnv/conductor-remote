@@ -18,6 +18,12 @@ function humanizeBranch(branch: string | null): string {
 	return words ? words[0].toUpperCase() + words.slice(1) : ''
 }
 
+/** Fallback avatar glyph when a repo has no resolvable icon — its leading letter. */
+export function repoMonogram(w: Workspace): string {
+	const src = w.repo_name || workspaceLabel(w)
+	return (src.trim()[0] ?? '?').toUpperCase()
+}
+
 /** Normalize the many status sources into one of three UI states. */
 export type UiStatus = 'working' | 'idle' | 'done'
 

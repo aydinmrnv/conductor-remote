@@ -98,8 +98,21 @@ const server = http.createServer(async (req, res) => {
 			})
 		}
 
+		// GET /api/repos/:name/icon — the repo's resolved sidebar icon (see src/icons.ts)
+		let m = pathname.match(/^\/api\/repos\/([^/]+)\/icon$/)
+		if (req.method === 'GET' && m) {
+			const icon = reads.resolveRepoIcon(decodeURIComponent(m[1]))
+			if (!icon) return json(res, 404, { error: 'no icon' })
+			return void fs.readFile(icon.path, (err, data) => {
+				if (err) return void json(res, 404, { error: 'no icon' })
+				// Cache briefly on the phone; the resolver itself refreshes within ~30s of an icon change.
+				res.writeHead(200, { 'content-type': icon.contentType, 'cache-control': 'public, max-age=300' })
+				res.end(data)
+			})
+		}
+
 		// GET /api/workspaces/:id/sessions
-		let m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
+		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
 		if (req.method === 'GET' && m) {
 			return json(res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
 		}
