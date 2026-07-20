@@ -13,6 +13,8 @@ export interface WorkspaceRow {
 	pr_title: string | null
 	derived_status: string | null
 	manual_status: string | null
+	/** Conductor lifecycle: 'ready' (usable) or 'setting_up' (worktree/session still provisioning). */
+	state: string | null
 	created_at: string
 	updated_at: string
 	unread: number | null
@@ -117,7 +119,7 @@ export class Reads {
 	listWorkspaces(): Workspace[] {
 		const rows = this.db.query<WorkspaceRow>(
 			`SELECT w.id, w.directory_name, w.workspace_name, w.branch, w.pr_title, w.derived_status, w.manual_status,
-			        w.created_at, w.updated_at, w.unread, w.pinned_at, w.active_session_id, w.intended_target_branch,
+			        w.state, w.created_at, w.updated_at, w.unread, w.pinned_at, w.active_session_id, w.intended_target_branch,
 			        r.name AS repo_name, r.root_path AS repo_root, r.icon AS repo_icon,
 			        r.remote_url AS remote_url, r.default_branch AS default_branch,
 			        s.status AS session_status, s.title AS session_title, s.model AS model,
@@ -125,7 +127,7 @@ export class Reads {
 			 FROM workspaces w
 			 LEFT JOIN repos r ON r.id = w.repository_id
 			 LEFT JOIN sessions s ON s.id = w.active_session_id
-			 WHERE w.state = 'ready'
+			 WHERE w.state IN ('ready', 'setting_up')
 			 ORDER BY (w.pinned_at IS NULL), w.updated_at DESC`
 		)
 		return rows.map(r => ({

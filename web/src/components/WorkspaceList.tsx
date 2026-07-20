@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { useRepoIcon, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
+	isSettingUp,
 	relativeTime,
 	repoMonogram,
 	STATUS_ORDER,
@@ -190,7 +191,8 @@ function GroupDot({ status }: { status?: string }) {
 	const colors: Record<string, string> = {
 		done: 'var(--color-done)',
 		'in-review': 'var(--color-idle)',
-		'in-progress': 'var(--color-working)'
+		'in-progress': 'var(--color-working)',
+		'setting-up': 'var(--color-working)'
 	}
 	const color = colors[status]
 	if (!color) return <span className="dot size-2 border border-faint bg-transparent" />
@@ -361,6 +363,11 @@ function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
 					>
 						{workspaceLabel(w)}
 					</span>
+					{isSettingUp(w) ? (
+						<span className="shrink-0 rounded-md bg-working/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-working">
+							Setting up
+						</span>
+					) : null}
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
 					{w.unread ? <Badge>{w.unread}</Badge> : null}
 				</div>

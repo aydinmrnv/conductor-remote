@@ -29,6 +29,16 @@ export function repoMonogram(w: Workspace): string {
 	return (src.trim()[0] ?? '?').toUpperCase()
 }
 
+/**
+ * A workspace Conductor is still provisioning (creating the worktree / running the
+ * setup command). Its session may already be idle, but the desktop app dims it and
+ * labels it "setting up" — mirror that so a workspace stranded in this state (a known
+ * Conductor stuck-state) stays visible here with an honest badge instead of vanishing.
+ */
+export function isSettingUp(w: Workspace): boolean {
+	return w.state === 'setting_up'
+}
+
 /** Normalize the many status sources into one of three UI states. */
 export type UiStatus = 'working' | 'idle' | 'done'
 
@@ -66,17 +76,21 @@ export function statusDot(w: Workspace): { color: string; pulse: boolean } {
  * override beats the derived one (same precedence as the app).
  */
 export function workspaceStatus(w: Workspace): string {
+	// A still-provisioning workspace groups on its own — it isn't an active agent run,
+	// so folding it into "In progress" (as Conductor does) is the confusion we avoid.
+	if (isSettingUp(w)) return 'setting-up'
 	return w.manual_status || w.derived_status || 'in-progress'
 }
 
-/** Group order matches the desktop sidebar (Done → In review → In progress → Backlog). */
-export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'backlog']
+/** Group order matches the desktop sidebar (Done → In review → In progress → Setting up → Backlog). */
+export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'setting-up', 'backlog']
 
 export function workspaceStatusLabel(status: string): string {
 	const labels: Record<string, string> = {
 		done: 'Done',
 		'in-review': 'In review',
 		'in-progress': 'In progress',
+		'setting-up': 'Setting up',
 		backlog: 'Backlog'
 	}
 	return labels[status] ?? status

@@ -23,6 +23,8 @@ export interface Workspace {
 	pr_title: string | null
 	derived_status: string | null
 	manual_status: string | null
+	/** Conductor lifecycle: 'ready' (usable) or 'setting_up' (worktree/session still provisioning). */
+	state: string | null
 	created_at: string
 	updated_at: string
 	unread: number | null
