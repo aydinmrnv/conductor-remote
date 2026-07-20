@@ -102,12 +102,12 @@ export function Composer({
 					{feedback.msg}
 				</div>
 			) : (
-				<div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] text-faint">
-					<Info size={12} />
-					{precise
-						? 'Precise send — targets this session directly'
-						: actuator?.caveat || 'Sends to the focused session'}
-				</div>
+				!precise && (
+					<div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] text-faint">
+						<Info size={12} />
+						{actuator?.caveat || 'Sends to the focused session'}
+					</div>
+				)
 			)}
 			<div className="flex items-end gap-2 rounded-2xl border border-border bg-surface px-2.5 py-1.5 focus-within:border-accent/60">
 				<textarea
