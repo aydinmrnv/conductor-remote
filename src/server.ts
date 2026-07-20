@@ -6,7 +6,7 @@ import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { workspaceDiff } from './git.ts'
 import { Reads } from './reads.ts'
-import { describeActuator, pickActuator } from './writes.ts'
+import { describeActuator, newChat, pickActuator } from './writes.ts'
 
 const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
@@ -115,6 +115,23 @@ const server = http.createServer(async (req, res) => {
 		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
 		if (req.method === 'GET' && m) {
 			return json(res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
+		}
+
+		// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
+		if (req.method === 'POST' && m) {
+			const workspaceId = decodeURIComponent(m[1])
+			const ws = reads.getWorkspace(workspaceId)
+			if (!ws) return json(res, 404, { error: 'workspace not found' })
+			const before = new Set(reads.listSessions(workspaceId).map(s => s.id))
+			const result = await newChat(ws)
+			if (!result.ok) return json(res, 502, result)
+			// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
+			let sessionId: string | null = null
+			for (let i = 0; i < 12 && !sessionId; i++) {
+				await new Promise(r => setTimeout(r, 500))
+				sessionId = reads.listSessions(workspaceId).find(s => !before.has(s.id))?.id ?? null
+			}
+			return json(res, 200, { ok: true, sessionId })
 		}
 
 		// GET /api/workspaces/:id/diff

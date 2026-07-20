@@ -61,6 +61,26 @@ export class SidecarActuator implements Actuator {
 	}
 }
 
+// AppleScript steps that focus a workspace via Conductor's command palette
+// (Esc → Cmd+K → branch → Enter). The branch is read from RELAY_WS_QUERY at run
+// time to dodge AppleScript escaping; the timing delays are load-bearing.
+const FOCUS_WORKSPACE_STEPS = `
+	key code 53
+	delay 0.25
+	keystroke "k" using {command down}
+	delay 0.7
+	keystroke (system attribute "RELAY_WS_QUERY")
+	delay 0.9
+	key code 36
+	delay 1.3`
+
+/** Conductor's command palette matches workspaces by branch — its unique key. A
+ * looser query (directory name) can match a command like unarchive, so prefer
+ * branch and only fall back when it's absent. */
+function focusQuery(ws: Workspace): string {
+	return ws.branch || ws.workspace_name || ws.directory_name || ''
+}
+
 /**
  * Drives Conductor's real send path via macOS Accessibility (AppleScript): focus
  * the target workspace, paste the prompt, press Enter. Uses whatever model /
@@ -78,22 +98,8 @@ export class AppleScriptActuator implements Actuator {
 	readonly precise = true
 
 	async send(target: SendTarget, text: string): Promise<SendResult> {
-		// The branch is Conductor's unique per-workspace key in the command palette;
-		// anything less specific can match a *command* (e.g. unarchive) instead of a
-		// workspace, so prefer branch and pass it via env to dodge AppleScript escaping.
-		const ws = target.workspace
-		const navQuery = ws.branch || ws.workspace_name || ws.directory_name || ''
-		const navigate = navQuery
-			? `
-	key code 53
-	delay 0.25
-	keystroke "k" using {command down}
-	delay 0.7
-	keystroke (system attribute "RELAY_WS_QUERY")
-	delay 0.9
-	key code 36
-	delay 1.3`
-			: ''
+		const navQuery = focusQuery(target.workspace)
+		const navigate = navQuery ? FOCUS_WORKSPACE_STEPS : ''
 		// Paste beats keystroke for long/multibyte prompts. Stash the clipboard,
 		// focus the target workspace, paste, send, and restore.
 		const script = `
@@ -130,6 +136,31 @@ set the clipboard to savedClipboard
 		} finally {
 			await fs.rm(tmp, { force: true }).catch(() => undefined)
 		}
+	}
+}
+
+/**
+ * Open a new chat in the target workspace — Conductor's "New chat, same files"
+ * (Cmd+T). Focuses the workspace first (command palette → branch), then Cmd+T; the
+ * caller detects the freshly-created session id from the DB.
+ */
+export async function newChat(workspace: Workspace): Promise<SendResult> {
+	const navQuery = focusQuery(workspace)
+	if (!navQuery) return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
+	const script = `
+tell application "Conductor" to activate
+delay 0.4
+tell application "System Events"${FOCUS_WORKSPACE_STEPS}
+	keystroke "t" using {command down}
+end tell`.trim()
+	try {
+		await exec('osascript', ['-e', script], {
+			env: { ...process.env, RELAY_WS_QUERY: navQuery },
+			timeout: 15000
+		})
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: err instanceof Error ? err.message : String(err) }
 	}
 }
 

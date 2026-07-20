@@ -1,4 +1,11 @@
-import type { MessagesResponse, SendResult, SessionsResponse, StateResponse, WorkspaceDiff } from './types.ts'
+import type {
+	MessagesResponse,
+	NewChatResult,
+	SendResult,
+	SessionsResponse,
+	StateResponse,
+	WorkspaceDiff
+} from './types.ts'
 
 const TOKEN_KEY = 'conductor-remote-token'
 
@@ -61,5 +68,8 @@ export const client = {
 		api<SendResult>(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, {
 			method: 'POST',
 			body: JSON.stringify({ text, workspaceId })
-		})
+		}),
+	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
+	newChat: (workspaceId: string) =>
+		api<NewChatResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`, { method: 'POST' })
 }

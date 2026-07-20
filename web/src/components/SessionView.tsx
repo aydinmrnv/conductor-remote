@@ -1,7 +1,9 @@
-import { FileDiff, X } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { FileDiff, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 import { useSessions, useWorkspaces } from '../hooks.ts'
+import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
 import type { Session } from '../lib/types.ts'
@@ -15,6 +17,8 @@ export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
 	const [diffOpen, setDiffOpen] = useState(false)
 	const [pickedSession, setPickedSession] = useState<string | null>(null)
+	const [creatingChat, setCreatingChat] = useState(false)
+	const queryClient = useQueryClient()
 	const { data, isLoading } = useWorkspaces()
 	const { data: sessionsData } = useSessions(workspaceId)
 
@@ -43,6 +47,22 @@ export function SessionView() {
 
 	const subtitle = [ws.repo_name, ws.branch, shortModel(ws.model)].filter(Boolean).join(' · ')
 
+	// "New chat, same files" (Cmd+T): the relay focuses this workspace, opens a new
+	// session, and returns its id; refresh the tab list and switch to it.
+	const createChat = async () => {
+		if (creatingChat) return
+		setCreatingChat(true)
+		try {
+			const r = await client.newChat(ws.id)
+			if (r.ok) {
+				await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
+				if (r.sessionId) setPickedSession(r.sessionId)
+			}
+		} finally {
+			setCreatingChat(false)
+		}
+	}
+
 	return (
 		<div className="flex h-full min-w-0 overflow-hidden">
 			<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -51,18 +71,29 @@ export function SessionView() {
 					subtitle={subtitle}
 					menu
 					right={
-						<button
-							type="button"
-							onClick={() => setDiffOpen(o => !o)}
-							aria-label="Toggle diff panel"
-							aria-pressed={diffOpen}
-							className={cn(
-								'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
-								diffOpen && 'bg-surface-2 text-text'
-							)}
-						>
-							<FileDiff size={19} />
-						</button>
+						<div className="flex items-center gap-1">
+							<button
+								type="button"
+								onClick={createChat}
+								disabled={creatingChat}
+								aria-label="New chat, same files"
+								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40"
+							>
+								<Plus size={20} />
+							</button>
+							<button
+								type="button"
+								onClick={() => setDiffOpen(o => !o)}
+								aria-label="Toggle diff panel"
+								aria-pressed={diffOpen}
+								className={cn(
+									'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+									diffOpen && 'bg-surface-2 text-text'
+								)}
+							>
+								<FileDiff size={19} />
+							</button>
+						</div>
 					}
 				/>
 				{sessions.length > 1 ? (
