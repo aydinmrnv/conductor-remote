@@ -162,10 +162,13 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 											<li key={w.id} className="fade-in">
 												<button
 													type="button"
-													className={cn('card w-full', w.id === selectedId && 'border-accent/50 bg-surface-2')}
+													className={cn(
+														'card w-full',
+														w.id === selectedId ? 'border-accent/50 bg-surface-2' : w.unread && 'border-l-accent'
+													)}
 													onClick={() => open(w.id)}
 												>
-													<WorkspaceCard w={w} />
+													<WorkspaceCard w={w} selected={w.id === selectedId} />
 												</button>
 											</li>
 										))}
@@ -338,7 +341,7 @@ function RepoFileIcon({ repoName, fallback }: { repoName: string | null; fallbac
 	return <ImgTile src={data} fit="contain" fallback={fallback} />
 }
 
-function WorkspaceCard({ w }: { w: Workspace }) {
+function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
 	const model = shortModel(w.model)
 	const ctx = w.context_used_percent
 	return (
@@ -349,7 +352,15 @@ function WorkspaceCard({ w }: { w: Workspace }) {
 			</div>
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<div className="flex items-center gap-2">
-					<span className="min-w-0 flex-1 truncate font-medium">{workspaceLabel(w)}</span>
+					<span
+						className={cn(
+							'min-w-0 flex-1 truncate',
+							w.unread ? 'font-bold' : 'font-medium',
+							w.unread || selected ? 'text-text' : 'text-muted'
+						)}
+					>
+						{workspaceLabel(w)}
+					</span>
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
 					{w.unread ? <Badge>{w.unread}</Badge> : null}
 				</div>
