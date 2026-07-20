@@ -8,9 +8,11 @@ import { DatabaseSync } from 'node:sqlite'
  * write through this handle — writes go through the actuator (see writes.ts).
  */
 export class ConductorDb {
+	private readonly dbPath: string
 	private db: DatabaseSync
 
-	constructor(private readonly dbPath: string) {
+	constructor(dbPath: string) {
+		this.dbPath = dbPath
 		this.db = this.open()
 	}
 

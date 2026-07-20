@@ -7,7 +7,7 @@ const procs = [
 	{
 		name: 'relay',
 		cmd: 'node',
-		args: ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', '--watch', 'src/server.ts'],
+		args: ['--watch', 'bin/cli.js'],
 		color: '\x1b[36m'
 	}
 ]

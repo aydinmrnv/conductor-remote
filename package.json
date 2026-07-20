@@ -1,6 +1,6 @@
 {
 	"name": "conductor-remote",
-	"version": "0.1.0",
+	"version": "0.0.0-development",
 	"type": "module",
 	"packageManager": "yarn@4.15.0",
 	"description": "Phone control panel for local Conductor agents. Reads ride SQLite + git; prompts ride Conductor's own dispatch path.",
@@ -26,42 +26,58 @@
 	"engines": {
 		"node": ">=24"
 	},
+	"bin": "bin/cli.js",
+	"files": [
+		"bin",
+		"src",
+		"scripts",
+		"dist"
+	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
 	"scripts": {
-		"start": "node --experimental-transform-types --disable-warning=ExperimentalWarning src/server.ts",
-		"relay": "node --experimental-transform-types --disable-warning=ExperimentalWarning --watch src/server.ts",
-		"dev": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/dev.ts",
+		"start": "node bin/cli.js",
+		"relay": "node --watch bin/cli.js",
+		"dev": "node scripts/dev.ts",
 		"dev:web": "vite",
 		"build": "vite build",
 		"preview": "yarn build && yarn start",
-		"gen:icons": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/gen-icons.ts",
-		"deploy": "yarn build && node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/service.ts install",
-		"service": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/service.ts",
+		"gen:icons": "node scripts/gen-icons.ts",
+		"deploy": "yarn build && node bin/cli.js service install",
+		"service": "node bin/cli.js service",
 		"typecheck": "tsc -p tsconfig.json",
 		"lint": "biome check .",
 		"fix": "biome check . --fix",
-		"verify": "yarn typecheck && yarn lint"
-	},
-	"dependencies": {
-		"@tanstack/react-query": "^5.90.20",
-		"clsx": "^2.1.1",
-		"lucide-react": "^0.563.0",
-		"react": "^19.2.4",
-		"react-dom": "^19.2.4",
-		"react-router": "^7.15.0",
-		"tailwind-merge": "^3.4.0",
-		"zustand": "^5.0.12"
+		"verify": "yarn typecheck && yarn lint",
+		"release": "semantic-release",
+		"prepack": "yarn build",
+		"postinstall": "husky || true"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.8",
+		"@commitlint/cli": "^20.4.2",
+		"@commitlint/config-conventional": "^20.4.2",
 		"@tailwindcss/vite": "^4.1.18",
+		"@tanstack/react-query": "^5.90.20",
 		"@types/node": "^24.7.0",
 		"@types/react": "^19.2.10",
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "^5.0.4",
+		"clsx": "^2.1.1",
+		"husky": "^9.1.7",
+		"lucide-react": "^0.563.0",
+		"react": "^19.2.4",
+		"react-dom": "^19.2.4",
+		"react-router": "^7.15.0",
+		"semantic-release": "^25.0.3",
 		"sharp": "^0.34.5",
+		"tailwind-merge": "^3.4.0",
 		"tailwindcss": "^4.1.18",
 		"typescript": "^5.9.3",
 		"vite": "^7.3.1",
-		"vite-plugin-pwa": "^1.2.0"
+		"vite-plugin-pwa": "^1.2.0",
+		"zustand": "^5.0.12"
 	}
 }

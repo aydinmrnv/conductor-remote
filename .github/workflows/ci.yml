@@ -5,14 +5,67 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      # Zero runtime deps — nothing to install. Syntax + type-strip check only;
-      # the relay itself needs macOS + a running Conductor to exercise fully.
+          cache: yarn
+      # devDeps carry tsc + biome + the Vite toolchain; the published package
+      # itself has zero runtime deps.
+      - run: yarn install --immutable
       - run: yarn verify
+      # Build here too: it's the only thing that exercises the React/PWA side,
+      # and `prepack` runs the same build at publish time.
+      - run: yarn build
+
+  # Conventional Commits gate. The local husky hook is best-effort (can be
+  # bypassed with --no-verify); this backstops it so semantic-release always
+  # sees analyzable commits on main. Repo uses merge commits, so every PR commit
+  # lands on main and must conform.
+  commitlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+
+  release:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create git tags + GitHub Releases
+      issues: write # @semantic-release/github comments on released issues/PRs
+      pull-requests: write
+      id-token: write # npm publish --provenance (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # semantic-release needs full history + tags
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn build
+      - run: yarn semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
