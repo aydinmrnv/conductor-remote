@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
@@ -25,10 +26,33 @@ const MIME: Record<string, string> = {
 	'.png': 'image/png'
 }
 
-function json(res: http.ServerResponse, status: number, body: unknown): void {
-	const payload = JSON.stringify(body)
-	res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-	res.end(payload)
+/**
+ * Successful GETs are conditional + compressed to keep the phone's polling cheap.
+ * `no-cache` (not `no-store`) means the browser must revalidate on every tick —
+ * the relay still runs the handler and auth each time, so data is never stale;
+ * a matching ETag just elides the redundant body (304), and changed bodies over
+ * ~1 KB go out gzipped. Errors and non-GETs stay unconditional `no-store`.
+ */
+function json(req: http.IncomingMessage, res: http.ServerResponse, status: number, body: unknown): void {
+	const payload = Buffer.from(JSON.stringify(body))
+	if (status !== 200 || req.method !== 'GET') {
+		res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+		return void res.end(payload)
+	}
+	// Weak: the same entity may be delivered gzipped or plain.
+	const etag = `W/"${crypto.createHash('sha1').update(payload).digest('base64url')}"`
+	const headers: http.OutgoingHttpHeaders = {
+		'content-type': 'application/json; charset=utf-8',
+		'cache-control': 'no-cache',
+		etag,
+		vary: 'accept-encoding'
+	}
+	if (req.headers['if-none-match'] === etag) return void res.writeHead(304, headers).end()
+	if (payload.length > 1024 && /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) {
+		headers['content-encoding'] = 'gzip'
+		return void res.writeHead(200, headers).end(zlib.gzipSync(payload))
+	}
+	res.writeHead(200, headers).end(payload)
 }
 
 /** Constant-time string compare — the token is the sole internet-facing gate when exposed via Funnel. */
@@ -89,7 +113,7 @@ const server = http.createServer(async (req, res) => {
 	if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname)
 
 	// Everything under /api requires the shared secret.
-	if (!authed(req)) return json(res, 401, { error: 'unauthorized' })
+	if (!authed(req)) return json(req, res, 401, { error: 'unauthorized' })
 
 	try {
 		// GET /api/state — workspace list with active-session status
@@ -97,7 +121,7 @@ const server = http.createServer(async (req, res) => {
 			const update = updateStatus()
 			const workspaces = reads.listWorkspaces()
 			attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
-			return json(res, 200, {
+			return json(req, res, 200, {
 				workspaces,
 				actuator: await describeActuator(actuator),
 				version: update.current,
@@ -109,9 +133,9 @@ const server = http.createServer(async (req, res) => {
 		let m = pathname.match(/^\/api\/repos\/([^/]+)\/icon$/)
 		if (req.method === 'GET' && m) {
 			const icon = reads.resolveRepoIcon(decodeURIComponent(m[1]))
-			if (!icon) return json(res, 404, { error: 'no icon' })
+			if (!icon) return json(req, res, 404, { error: 'no icon' })
 			return void fs.readFile(icon.path, (err, data) => {
-				if (err) return void json(res, 404, { error: 'no icon' })
+				if (err) return void json(req, res, 404, { error: 'no icon' })
 				// Cache briefly on the phone; the resolver itself refreshes within ~30s of an icon change.
 				res.writeHead(200, { 'content-type': icon.contentType, 'cache-control': 'public, max-age=300' })
 				res.end(data)
@@ -121,41 +145,41 @@ const server = http.createServer(async (req, res) => {
 		// GET /api/workspaces/:id/sessions
 		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
 		if (req.method === 'GET' && m) {
-			return json(res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
+			return json(req, res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
 		}
 
 		// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
 		if (req.method === 'POST' && m) {
 			const workspaceId = decodeURIComponent(m[1])
 			const ws = reads.getWorkspace(workspaceId)
-			if (!ws) return json(res, 404, { error: 'workspace not found' })
+			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
 			const before = new Set(reads.listSessions(workspaceId).map(s => s.id))
 			const result = await newChat(ws)
-			if (!result.ok) return json(res, 502, result)
+			if (!result.ok) return json(req, res, 502, result)
 			// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
 			let sessionId: string | null = null
 			for (let i = 0; i < 12 && !sessionId; i++) {
 				await new Promise(r => setTimeout(r, 500))
 				sessionId = reads.listSessions(workspaceId).find(s => !before.has(s.id))?.id ?? null
 			}
-			return json(res, 200, { ok: true, sessionId })
+			return json(req, res, 200, { ok: true, sessionId })
 		}
 
 		// GET /api/workspaces/:id/diff
 		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/diff$/)
 		if (req.method === 'GET' && m) {
 			const ws = reads.getWorkspace(decodeURIComponent(m[1]))
-			if (!ws) return json(res, 404, { error: 'workspace not found' })
-			if (!ws.worktree) return json(res, 409, { error: 'worktree path unresolved' })
+			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+			if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
 			const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
-			return json(res, 200, diff)
+			return json(req, res, 200, diff)
 		}
 
 		// GET /api/sessions/:id/messages?after=<rowid>
 		m = pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
 		if (req.method === 'GET' && m) {
 			const after = Number(url.searchParams.get('after') ?? 0)
-			return json(res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
+			return json(req, res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
 		}
 
 		// POST /api/sessions/:id/prompt  { text }
@@ -164,18 +188,18 @@ const server = http.createServer(async (req, res) => {
 			const sessionId = decodeURIComponent(m[1])
 			const body = JSON.parse((await readBody(req)) || '{}') as { text?: string; workspaceId?: string }
 			const text = (body.text ?? '').trim()
-			if (!text) return json(res, 400, { error: 'empty prompt' })
+			if (!text) return json(req, res, 400, { error: 'empty prompt' })
 			const ws = body.workspaceId
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
-			if (!ws) return json(res, 404, { error: 'workspace for session not found' })
+			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
 			const result = await actuator.send({ workspace: ws, sessionId }, text)
-			return json(res, result.ok ? 200 : 502, result)
+			return json(req, res, result.ok ? 200 : 502, result)
 		}
 
-		return json(res, 404, { error: 'no route', pathname })
+		return json(req, res, 404, { error: 'no route', pathname })
 	} catch (err) {
-		return json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+		return json(req, res, 500, { error: err instanceof Error ? err.message : String(err) })
 	}
 })
 
