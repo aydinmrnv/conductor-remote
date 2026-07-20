@@ -35,6 +35,13 @@ on your machine, so `npm i -g` finishes in about a second. `service install`
 prints a phone URL with an embedded token; open it and **Add to Home Screen**.
 Manage the service with `conductor-remote service status|restart|uninstall`.
 
+**Reachability (`EXPOSE`).** By default the URL is exposed publicly via
+[Tailscale Funnel](https://tailscale.com/kb/1223/funnel) — reachable from any
+browser, gated by the embedded 128-bit token (so the phone needs **no** Tailscale
+app). Funnel must be enabled once for your tailnet (Admin console). To keep it
+tailnet-only instead (devices logged into your tailnet, via `tailscale serve`),
+install with `EXPOSE=tailnet`. The choice is remembered across re-deploys.
+
 ## Architecture
 
 ```

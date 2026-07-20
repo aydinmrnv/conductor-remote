@@ -166,38 +166,74 @@ function magicDnsName(bin: string): string | null {
 	}
 }
 
-/** Is `tailscale serve` already proxying https://<dns>/ to the loopback relay? Keeps the wiring idempotent. */
-function serveConfigured(bin: string, dns: string): boolean {
-	try {
-		const out = execFileSync(bin, ['serve', 'status', '--json'], { encoding: 'utf8', stdio: 'pipe' })
-		const proxy = JSON.parse(out)?.Web?.[`${dns}:443`]?.Handlers?.['/']?.Proxy
-		return proxy === `http://127.0.0.1:${RELAY_PORT}`
-	} catch {
-		return false
-	}
+/**
+ * How the stable HTTPS URL is fronted:
+ *   'public'  → `tailscale funnel` — reachable from ANY browser on the internet (token-gated).
+ *   'tailnet' → `tailscale serve`  — reachable only by devices logged into this tailnet.
+ */
+type ExposeMode = 'public' | 'tailnet'
+
+/** Where the chosen expose mode is persisted so a later bare `yarn deploy` keeps the same posture. */
+function exposeStorePath(): string {
+	return path.join(os.homedir(), 'Library', 'Application Support', 'conductor-remote', 'expose')
+}
+
+function normalizeMode(raw: string | undefined): ExposeMode | null {
+	const v = raw?.trim().toLowerCase()
+	if (v === 'public' || v === 'funnel') return 'public'
+	if (v === 'tailnet' || v === 'serve' || v === 'private') return 'tailnet'
+	return null
 }
 
 /**
- * Wire the relay to a stable HTTPS tailnet URL via `tailscale serve` (tailnet-only — NOT Funnel).
- * Idempotent and non-fatal: the relay binds loopback regardless, so a failure here just means the phone
- * URL isn't set up yet, and we print how to do it by hand. Real TLS also satisfies the PWA's secure-context
- * requirement (a service worker won't register over plain http on a 100.x IP).
+ * Resolve the expose mode. Precedence: `EXPOSE` env (public|funnel / tailnet|serve|private) > persisted
+ * choice > 'public' default. An explicit env value is persisted so re-deploys don't silently flip posture.
  */
-function ensureServe(): void {
-	const bin = tailscaleBin()
-	if (!bin) {
-		console.info('\n  ⚠ tailscale CLI not found — skipped serve setup. Once Tailscale is installed, run:')
-		console.info(`      tailscale serve --bg ${RELAY_PORT}`)
-		return
+function resolveExposeMode(): ExposeMode {
+	const fromEnv = normalizeMode(process.env.EXPOSE)
+	if (fromEnv) {
+		try {
+			const file = exposeStorePath()
+			fs.mkdirSync(path.dirname(file), { recursive: true })
+			fs.writeFileSync(file, fromEnv)
+		} catch {
+			// persistence is a convenience; ignore failures
+		}
+		return fromEnv
 	}
-	const dns = magicDnsName(bin)
-	if (dns && serveConfigured(bin, dns)) {
-		console.info(`✓ tailscale serve already fronts https://${dns}/ → 127.0.0.1:${RELAY_PORT}`)
+	if (process.env.EXPOSE) console.info(`  ⚠ unrecognized EXPOSE=${process.env.EXPOSE} — expected public|tailnet.`)
+	try {
+		const saved = normalizeMode(fs.readFileSync(exposeStorePath(), 'utf8'))
+		if (saved) return saved
+	} catch {
+		// no saved choice yet
+	}
+	return 'public'
+}
+
+/** Live serve/funnel state for this node: is the loopback proxy wired, and is Funnel (public) on? */
+function tailscaleState(bin: string, dns: string | null): { proxyOk: boolean; funnelOn: boolean } {
+	if (!dns) return { proxyOk: false, funnelOn: false }
+	try {
+		const out = execFileSync(bin, ['serve', 'status', '--json'], { encoding: 'utf8', stdio: 'pipe' })
+		const cfg = JSON.parse(out)
+		const key = `${dns}:443`
+		const proxyOk = cfg?.Web?.[key]?.Handlers?.['/']?.Proxy === `http://127.0.0.1:${RELAY_PORT}`
+		return { proxyOk, funnelOn: Boolean(cfg?.AllowFunnel?.[key]) }
+	} catch {
+		return { proxyOk: false, funnelOn: false }
+	}
+}
+
+/** Assert the tailnet-only `serve` proxy — used for tailnet mode and as the Funnel fallback. */
+function ensureServeOnly(bin: string, url: string, state: { proxyOk: boolean; funnelOn: boolean }): void {
+	if (state.proxyOk && !state.funnelOn) {
+		console.info(`✓ tailscale serve fronts ${url} → 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
 		return
 	}
 	try {
 		execFileSync(bin, ['serve', '--bg', RELAY_PORT], { stdio: 'pipe' })
-		console.info(`✓ tailscale serve → https://${dns ?? '<node>'}/ now proxies 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
+		console.info(`✓ tailscale serve → ${url} proxies 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
 	} catch (err) {
 		console.info(
 			`\n  ⚠ could not configure tailscale serve (${err instanceof Error ? err.message : err}). Run by hand:`
@@ -206,18 +242,72 @@ function ensureServe(): void {
 	}
 }
 
+/**
+ * Front the loopback relay with a stable HTTPS URL, either publicly (`tailscale funnel`, the default) or
+ * tailnet-only (`tailscale serve`), per resolveExposeMode(). Idempotent — flips Funnel off when switching
+ * back to tailnet — and non-fatal: the relay binds loopback regardless, so a failure here just means the
+ * phone URL isn't wired yet and we print how to do it by hand. Real TLS also satisfies the PWA's
+ * secure-context requirement (a service worker won't register over plain http on a 100.x IP).
+ *
+ * PUBLIC IS INTERNET-FACING: the 128-bit token on every /api/* request is the only gate. Funnel must be
+ * enabled for the tailnet (Admin console) or the funnel command fails — we then fall back to tailnet-only.
+ */
+function ensureTailscale(): void {
+	const bin = tailscaleBin()
+	if (!bin) {
+		console.info('\n  ⚠ tailscale CLI not found — skipped URL setup. Once Tailscale is installed, run:')
+		console.info(`      tailscale funnel --bg ${RELAY_PORT}   # public, or \`serve\` for tailnet-only`)
+		return
+	}
+	const dns = magicDnsName(bin)
+	const url = `https://${dns ?? '<node>'}/`
+	const mode = resolveExposeMode()
+	const state = tailscaleState(bin, dns)
+
+	if (mode === 'tailnet') {
+		if (state.funnelOn) {
+			try {
+				execFileSync(bin, ['funnel', 'reset'], { stdio: 'pipe' })
+			} catch {
+				// best-effort; ensureServeOnly re-asserts the proxy below
+			}
+			ensureServeOnly(bin, url, { proxyOk: false, funnelOn: false })
+		} else {
+			ensureServeOnly(bin, url, state)
+		}
+		return
+	}
+
+	// public (Funnel)
+	if (state.proxyOk && state.funnelOn) {
+		console.info(`✓ tailscale funnel already exposes ${url} → 127.0.0.1:${RELAY_PORT} (public, token-gated)`)
+		return
+	}
+	try {
+		execFileSync(bin, ['funnel', '--bg', '--yes', RELAY_PORT], { stdio: 'pipe' })
+		console.info(`✓ tailscale funnel → ${url} now public over the internet (token-gated) → 127.0.0.1:${RELAY_PORT}`)
+	} catch (err) {
+		console.info(`\n  ⚠ could not enable Funnel (${err instanceof Error ? err.message.trim() : err}).`)
+		console.info('    Funnel must be enabled for this tailnet: open the URL Tailscale printed above, or add the')
+		console.info('    "funnel" nodeAttr in Admin console ▸ Access controls. Falling back to tailnet-only for now.')
+		ensureServeOnly(bin, url, state)
+	}
+}
+
 function printUrl(): void {
 	const frag = `#token=${currentToken() ?? '<starts on first run>'}`
 	const bin = tailscaleBin()
 	const dns = bin ? magicDnsName(bin) : null
-	if (bin && dns && serveConfigured(bin, dns)) {
-		console.info(`\n  Phone URL (same Tailnet, HTTPS):\n    https://${dns}/${frag}`)
+	const state = bin ? tailscaleState(bin, dns) : { proxyOk: false, funnelOn: false }
+	if (dns && state.proxyOk) {
+		const scope = state.funnelOn ? 'public — any browser, token-gated' : 'same Tailnet only'
+		console.info(`\n  Phone URL (HTTPS, ${scope}):\n    https://${dns}/${frag}`)
 		return
 	}
-	// Serve not wired yet — the relay is only on loopback.
+	// Nothing fronting yet — the relay is only on loopback.
 	console.info(`\n  Local URL:\n    http://127.0.0.1:${RELAY_PORT}/${frag}`)
 	console.info(
-		`\n  ⚠ Not reachable from your phone yet. Run \`tailscale serve --bg ${RELAY_PORT}\`${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
+		`\n  ⚠ Not reachable from your phone yet. Run \`tailscale funnel --bg ${RELAY_PORT}\` (public) or \`tailscale serve --bg ${RELAY_PORT}\` (tailnet)${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
 	)
 }
 
@@ -247,7 +337,7 @@ function install(): void {
 	console.info(`  plist: ${plistPath}`)
 	console.info(`  logs:  ${logDir}/relay.log`)
 	console.info(`  node:  ${process.execPath}`)
-	ensureServe()
+	ensureTailscale()
 	printUrl()
 	console.info(
 		'\n  Note: a node version change (nvm) invalidates the baked path — re-run `yarn deploy` after upgrading node.'

@@ -26,9 +26,7 @@
 	"engines": {
 		"node": ">=24"
 	},
-	"bin": {
-		"conductor-remote": "bin/cli.js"
-	},
+	"bin": "bin/cli.js",
 	"files": [
 		"bin",
 		"src",
