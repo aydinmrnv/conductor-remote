@@ -53,7 +53,9 @@
 		color: var(--color-text);
 		font-family: var(--font-sans);
 		-webkit-font-smoothing: antialiased;
-		overscroll-behavior-y: none;
+		/* Kill Chrome/Android's horizontal overscroll back-nav; the JS edge-swipe
+		   handler (useEdgeSwipeDrawer) is what suppresses iOS's edge gesture. */
+		overscroll-behavior: none;
 		overflow-x: hidden;
 	}
 	button {
