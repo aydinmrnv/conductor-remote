@@ -80,7 +80,7 @@ web/              React PWA (Vite root)
   src/store.ts    zustand: token + connection status
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, ui
   public/icon.svg source icon (PNGs via `yarn gen:icons`)
-scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
+scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
 dist/             built PWA (gitignored) — what the relay serves
 ```
 

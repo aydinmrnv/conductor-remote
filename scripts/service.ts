@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { qrLines } from './qr.ts'
 
 const LABEL = 'no.adluna.conductor-remote'
 const projectDir = path.resolve(import.meta.dirname, '..')
@@ -294,14 +295,29 @@ function ensureTailscale(): void {
 	}
 }
 
+/** Print a scannable QR of `url` (theme-independent black-on-white). Never fatal — QR is a convenience. */
+function printQr(url: string): void {
+	try {
+		console.info(`\n${qrLines(url).join('\n')}`)
+	} catch (err) {
+		console.info(`  (QR skipped: ${err instanceof Error ? err.message : err})`)
+	}
+}
+
 function printUrl(): void {
-	const frag = `#token=${currentToken() ?? '<starts on first run>'}`
+	const token = currentToken()
+	const frag = `#token=${token ?? '<starts on first run>'}`
 	const bin = tailscaleBin()
 	const dns = bin ? magicDnsName(bin) : null
 	const state = bin ? tailscaleState(bin, dns) : { proxyOk: false, funnelOn: false }
 	if (dns && state.proxyOk) {
 		const scope = state.funnelOn ? 'public — any browser, token-gated' : 'same Tailnet only'
-		console.info(`\n  Phone URL (HTTPS, ${scope}):\n    https://${dns}/${frag}`)
+		const url = `https://${dns}/${frag}`
+		console.info(`\n  Phone URL (HTTPS, ${scope}):\n    ${url}`)
+		if (token) {
+			console.info('\n  Scan to open on your phone:')
+			printQr(url)
+		}
 		return
 	}
 	// Nothing fronting yet — the relay is only on loopback.
