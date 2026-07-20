@@ -5,6 +5,8 @@ export interface Workspace {
 	directory_name: string | null
 	workspace_name: string | null
 	branch: string | null
+	/** Conductor's cached PR title; present iff the workspace has a PR (in-review/done). */
+	pr_title: string | null
 	derived_status: string | null
 	manual_status: string | null
 	created_at: string
