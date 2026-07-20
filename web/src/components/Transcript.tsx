@@ -5,7 +5,7 @@ import type { TranscriptEntry } from '../lib/types.ts'
 import { Markdown } from './Markdown.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
-export function Transcript({ sessionId }: { sessionId: string | null }) {
+export function Transcript({ sessionId, working }: { sessionId: string | null; working?: boolean }) {
 	const { entries, loading, error } = useTranscript(sessionId)
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
@@ -17,11 +17,11 @@ export function Transcript({ sessionId }: { sessionId: string | null }) {
 		atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
 	}
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries to keep the view pinned
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries (and the working indicator toggling) to keep the view pinned
 	useLayoutEffect(() => {
 		const el = scroller.current
 		if (el && atBottom.current) el.scrollTop = el.scrollHeight
-	}, [entries])
+	}, [entries, working])
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset scroll intent when switching sessions
 	useEffect(() => {
@@ -36,13 +36,14 @@ export function Transcript({ sessionId }: { sessionId: string | null }) {
 				<Spinner label="Loading transcript…" />
 			) : error && entries.length === 0 ? (
 				<Empty>{error}</Empty>
-			) : entries.length === 0 ? (
+			) : entries.length === 0 && !working ? (
 				<Empty>No messages yet.</Empty>
 			) : (
 				<div className="flex min-w-0 flex-col gap-2.5">
 					{entries.map(e => (
 						<Entry key={`${e.rowid}-${e.id}`} e={e} />
 					))}
+					{working ? <WorkingIndicator /> : null}
 				</div>
 			)}
 		</div>
@@ -99,6 +100,19 @@ function Entry({ e }: { e: TranscriptEntry }) {
 			<Bubble className="max-w-[92%] bg-surface">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
+		</div>
+	)
+}
+
+/** The classic three-dot "typing" bubble, shown under the last message while the agent works. */
+function WorkingIndicator() {
+	return (
+		<div className="fade-in flex justify-start">
+			<div className="flex items-center gap-1 rounded-2xl bg-surface px-3.5 py-3">
+				<span className="typing-dot" />
+				<span className="typing-dot" />
+				<span className="typing-dot" />
+			</div>
 		</div>
 	)
 }

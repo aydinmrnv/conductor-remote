@@ -26,13 +26,21 @@ function loadView(): ViewPrefs {
 
 interface AppState {
 	token: string | null
-	/** Whether the last relay call succeeded — drives the header connection dot. */
+	/** Whether the last relay call succeeded — drives the offline banner. */
 	online: boolean
+	/** Epoch ms of the last successful relay call — the banner's "last synced". */
+	lastSyncAt: number | null
+	/**
+	 * Per-session epoch ms of the last successful send — treats the session as
+	 * working immediately, bridging the gap until the status poll catches up.
+	 */
+	workingHints: Record<string, number>
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
 	setToken: (token: string | null) => void
 	setOnline: (online: boolean) => void
+	markWorking: (sessionId: string) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -46,6 +54,8 @@ export const useApp = create<AppState>((set, get) => {
 	return {
 		token: bootstrapToken(),
 		online: true,
+		lastSyncAt: null,
+		workingHints: {},
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -55,7 +65,8 @@ export const useApp = create<AppState>((set, get) => {
 			else clearToken()
 			set({ token })
 		},
-		setOnline: online => set({ online }),
+		setOnline: online => set(online ? { online, lastSyncAt: Date.now() } : { online }),
+		markWorking: sessionId => set({ workingHints: { ...get().workingHints, [sessionId]: Date.now() } }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {

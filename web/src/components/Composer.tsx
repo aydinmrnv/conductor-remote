@@ -1,8 +1,10 @@
-import { ArrowUp, Info } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { ArrowUp, Info, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import type { ActuatorInfo } from '../lib/types.ts'
+import { useApp } from '../store.ts'
 
 interface Feedback {
 	kind: 'ok' | 'warn' | 'err'
@@ -39,6 +41,9 @@ export function Composer({
 }) {
 	const [text, setText] = useState(() => loadDraft(workspaceId))
 	const [sending, setSending] = useState(false)
+	const online = useApp(s => s.online)
+	const markWorking = useApp(s => s.markWorking)
+	const queryClient = useQueryClient()
 	const [feedback, setFeedback] = useState<Feedback | null>(null)
 	const ref = useRef<HTMLTextAreaElement>(null)
 
@@ -66,7 +71,7 @@ export function Composer({
 
 	const send = async () => {
 		const value = text.trim()
-		if (!value || !sessionId || sending) return
+		if (!value || !sessionId || sending || !online) return
 		setSending(true)
 		try {
 			const r = await client.sendPrompt(sessionId, value, workspaceId)
@@ -75,6 +80,9 @@ export function Composer({
 				saveDraft(workspaceId, '')
 				requestAnimationFrame(autosize)
 				setFeedback({ kind: r.warning ? 'warn' : 'ok', msg: r.warning || 'Sent' })
+				// Show the working indicator immediately; the status poll takes over.
+				markWorking(sessionId)
+				queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
 			} else {
 				setFeedback({ kind: 'err', msg: r.error || 'Send failed' })
 			}
@@ -90,7 +98,12 @@ export function Composer({
 
 	return (
 		<div className="pb-safe border-t border-border-soft bg-bg px-3 pt-2">
-			{feedback ? (
+			{!online ? (
+				<div className="mb-2 flex items-center gap-1.5 rounded-lg bg-del/10 px-3 py-1.5 text-xs text-del">
+					<WifiOff size={12} />
+					Offline — drafts are saved, sending resumes when the relay is back
+				</div>
+			) : feedback ? (
 				<div
 					className={cn(
 						'mb-2 rounded-lg px-3 py-1.5 text-xs',
@@ -128,7 +141,7 @@ export function Composer({
 				<button
 					type="button"
 					onClick={send}
-					disabled={disabled || sending || !text.trim()}
+					disabled={disabled || sending || !text.trim() || !online}
 					aria-label="Send"
 					className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
 				>
