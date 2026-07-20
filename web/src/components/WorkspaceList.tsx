@@ -1,19 +1,42 @@
+import { X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
+import { cn } from '../lib/cn.ts'
 import { relativeTime, shortModel, statusLabel, uiStatus, workspaceLabel } from '../lib/format.ts'
 import type { Workspace } from '../lib/types.ts'
+import { useApp } from '../store.ts'
 import { Header } from './Header.tsx'
 import { Badge, Chip, Empty, Spinner, StatusDot } from './ui.tsx'
 
-export function WorkspaceList() {
+/** Workspace list — floating drawer on phones, persistent left rail on md+. */
+export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const navigate = useNavigate()
+	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
+	const open = (id: string) => {
+		navigate(`/w/${id}`)
+		setSidebarOpen(false)
+	}
+
 	return (
-		<div className="flex h-full flex-col overflow-hidden">
-			<Header title="Workspaces" subtitle={workspaces.length ? `${workspaces.length} active` : undefined} />
-			<main className="pb-safe min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+		<div className="flex h-full min-w-0 flex-col overflow-hidden">
+			<Header
+				title="Workspaces"
+				subtitle={workspaces.length ? `${workspaces.length} active` : undefined}
+				right={
+					<button
+						type="button"
+						onClick={() => setSidebarOpen(false)}
+						aria-label="Close workspaces"
+						className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 md:hidden"
+					>
+						<X size={20} />
+					</button>
+				}
+			/>
+			<nav className="pb-safe min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
 				{isLoading && !data ? (
 					<Spinner label="Loading workspaces…" />
 				) : isError ? (
@@ -29,14 +52,18 @@ export function WorkspaceList() {
 					<ul className="flex flex-col gap-2">
 						{workspaces.map(w => (
 							<li key={w.id} className="fade-in">
-								<button type="button" className="card w-full" onClick={() => navigate(`/w/${w.id}`)}>
+								<button
+									type="button"
+									className={cn('card w-full', w.id === selectedId && 'border-accent/50 bg-surface-2')}
+									onClick={() => open(w.id)}
+								>
 									<WorkspaceCard w={w} />
 								</button>
 							</li>
 						))}
 					</ul>
 				)}
-			</main>
+			</nav>
 		</div>
 	)
 }

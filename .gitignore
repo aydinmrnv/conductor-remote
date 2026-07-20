@@ -4,6 +4,9 @@ dist/
 .DS_Store
 .env
 
+# browser-test artifacts
+.playwright-mcp/
+
 # yarn (berry, node-modules linker)
 .yarn/*
 !.yarn/patches

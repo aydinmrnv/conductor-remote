@@ -32,6 +32,8 @@ export interface SessionRow {
 	model: string | null
 	permission_mode: string | null
 	context_used_percent: number | null
+	unread_count: number | null
+	created_at: string
 	updated_at: string
 	last_user_message_at: string | null
 }
@@ -118,11 +120,13 @@ export class Reads {
 	}
 
 	listSessions(workspaceId: string): SessionRow[] {
+		// created_at ASC keeps tab order stable (matches the desktop app) instead of jumping on activity.
 		return this.db.query<SessionRow>(
-			`SELECT id, status, title, model, permission_mode, context_used_percent, updated_at, last_user_message_at
+			`SELECT id, status, title, model, permission_mode, context_used_percent, unread_count,
+			        created_at, updated_at, last_user_message_at
 			 FROM sessions
 			 WHERE workspace_id = ? AND COALESCE(is_hidden, 0) = 0
-			 ORDER BY updated_at DESC`,
+			 ORDER BY created_at ASC`,
 			[workspaceId]
 		)
 	}

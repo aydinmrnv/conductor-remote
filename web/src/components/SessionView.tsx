@@ -1,21 +1,26 @@
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
-import { useWorkspaces } from '../hooks.ts'
+import { FileDiff, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useParams } from 'react-router'
+import { useSessions, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
+import type { Session } from '../lib/types.ts'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import { Transcript } from './Transcript.tsx'
-import { Spinner } from './ui.tsx'
-
-type Tab = 'chat' | 'diff'
+import { Badge, Spinner } from './ui.tsx'
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
-	const navigate = useNavigate()
-	const [tab, setTab] = useState<Tab>('chat')
+	const [diffOpen, setDiffOpen] = useState(false)
+	const [pickedSession, setPickedSession] = useState<string | null>(null)
 	const { data, isLoading } = useWorkspaces()
+	const { data: sessionsData } = useSessions(workspaceId)
+
+	// A manual tab pick only applies to the workspace it was made in.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the pick when switching workspaces
+	useEffect(() => setPickedSession(null), [workspaceId])
 
 	const ws = data?.workspaces.find(w => w.id === workspaceId)
 	const actuator = data?.actuator
@@ -23,43 +28,99 @@ export function SessionView() {
 	if (!ws) {
 		return (
 			<div className="flex h-full flex-col overflow-hidden">
-				<Header title="Session" onBack={() => navigate('/')} />
+				<Header title="Session" menu />
 				{isLoading ? <Spinner /> : <div className="p-6 text-center text-sm text-muted">Workspace not found.</div>}
 			</div>
 		)
 	}
 
+	const sessions = sessionsData?.sessions ?? []
+	const sessionId =
+		(pickedSession && sessions.some(s => s.id === pickedSession) ? pickedSession : null) ??
+		ws.active_session_id ??
+		sessions[0]?.id ??
+		null
+
 	const subtitle = [ws.repo_name, ws.branch, shortModel(ws.model)].filter(Boolean).join(' · ')
-	const sessionId = ws.active_session_id
 
 	return (
-		<div className="flex h-full flex-col overflow-hidden">
-			<Header title={workspaceLabel(ws)} subtitle={subtitle} onBack={() => navigate('/')} />
-			<nav className="flex gap-1 border-b border-border-soft bg-bg px-3 py-2">
-				<TabButton active={tab === 'chat'} onClick={() => setTab('chat')}>
-					Chat
-				</TabButton>
-				<TabButton active={tab === 'diff'} onClick={() => setTab('diff')}>
-					Diff
-				</TabButton>
-			</nav>
+		<div className="flex h-full min-w-0 overflow-hidden">
+			<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+				<Header
+					title={workspaceLabel(ws)}
+					subtitle={subtitle}
+					menu
+					right={
+						<button
+							type="button"
+							onClick={() => setDiffOpen(o => !o)}
+							aria-label="Toggle diff panel"
+							aria-pressed={diffOpen}
+							className={cn(
+								'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+								diffOpen && 'bg-surface-2 text-text'
+							)}
+						>
+							<FileDiff size={19} />
+						</button>
+					}
+				/>
+				{sessions.length > 1 ? (
+					<SessionTabs sessions={sessions} activeId={sessionId} onSelect={setPickedSession} />
+				) : null}
+				<Transcript sessionId={sessionId} />
+				<Composer sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
+			</div>
 
-			{tab === 'chat' ? (
-				<>
-					<Transcript sessionId={sessionId} />
-					<Composer sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
-				</>
-			) : (
-				<DiffView workspaceId={ws.id} />
-			)}
+			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}
 		</div>
 	)
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
+/** Conductor workspaces can hold several sessions — render them as tabs like the desktop app. */
+function SessionTabs({
+	sessions,
+	activeId,
+	onSelect
+}: {
+	sessions: Session[]
+	activeId: string | null
+	onSelect: (id: string) => void
+}) {
 	return (
-		<button type="button" onClick={onClick} className={cn('pill', active && 'pill-active')}>
-			{children}
-		</button>
+		<nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border-soft bg-bg px-3 py-2">
+			{sessions.map(s => (
+				<button
+					type="button"
+					key={s.id}
+					onClick={() => onSelect(s.id)}
+					className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
+				>
+					{s.status === 'working' ? <span className="dot dot-working size-1.5!" /> : null}
+					<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+					{s.unread_count ? <Badge>{s.unread_count}</Badge> : null}
+				</button>
+			))}
+		</nav>
+	)
+}
+
+/** Diff as a side panel: static right column on lg+, full-screen overlay below that. */
+function DiffPanel({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+	return (
+		<aside className="fixed inset-0 z-40 flex flex-col bg-bg lg:static lg:z-auto lg:w-[380px] lg:shrink-0 lg:border-l lg:border-border-soft xl:w-[460px]">
+			<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5">
+				<span className="flex-1 text-[15px] font-semibold">Diff</span>
+				<button
+					type="button"
+					onClick={onClose}
+					aria-label="Close diff panel"
+					className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+				>
+					<X size={20} />
+				</button>
+			</header>
+			<DiffView workspaceId={workspaceId} />
+		</aside>
 	)
 }
