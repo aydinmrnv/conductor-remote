@@ -115,6 +115,10 @@ export interface WorkspaceDiff {
 	files: DiffFile[]
 	patch: string
 	truncated: boolean
+	/** Uncommitted changes in the worktree (drives the "Commit & push" action). */
+	dirty: boolean
+	/** Commits on HEAD not yet on the remote-tracking branch (also drives "Commit & push"). */
+	unpushed: boolean
 }
 
 export interface SendResult {
