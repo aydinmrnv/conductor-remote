@@ -55,10 +55,12 @@ unit test.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.
-- **Yarn is standalone here.** An empty-marker `yarn.lock` + `.yarnrc.yml`
+- **Yarn is standalone here.** Its own `yarn.lock` + `.yarnrc.yml`
   (`nodeLinker: node-modules`) makes this its own project despite a `package.json`
-  higher up in `$HOME`. The verify script is named `verify`, not `check` (collides
-  with a Yarn Classic builtin).
+  higher up in `$HOME`. `package.json` pins `yarn@4` via `packageManager`, so
+  contexts without a corepack shim (CI, a bare shell) must `corepack enable` first
+  — see `.github/workflows/ci.yml`. The verify script is named `verify`, not `check`
+  (collides with a Yarn Classic builtin).
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."
