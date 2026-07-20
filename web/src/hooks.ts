@@ -221,7 +221,9 @@ export function useTranscript(sessionId: string | null): TranscriptState {
 		}
 
 		tick()
-		const timer = setInterval(tick, 1800)
+		// 1s cadence keeps the chat feeling live; incremental (cursor) fetches mean
+		// an idle tick is a tiny empty response, cheap even over Tailscale.
+		const timer = setInterval(tick, 1000)
 		return () => {
 			alive = false
 			clearInterval(timer)
