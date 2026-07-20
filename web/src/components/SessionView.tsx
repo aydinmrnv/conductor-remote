@@ -71,33 +71,28 @@ export function SessionView() {
 					subtitle={subtitle}
 					menu
 					right={
-						<div className="flex items-center gap-1">
-							<button
-								type="button"
-								onClick={createChat}
-								disabled={creatingChat}
-								aria-label="New chat, same files"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40"
-							>
-								<Plus size={20} />
-							</button>
-							<button
-								type="button"
-								onClick={() => setDiffOpen(o => !o)}
-								aria-label="Toggle diff panel"
-								aria-pressed={diffOpen}
-								className={cn(
-									'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
-									diffOpen && 'bg-surface-2 text-text'
-								)}
-							>
-								<FileDiff size={19} />
-							</button>
-						</div>
+						<button
+							type="button"
+							onClick={() => setDiffOpen(o => !o)}
+							aria-label="Toggle diff panel"
+							aria-pressed={diffOpen}
+							className={cn(
+								'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+								diffOpen && 'bg-surface-2 text-text'
+							)}
+						>
+							<FileDiff size={19} />
+						</button>
 					}
 				/>
-				{sessions.length > 1 ? (
-					<SessionTabs sessions={sessions} activeId={sessionId} onSelect={setPickedSession} />
+				{sessions.length > 0 ? (
+					<SessionTabs
+						sessions={sessions}
+						activeId={sessionId}
+						onSelect={setPickedSession}
+						onNewChat={createChat}
+						creating={creatingChat}
+					/>
 				) : null}
 				<Transcript sessionId={sessionId} />
 				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
@@ -108,30 +103,46 @@ export function SessionView() {
 	)
 }
 
-/** Conductor workspaces can hold several sessions — render them as tabs like the desktop app. */
+/** Conductor workspaces can hold several sessions — render them as tabs like the desktop app,
+ *  with a trailing "+" (new chat, same files) pinned past the scrollable tabs. */
 function SessionTabs({
 	sessions,
 	activeId,
-	onSelect
+	onSelect,
+	onNewChat,
+	creating
 }: {
 	sessions: Session[]
 	activeId: string | null
 	onSelect: (id: string) => void
+	onNewChat: () => void
+	creating: boolean
 }) {
 	return (
-		<nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border-soft bg-bg px-3 py-2">
-			{sessions.map(s => (
-				<button
-					type="button"
-					key={s.id}
-					onClick={() => onSelect(s.id)}
-					className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
-				>
-					{s.status === 'working' ? <span className="dot dot-working size-1.5!" /> : null}
-					<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
-					{s.unread_count ? <Badge>{s.unread_count}</Badge> : null}
-				</button>
-			))}
+		<nav className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg px-3 py-2">
+			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+				{sessions.map(s => (
+					<button
+						type="button"
+						key={s.id}
+						onClick={() => onSelect(s.id)}
+						className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
+					>
+						{s.status === 'working' ? <span className="dot dot-working size-1.5!" /> : null}
+						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+						{s.unread_count ? <Badge>{s.unread_count}</Badge> : null}
+					</button>
+				))}
+			</div>
+			<button
+				type="button"
+				onClick={onNewChat}
+				disabled={creating}
+				aria-label="New chat, same files"
+				className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40"
+			>
+				<Plus size={18} />
+			</button>
 		</nav>
 	)
 }
