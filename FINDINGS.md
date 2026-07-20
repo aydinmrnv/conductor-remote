@@ -31,7 +31,7 @@ writes over macOS Accessibility (the one fragile nerve).** That is still the
 mode. A second **read-only** connection sees every committed write live without
 touching the app. Relevant tables:
 
-- `workspaces` — `id, directory_name, workspace_name, branch, state, derived_status, active_session_id, unread, intended_target_branch, …`. `state` is `ready` (live) or `archived`; `derived_status` is `in-progress` / `done`.
+- `workspaces` — `id, directory_name, workspace_name, branch, state, derived_status, active_session_id, unread, intended_target_branch, …`. `state` is `ready` (live) or `archived`; the sidebar status is `manual_status` (user override) falling back to `derived_status` — values `backlog` / `in-progress` / `in-review` / `done` (the desktop sidebar's groups).
 - `sessions` — `id, status ('working'|'idle'), workspace_id, title, model, permission_mode, context_used_percent, updated_at`. **Live agent status, for free.**
 - `session_messages` — `session_id, role, content, full_message, created_at, sent_at, queue_order, turn_id`. Assistant/system rows store raw Claude Code SDK stream JSON; user prompts store plain text. `queue_order` set + `sent_at` null ⇒ a queued-but-unsent message. **This is the full transcript.**
 - `repos` — `id, name, root_path, default_branch`. `root_path` is the primary checkout; worktrees live at `<workspacesRoot>/<repo.name>/<directory_name>`.
