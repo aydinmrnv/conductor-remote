@@ -8,6 +8,13 @@
  * KeepAlive restarts it into the freshly-installed code (the plist's baked `bin/cli.js` path is stable
  * across a global reinstall, so no re-`service install` is needed).
  *
+ * Beyond that 6h registry poll, a cheap local check reconciles a disk↔process version skew: if the
+ * installed package.json on disk no longer matches the version this process booted as — an out-of-band
+ * `npm i -g`/deploy swapped the global install underneath us — it exit()→restarts to load it. Without
+ * this, a stale backend keeps serving the newer frontend from disk (the API contract drifts, e.g. the
+ * `icon` field vanishes and every repo avatar falls to a monogram) until the next npm poll happens to
+ * find a version newer than the *running* one — which it never will if disk was bumped out-of-band.
+ *
  * Two hard gates keep this from firing where it shouldn't:
  *   - CONDUCTOR_REMOTE_MANAGED=1 — set only by `service install` in the plist, so it proves we are the
  *     launchd-managed daemon and that exit()→KeepAlive-restart is a safe way to reload.
@@ -32,6 +39,9 @@ const projectDir = packageRoot(import.meta.dirname)
 const REGISTRY = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org'
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const FIRST_DELAY_MS = 90 * 1000
+// A local package.json read is free next to a network poll, so reconcile disk↔process skew often —
+// this heals an out-of-band upgrade in ~a minute instead of waiting up to 6h for the registry poll.
+const DISK_CHECK_INTERVAL_MS = 60 * 1000
 
 export type UpdateMode = 'off' | 'check' | 'auto'
 
@@ -60,6 +70,20 @@ function readVersion(): string {
 }
 
 const CURRENT = readVersion()
+
+/**
+ * Fresh read of the installed package.json version — what's on disk *now*, which diverges from the
+ * frozen `CURRENT` once an out-of-band install swaps the global package. Null if unreadable or
+ * unparseable, so a transient read failure can never be mistaken for a skew (and loop-restart us).
+ */
+function diskVersion(): string | null {
+	try {
+		const pkg = JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8')) as { version?: string }
+		return pkg.version && parseVersion(pkg.version) ? pkg.version : null
+	} catch {
+		return null
+	}
+}
 
 const status: UpdateStatus = {
 	current: CURRENT,
@@ -140,6 +164,29 @@ function resolveMode(): UpdateMode {
 	return canAuto ? 'auto' : 'off'
 }
 
+let restarting = false
+
+/** Schedule an exit so launchd's KeepAlive respawns us into the on-disk code. Idempotent per process. */
+function scheduleRestart(reason: string): void {
+	if (restarting) return
+	restarting = true
+	log(`${reason}; restarting to apply (launchd KeepAlive brings the relay back).`)
+	// Let the log line flush, then exit; KeepAlive respawns us into the new code.
+	setTimeout(() => process.exit(0), 500).unref()
+}
+
+/**
+ * Reload if the on-disk install no longer matches this running process — an out-of-band upgrade
+ * (manual `npm i -g`, `yarn deploy`, or CI) that the registry poll won't catch, since it compares
+ * npm's latest against our *running* version, not against disk. Any mismatch converges process→disk;
+ * a null read (unreadable/unparseable) is ignored so we never restart-loop on a transient failure.
+ */
+function restartIfDiskSkewed(): void {
+	const onDisk = diskVersion()
+	if (!onDisk || onDisk === CURRENT) return
+	scheduleRestart(`on-disk ${onDisk} ≠ running ${CURRENT} (out-of-band install)`)
+}
+
 let inFlight = false
 
 async function runCheck(mode: 'check' | 'auto'): Promise<void> {
@@ -158,9 +205,7 @@ async function runCheck(mode: 'check' | 'auto'): Promise<void> {
 		}
 		log(`updating ${CURRENT} → ${latest} via \`npm i -g ${NAME}@latest\`…`)
 		await installLatest()
-		log(`installed ${latest}; restarting to apply (launchd KeepAlive brings the relay back).`)
-		// Let the log line flush, then exit; KeepAlive respawns us into the new code.
-		setTimeout(() => process.exit(0), 500).unref()
+		scheduleRestart(`installed ${latest}`)
 	} catch (err) {
 		status.lastError = err instanceof Error ? err.message : String(err)
 		log(`check/update failed: ${status.lastError}`)
@@ -177,4 +222,7 @@ export function startAutoUpdate(): void {
 	log(`enabled (mode=${mode}, current=${CURRENT}); first check in ${FIRST_DELAY_MS / 1000}s, then every 6h.`)
 	setTimeout(() => void runCheck(mode), FIRST_DELAY_MS).unref()
 	setInterval(() => void runCheck(mode), CHECK_INTERVAL_MS).unref()
+	// Only `auto` may exit()→restart (KeepAlive is guaranteed there); `check` reports but never acts,
+	// so the disk-skew heal — which reloads by exiting — is gated to `auto` alongside the npm install.
+	if (mode === 'auto') setInterval(restartIfDiskSkewed, DISK_CHECK_INTERVAL_MS).unref()
 }
