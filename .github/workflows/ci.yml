@@ -54,7 +54,7 @@ jobs:
       contents: write # create git tags + GitHub Releases
       issues: write # @semantic-release/github comments on released issues/PRs
       pull-requests: write
-      id-token: write # npm publish --provenance (OIDC)
+      id-token: write # npm Trusted Publishing (OIDC) + provenance — no NPM_TOKEN
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,7 +66,10 @@ jobs:
           cache: yarn
       - run: yarn install --immutable
       - run: yarn build
+      # No NPM_TOKEN: @semantic-release/npm exchanges the GitHub OIDC id-token for a
+      # short-lived publish token (npm Trusted Publishing). Requires a trusted
+      # publisher for this package on npmjs.com → repo hyldmo/conductor-remote,
+      # workflow ci.yml. Provenance is generated automatically.
       - run: yarn semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
