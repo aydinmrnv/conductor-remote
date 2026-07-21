@@ -41,15 +41,25 @@ function main(): void {
 	const arg = process.argv[2]
 	const seconds = parseDuration(arg)
 
-	// Do everything as a single root shell: set the keep-awake, then either sleep for
-	// the duration or idle forever, and ALWAYS restore on exit via the trap. One sudo
-	// prompt covers set + restore, and the trap fires even on Ctrl-C / kill. Mirror the
-	// proven battery setup — disablesleep + standby + Power Nap off — so the system
-	// stays genuinely awake (not just idle-awake) with the lid shut.
+	// Do everything as a single root shell: capture the CURRENT power settings, flip them
+	// to keep the Mac awake, and ALWAYS restore *those captured values* on exit via the
+	// trap — never assume defaults, or we'd clobber a value you (or a config profile) had
+	// deliberately set. One sudo prompt covers the whole window; the trap fires even on
+	// Ctrl-C / kill. `disablesleep` is global (reported as `SleepDisabled` by `pmset -g`);
+	// `standby`/`powernap` are per-source, so read them from the Battery Power block.
 	const sleepStep = seconds !== null ? `sleep ${seconds}` : 'while :; do sleep 86400; done'
-	const set = 'pmset -a disablesleep 1 standby 0 powernap 0'
-	const restore = 'pmset -a disablesleep 0 standby 1 powernap 1'
-	const script = `${set} && trap '${restore}' EXIT INT TERM && ${sleepStep}`
+	const battValue = (key: string) =>
+		`pmset -g custom | awk '/^Battery Power:/{b=1;next} /^AC Power:/{b=0} b&&$1=="${key}"{print $2;exit}'`
+	const script = [
+		`sb=$(${battValue('standby')})`,
+		`pn=$(${battValue('powernap')})`,
+		"ds=$(pmset -g | awk '/SleepDisabled/{print $2;exit}')",
+		// Arm the restore-to-captured before changing anything, so even a failed set reverts.
+		`trap "pmset -b standby \${sb:-1} powernap \${pn:-1}; pmset -a disablesleep \${ds:-0}" EXIT INT TERM`,
+		'pmset -b standby 0 powernap 0',
+		'pmset -a disablesleep 1',
+		sleepStep
+	].join('\n')
 
 	console.info('conductor-remote nosleep — keeping this Mac awake (incl. lid-closed system sleep).')
 	console.info(seconds !== null ? `Duration: ${arg} — Ctrl-C to stop early.` : 'Runs until you press Ctrl-C.')
