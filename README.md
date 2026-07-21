@@ -254,37 +254,19 @@ lives at the root `pmset` layer no assertion can touch. Running those tools with
 no assertion for the standby layer. (Note: lid *closed* on Apple Silicon forces
 sleep regardless — keep the lid open, or attach an external display **and** power.)
 
-**Fix — act at the `pmset` layer (root).** Pick one:
-
-*Always-on relay → a boot LaunchDaemon* (durable across reboots — `disablesleep`
-alone does not survive a restart, which is why this is a daemon, not a one-off):
-
-```bash
-sudo tee /Library/LaunchDaemons/dev.conductor-remote.nosleep.plist >/dev/null <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.conductor-remote.nosleep</string>
-  <key>ProgramArguments</key>
-  <array><string>/usr/bin/pmset</string><string>-b</string><string>disablesleep</string><string>1</string></array>
-  <key>RunAtLoad</key><true/>
-</dict></plist>
-PLIST
-sudo launchctl bootstrap system /Library/LaunchDaemons/dev.conductor-remote.nosleep.plist
-```
-
-*Occasional / time-boxed → a shell function* that blocks battery sleep for a
-bounded window, then auto-reverts (on clean exit, Ctrl-C, or kill):
+**Fix — `conductor-remote nosleep`.** It blocks sleep at the root `pmset` layer (the
+one no assertion reaches) for a bounded window and **auto-reverts** on exit, Ctrl-C, or
+the timeout — nothing permanent, nothing left on your machine:
 
 ```bash
-nosleep() {  # nosleep 1h | nosleep 30m | nosleep 90s  (default 1h)
-  local a="${1:-1h}" s
-  case "$a" in *h) s=$(( ${a%h} * 3600 ));; *m) s=$(( ${a%m} * 60 ));; *s) s=${a%s};; *) s=$a;; esac
-  sudo sh -c "pmset -b standby 0 powernap 0 disablesleep 1
-    trap 'pmset -b standby 1 powernap 1 disablesleep 0' EXIT INT TERM
-    sleep $s"
-}
+conductor-remote nosleep 2h     # also 90m, 30s, bare seconds; no arg = until Ctrl-C
 ```
+
+It prompts for `sudo` once and runs in the foreground (the background LaunchAgent has no
+terminal to prompt on, so it can't self-arm). Since sending from the phone already means
+manually turning on your hotspot, flipping this on for the session is the same kind of
+deliberate, revertable switch — no boot daemon, no permanent change. Simplest of all: keep
+the Mac on **AC power**, where it never maintenance-sleeps.
 
 **Check / undo:**
 
@@ -293,8 +275,9 @@ pmset -g | grep -i sleepdisabled                    # 1 = sleep blocked
 sudo pmset -b standby 1 powernap 1 disablesleep 0   # restore defaults
 ```
 
-Once set, you can quit the keep-awake app entirely — it was only ever asserting on
-the idle layer, which was never the problem.
+While `nosleep` is running you can quit any keep-awake app — those only ever asserted
+on the idle layer, which was never the problem. It restores on its own; the manual undo
+above is only for the rare case where it was killed hard.
 
 ## Disclaimer
 
