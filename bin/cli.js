@@ -60,6 +60,7 @@ function usage() {
 			'  conductor-remote [start]                 run the relay (default)',
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
+			'  conductor-remote logs [-n N] [--no-follow]  tail the running relay’s logs (follows by default)',
 			'  conductor-remote nosleep [duration]      keep this Mac awake (incl. lid-closed) until',
 			'                                           Ctrl-C or the duration (e.g. 1h, 90m); needs sudo',
 			'  conductor-remote --version               print the installed version',
@@ -68,6 +69,7 @@ function usage() {
 			'  --expose public|tailnet   reachability: public Funnel (default) or tailnet-only  [EXPOSE]',
 			'  --port <n>                listen port (default 8787)                             [RELAY_PORT]',
 			'  --host <addr>             bind address (default 127.0.0.1)                       [RELAY_HOST]',
+			'  --hostname <name>         pin the Tailscale device name so the phone URL never drifts [RELAY_HOSTNAME]',
 			'  --token <secret>          pin the shared secret (default: generated + persisted) [RELAY_TOKEN]',
 			'  --write-strategy <s>      applescript (default) | sidecar                        [WRITE_STRATEGY]',
 			'  --auto-update <mode>      auto (default) | check | off                           [AUTO_UPDATE]',
@@ -93,6 +95,11 @@ switch (cmd) {
 		// nosleep.ts reads its optional duration from argv[2]; re-shape argv so `nosleep 1h` → `1h`.
 		process.argv = [process.argv[0], process.argv[1], ...rest]
 		await import(resolveEntry('../dist-node/scripts/nosleep.js', '../scripts/nosleep.ts'))
+		break
+	case 'logs':
+		// `logs` is a service.ts subcommand; re-shape argv so its argv[2] is `logs` (mirrors the `service` case).
+		process.argv = [process.argv[0], process.argv[1], 'logs', ...rest]
+		await import(resolveEntry('../dist-node/scripts/service.js', '../scripts/service.ts'))
 		break
 	case '-v':
 	case '--version':

@@ -73,3 +73,53 @@ export function readExposeMode(): ExposeMode {
 	}
 	return 'public'
 }
+
+/** Where the phone-URL host (this node's MagicDNS name at deploy time) is recorded, so a later drift is detectable. */
+export function urlHostStorePath(): string {
+	return path.join(os.homedir(), 'Library', 'Application Support', 'conductor-remote', 'url-host')
+}
+
+/** The MagicDNS name the saved phone URL was issued for, or null if never deployed with a drift-aware build. */
+export function readUrlHost(): string | null {
+	try {
+		return fs.readFileSync(urlHostStorePath(), 'utf8').trim() || null
+	} catch {
+		return null
+	}
+}
+
+/** Record the name the phone URL uses now, so a future rename can be flagged. Best-effort. */
+export function writeUrlHost(name: string): void {
+	try {
+		fs.mkdirSync(path.dirname(urlHostStorePath()), { recursive: true })
+		fs.writeFileSync(urlHostStorePath(), name)
+	} catch {
+		// non-fatal: drift detection is a convenience, not a correctness requirement
+	}
+}
+
+/**
+ * Has this node's MagicDNS name drifted from the one the saved phone URL points at? Tailscale derives the
+ * name from the Mac's hostname unless pinned (see service.ts ▸ pinHostname), and an OS update/reset can move
+ * it — silently bricking the installed PWA, which is bolted to the old origin. Returns both names when they
+ * disagree so callers can warn; null when there's no baseline yet or they still match.
+ */
+export function hostDrift(bin: string): { expected: string; current: string } | null {
+	const expected = readUrlHost()
+	if (!expected) return null
+	const current = magicDnsName(bin)
+	if (!current || current === expected) return null
+	return { expected, current }
+}
+
+/** Ready-to-print, actionable warning lines if the phone URL's host drifted; empty when all is well. */
+export function driftWarningLines(bin: string): string[] {
+	const drift = hostDrift(bin)
+	if (!drift) return []
+	return [
+		`  ⚠ Tailscale device name changed: "${drift.expected}" → "${drift.current}".`,
+		`    The saved phone URL https://${drift.expected}/ no longer resolves — the installed PWA will fail to load.`,
+		`    Restore the old URL:  conductor-remote service install --hostname ${drift.expected.split('.')[0]}`,
+		`    …or re-add the PWA at the new URL:  https://${drift.current}/`
+	]
+}

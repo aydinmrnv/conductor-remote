@@ -11,6 +11,7 @@ import { workspaceDiff } from './git.ts'
 import { mergePr } from './merge.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads } from './reads.ts'
+import { driftWarningLines, tailscaleBin } from './tailscale.ts'
 import { describeActuator, newChat, pickActuator } from './writes.ts'
 
 const cfg = loadConfig()
@@ -262,6 +263,13 @@ server.listen(cfg.port, cfg.host, () => {
 			'  Phone:  fronted by `tailscale funnel`/`serve` — run `yarn service status` for the HTTPS URL'
 		].join('\n')
 	)
+	// Loud, actionable warning in relay.log if the node's MagicDNS name drifted from the saved phone URL's host
+	// (a renamed node silently bricks the installed PWA). No-ops until a drift-aware deploy recorded a baseline.
+	const tsBin = tailscaleBin()
+	if (tsBin) {
+		const drift = driftWarningLines(tsBin)
+		if (drift.length) console.info(`\n${drift.join('\n')}`)
+	}
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a
