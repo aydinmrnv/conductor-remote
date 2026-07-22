@@ -50,6 +50,11 @@ function main(): void {
 	const sleepStep = seconds !== null ? `sleep ${seconds}` : 'while :; do sleep 86400; done'
 	const battValue = (key: string) =>
 		`pmset -g custom | awk '/^Battery Power:/{b=1;next} /^AC Power:/{b=0} b&&$1=="${key}"{print $2;exit}'`
+	// Confirm *inside* the root shell, after pmset applies: this line prints only once the
+	// password was accepted and the setting actually took — without it, entering your
+	// password drops into a silent `sleep` with no signal that anything happened. `arg` is
+	// regex-validated (digits + s/m/h), so it's safe in the single-quoted echo.
+	const durClause = seconds !== null ? ` for ${arg}` : ''
 	const script = [
 		`sb=$(${battValue('standby')})`,
 		`pn=$(${battValue('powernap')})`,
@@ -58,6 +63,8 @@ function main(): void {
 		`trap "pmset -b standby \${sb:-1} powernap \${pn:-1}; pmset -a disablesleep \${ds:-0}" EXIT INT TERM`,
 		'pmset -b standby 0 powernap 0',
 		'pmset -a disablesleep 1',
+		"echo ''",
+		`echo '✓ Sleep disabled — this Mac will stay awake${durClause} (incl. lid closed). Ctrl-C to restore.'`,
 		sleepStep
 	].join('\n')
 
