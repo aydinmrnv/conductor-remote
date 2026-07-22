@@ -8,13 +8,21 @@
  *
  * `yarn deploy` builds dist/ first, then runs `install`.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { packageRoot } from '../src/pkg-root.ts'
 import type { ExposeMode } from '../src/tailscale.ts'
-import { exposeStorePath, magicDnsName, normalizeExposeMode, relayPort, tailscaleBin } from '../src/tailscale.ts'
+import {
+	driftWarningLines,
+	exposeStorePath,
+	magicDnsName,
+	normalizeExposeMode,
+	relayPort,
+	tailscaleBin,
+	writeUrlHost
+} from '../src/tailscale.ts'
 import { qrLines } from './qr.ts'
 
 const LABEL = 'no.adluna.conductor-remote'
@@ -33,6 +41,7 @@ const FLAG_ENV: Record<string, string> = {
 	'--expose': 'EXPOSE',
 	'--port': 'RELAY_PORT',
 	'--host': 'RELAY_HOST',
+	'--hostname': 'RELAY_HOSTNAME',
 	'--token': 'RELAY_TOKEN',
 	'--write-strategy': 'WRITE_STRATEGY',
 	'--auto-update': 'AUTO_UPDATE',
@@ -63,8 +72,9 @@ function applyFlags(argv: string[]): void {
 	}
 }
 
-// argv[2] is the subcommand (see bottom); flags follow it.
-applyFlags(process.argv.slice(3))
+// argv[2] is the subcommand (see bottom); flags follow it. `logs` parses its own args (it takes -n /
+// --no-follow, which applyFlags would reject as unknown flags), so skip the shared flag pass for it.
+if ((process.argv[2] ?? 'status') !== 'logs') applyFlags(process.argv.slice(3))
 
 function xml(s: string): string {
 	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -275,6 +285,44 @@ function ensureServeOnly(bin: string, url: string, state: { proxyOk: boolean; fu
 }
 
 /**
+ * Persist a stable Tailscale device name so this node's MagicDNS URL — the origin the installed PWA is
+ * bolted to — can't drift out from under it. Tailscale otherwise *derives* the name from the Mac's
+ * LocalHostName, which a macOS update or a network/settings reset can silently clear; the name then moves
+ * (e.g. `mac` → `macbook-pro`), the URL changes, and every home-screen PWA pinned to the old origin dies
+ * with an unexplained "failed to fetch". We pin `--hostname`/`RELAY_HOSTNAME` when given (also the way to
+ * *rename* — `--hostname mac` restores a drifted node), else re-pin whatever name the node already has: a
+ * no-op on today's URL, but it turns an auto-derived name into an explicit one Tailscale won't re-derive.
+ * Best-effort — a failure just leaves the name auto-derived, exactly as before this ran.
+ */
+function pinHostname(bin: string): void {
+	const label = (dns: string | null): string => (dns ?? '').split('.')[0]
+	const current = label(magicDnsName(bin))
+	const desired = (process.env.RELAY_HOSTNAME ?? '').trim() || current
+	if (!desired) return // node name unknown and none requested — nothing to pin
+	try {
+		execFileSync(bin, ['set', `--hostname=${desired}`], { stdio: 'pipe' })
+	} catch (err) {
+		console.info(
+			`  ⚠ could not pin tailscale hostname to "${desired}" (${err instanceof Error ? err.message.trim() : err}) — name stays auto-derived.`
+		)
+		return
+	}
+	if (desired === current) {
+		console.info(`✓ tailscale device name pinned to "${desired}" (won't drift on an OS hostname change)`)
+		return
+	}
+	// A rename: wait briefly for MagicDNS to reflect it, so the URL and Funnel cert below use the new name.
+	for (let i = 0; i < 12 && label(magicDnsName(bin)) !== desired; i++) sleepSync(500)
+	const actual = label(magicDnsName(bin))
+	if (actual === desired)
+		console.info(`✓ tailscale device renamed "${current || '<derived>'}" → "${desired}" and pinned`)
+	else
+		console.info(
+			`  ⚠ requested hostname "${desired}" but the tailnet assigned "${actual}" (name likely already taken) — your URL is https://${actual}.…`
+		)
+}
+
+/**
  * Front the loopback relay with a stable HTTPS URL, either publicly (`tailscale funnel`, the default) or
  * tailnet-only (`tailscale serve`), per resolveExposeMode(). Idempotent — flips Funnel off when switching
  * back to tailnet — and non-fatal: the relay binds loopback regardless, so a failure here just means the
@@ -291,7 +339,9 @@ function ensureTailscale(): void {
 		console.info(`      tailscale funnel --bg ${RELAY_PORT}   # public, or \`serve\` for tailnet-only`)
 		return
 	}
+	pinHostname(bin)
 	const dns = magicDnsName(bin)
+	if (dns) writeUrlHost(dns) // baseline for drift detection (server startup + `service status` compare against this)
 	const url = `https://${dns ?? '<node>'}/`
 	const mode = resolveExposeMode()
 	const state = tailscaleState(bin, dns)
@@ -339,6 +389,10 @@ function printUrl(): void {
 	const token = currentToken()
 	const frag = `#token=${token ?? '<starts on first run>'}`
 	const bin = tailscaleBin()
+	if (bin) {
+		const drift = driftWarningLines(bin)
+		if (drift.length) console.info(`\n${drift.join('\n')}`)
+	}
 	const dns = bin ? magicDnsName(bin) : null
 	const state = bin ? tailscaleState(bin, dns) : { proxyOk: false, funnelOn: false }
 	if (dns && state.proxyOk) {
@@ -426,6 +480,28 @@ function status(): void {
 	printUrl()
 }
 
+/**
+ * Stream the LaunchAgent's stdout+stderr logs (the same files the plist points at). Follows both by default
+ * — `--no-follow` for a one-shot tail, `-n N` for depth. Pure `tail` passthrough so Ctrl-C just detaches.
+ */
+function logs(): void {
+	const files = ['relay.log', 'relay.err.log'].map(f => path.join(logDir, f)).filter(f => fs.existsSync(f))
+	if (files.length === 0) {
+		console.info(
+			`no logs yet in ${logDir}/ — the relay writes there once the LaunchAgent is running (\`conductor-remote service install\`).`
+		)
+		return
+	}
+	const argv = process.argv.slice(3)
+	const follow = !argv.includes('--no-follow')
+	const nAt = argv.indexOf('-n')
+	const count = nAt !== -1 && argv[nAt + 1] ? argv[nAt + 1] : '200'
+	const args = ['-n', count, ...(follow ? ['-F'] : []), ...files]
+	const res = spawnSync('tail', args, { stdio: 'inherit' })
+	// tail exits 0 normally; Ctrl-C kills it via SIGINT (null status). Only surface a genuine non-zero exit.
+	if (typeof res.status === 'number' && res.status !== 0) process.exit(res.status)
+}
+
 const cmd = process.argv[2] ?? 'status'
 switch (cmd) {
 	case 'install':
@@ -440,10 +516,13 @@ switch (cmd) {
 	case 'status':
 		status()
 		break
+	case 'logs':
+		logs()
+		break
 	default:
 		console.error(
 			`unknown command: ${cmd}\n` +
-				'usage: service.ts <install|uninstall|restart|status> [flags]\n' +
+				'usage: service.ts <install|uninstall|restart|status|logs> [flags]\n' +
 				`  flags (install): ${Object.keys(FLAG_ENV).join(', ')}`
 		)
 		process.exit(1)
