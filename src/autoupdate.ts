@@ -8,7 +8,7 @@
  * KeepAlive restarts it into the freshly-installed code (the plist's baked `bin/cli.js` path is stable
  * across a global reinstall, so no re-`service install` is needed).
  *
- * Beyond that 6h registry poll, a cheap local check reconciles a disk↔process version skew: if the
+ * Beyond that hourly registry poll, a cheap local check reconciles a disk↔process version skew: if the
  * installed package.json on disk no longer matches the version this process booted as — an out-of-band
  * `npm i -g`/deploy swapped the global install underneath us — it exit()→restarts to load it. Without
  * this, a stale backend keeps serving the newer frontend from disk (the API contract drifts, e.g. the
@@ -37,14 +37,16 @@ const execFileP = promisify(execFile)
 const NAME = 'conductor-remote'
 const projectDir = packageRoot(import.meta.dirname)
 const REGISTRY = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org'
-// Registry poll cadence. The poll is a single cheap GET off npm's CDN, so a tight loop costs nothing;
-// a coarse interval, by contrast, left the phone serving a stale build for hours when several versions
-// ship in quick succession (the poll only fires ~90s after boot, then on this interval). 2 min keeps the
-// phone within a couple minutes of `latest`. `AUTO_UPDATE_INTERVAL_MINUTES` retunes it with no code change;
-// values are floored at 1 min (below that you're just racing the 60s disk-skew heal and the CDN's tag TTL).
+// Registry poll cadence. The poll is a single cheap GET off npm's CDN, so a tight loop costs nothing —
+// but releases are now infrequent and rarely carry a critical fix, so racing `latest` buys little. A
+// coarse hourly poll lands the phone on `latest` within the hour, and an out-of-band `yarn deploy` still
+// heals in ~a minute via the disk-skew check below. (The first poll fires ~90s after boot, then on this
+// interval, so a restart re-syncs fast regardless of cadence.) `AUTO_UPDATE_INTERVAL_MINUTES` retunes it
+// with no code change — drop it to e.g. 2 while shipping a burst of releases; values are floored at 1 min
+// (below that you're just racing the 60s disk-skew heal and the CDN's tag TTL).
 function resolveIntervalMs(): number {
 	const raw = Number(process.env.AUTO_UPDATE_INTERVAL_MINUTES)
-	const minutes = Number.isFinite(raw) && raw > 0 ? raw : 2
+	const minutes = Number.isFinite(raw) && raw > 0 ? raw : 60
 	return Math.max(minutes, 1) * 60 * 1000
 }
 const CHECK_INTERVAL_MS = resolveIntervalMs()
