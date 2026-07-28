@@ -39,7 +39,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 
 	const create = async () => {
 		const text = prompt.trim()
-		if (!text || !repo || busy) return
+		if (!repo || busy) return
 		setBusy(true)
 		setError(null)
 		try {
@@ -49,7 +49,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				return
 			}
 			// The session view picks this up and sends it as soon as the worktree is ready.
-			seedFirstPrompt(r.workspaceId, text)
+			if (text) seedFirstPrompt(r.workspaceId, text)
 			await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
 			onClose()
 			navigate(`/w/${r.workspaceId}`)
@@ -111,7 +111,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				<textarea
 					value={prompt}
 					onChange={e => setPrompt(e.target.value)}
-					placeholder="What should the agent do?"
+					placeholder="What should the agent do? (optional)"
 					rows={6}
 					// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
 					autoFocus
@@ -124,10 +124,10 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				<button
 					type="button"
 					onClick={create}
-					disabled={!prompt.trim() || !repo || busy}
+					disabled={!repo || busy}
 					className="w-full rounded-2xl bg-accent px-4 py-3 text-[15px] font-semibold text-bg transition active:scale-[0.985] disabled:opacity-40"
 				>
-					{busy ? 'Creating…' : 'Create workspace'}
+					{busy ? 'Creating…' : prompt.trim() ? 'Create & start' : 'Create empty workspace'}
 				</button>
 			</div>
 		</div>

@@ -24,12 +24,15 @@ Two asymmetric halves — keep them separate:
   *flat* after the scheme (not behind `?`) and must be URL-encoded (which is also
   what stops a prompt containing `&path=` from moving the workspace), and **an
   unmatched or absent `path` silently falls back to the first repo** — so the
-  relay resolves a real `repos.root_path` and 404s an unknown name. The link is
-  fire-and-forget and only *pre-fills* the composer, so the relay watches the DB
-  for the new row and the PWA parks the prompt (`web/src/lib/firstPrompt.ts`)
-  until the worktree is `ready`, guarded on `last_user_message_at` so it can't
-  double-send. Don't block the request on setup: it measured 30s+, past the
-  phone's own 25s budget.
+  relay resolves a real `repos.root_path` and 404s an unknown name. **`prompt` is
+  optional** — a bare `conductor://path=…` opens an empty workspace like
+  Conductor's own New workspace; that form is *undocumented* (every documented
+  route carries a prompt) but verified live, so suspect it first if creation
+  breaks. The link is fire-and-forget and only *pre-fills* the composer, so the
+  relay watches the DB for the new row and the PWA parks any prompt
+  (`web/src/lib/firstPrompt.ts`) until the worktree is `ready`, guarded on
+  `last_user_message_at` so it can't double-send. Don't block the request on
+  setup: it measured 30s+, past the phone's own 25s budget.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's

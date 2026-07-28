@@ -235,8 +235,10 @@ const server = http.createServer(async (req, res) => {
 		// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
 		if (req.method === 'POST' && pathname === '/api/workspaces') {
 			const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
+			// The prompt is optional — a bare `path=` opens an empty workspace, like
+			// Conductor's own New workspace — but *something* has to say where it goes.
 			const prompt = (body.prompt ?? '').trim()
-			if (!prompt) return json(req, res, 400, { error: 'empty prompt' })
+			if (!prompt && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
 			// Resolve the repo to a real path: an unmatched `path` would silently land
 			// the workspace in whichever repo Conductor happens to list first.
 			const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
@@ -264,13 +266,13 @@ const server = http.createServer(async (req, res) => {
 			// Conductor's whole setup — measured at 30s+ on a real repo, past the phone's
 			// own 25s budget. `send:true` opts into the blocking path for API callers.
 			// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-			const body2 = body.send === true ? await submitFirstPrompt(created.id, prompt) : { sent: false }
+			const submitted = body.send === true && prompt ? await submitFirstPrompt(created.id, prompt) : { sent: false }
 			return json(req, res, 200, {
 				ok: true,
 				workspaceId: created.id,
 				workspace: reads.getWorkspace(created.id) ?? created,
-				pendingPrompt: prompt,
-				...body2
+				pendingPrompt: prompt || undefined,
+				...submitted
 			})
 		}
 
