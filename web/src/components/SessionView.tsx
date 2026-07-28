@@ -8,6 +8,7 @@ import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { AgentBar } from './AgentBar.tsx'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
@@ -48,10 +49,10 @@ export function SessionView() {
 		null
 	// A fresh send flips the indicator on instantly (the hint); the DB status poll
 	// confirms or, if the send never landed, the hint expires and it drops back off.
+	const activeSession = sessions.find(s => s.id === sessionId)
 	const workingHint = sessionId ? workingHints[sessionId] : undefined
 	const working =
-		sessions.find(s => s.id === sessionId)?.status === 'working' ||
-		(workingHint !== undefined && Date.now() - workingHint < 15_000)
+		activeSession?.status === 'working' || (workingHint !== undefined && Date.now() - workingHint < 15_000)
 
 	const subtitle = [ws.repo_name, ws.branch, shortModel(ws.model)].filter(Boolean).join(' · ')
 
@@ -103,6 +104,7 @@ export function SessionView() {
 					/>
 				) : null}
 				<Transcript sessionId={sessionId} working={working} />
+				{activeSession ? <AgentBar session={activeSession} workspaceId={ws.id} /> : null}
 				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
 

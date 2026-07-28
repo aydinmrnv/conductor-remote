@@ -16,13 +16,51 @@ Two asymmetric halves — keep them separate:
   the DB handle in `db.ts`.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
-  - `applescript` (**default**): drives Conductor's real UI send, and is now
-    **precise** — before pasting it focuses the target workspace via the command
-    palette (Cmd+K → **branch name** → Enter), so the prompt lands in the right
-    session regardless of what was focused. The branch is the palette's unique
-    per-workspace key; a looser query can match a *command* (e.g. unarchive), so
-    `writes.ts` always types `workspace.branch`. No private protocol, nothing to
-    rebreak on a Conductor update. Timing-tuned AppleScript delays are load-bearing.
+  - `applescript` (**default**): drives Conductor's real UI send. **Conductor's
+    webview exposes its whole tree to macOS Accessibility** (the old "Tauri shows
+    no AX text" belief was wrong), so nearly nothing is keystrokes — every
+    targeting decision is a read of the live UI, and each one fails closed:
+    1. **Workspace** — press its sidebar row (an `AXLink` named
+       "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing can be
+       swallowed by a focused field. Only *rendered* rows exist in the AX tree, so
+       a **collapsed sidebar section is invisible** — and the row title follows
+       Conductor's precedence (manual name → PR title → humanized branch →
+       codename), so `writes.ts` tries each candidate and requires a *unique* hit.
+       Anything missing or ambiguous falls back to the command palette
+       (Cmd+K → **branch name** → Enter); the branch is the palette's unique
+       per-workspace key, and a looser query can match a *command* (e.g. unarchive).
+    2. **Assert we landed there** — the pane header carries the branch as
+       `AXStaticText` (owner prefix stripped) and the repo as an `AXPopUpButton`.
+       Mismatch → abort. This is what catches a palette hit on the wrong thing.
+    3. **Chat tab** — the strip is an `AXTabGroup` whose `AXRadioButton`s are the
+       tabs (`AXValue` = selected, `AXPress` = switch, it does *not* close the
+       chat), ordered like `reads.listSessions` (created_at ASC). Addressed by
+       index, label cross-checked, re-read to confirm. Without this every prompt
+       lands in whichever tab was already active. **The terminal panel is an
+       `AXTabGroup` too** (Setup/Run/Terminal 1) — candidates are scored on tab
+       count + label and a tie aborts, so we never type into a terminal.
+    4. **Composer** — `AXGroup "composer"` holds an `AXTextArea` whose `AXFocused`
+       and `AXValue` are both settable, so the prompt is *written*, read back to
+       verify, then Enter. No clipboard hijack, no Cmd+L/Cmd+V. Clipboard paste
+       survives only as a fallback — and `fillComposer` **clears whatever it wrote
+       before falling back**, or the paste appends and sends a garbled prompt.
+
+    Landing in the wrong agent is worse than not sending, so every step errors out
+    rather than guessing. No private protocol, nothing to rebreak on a Conductor
+    update. The remaining keystroke delays (palette fallback) are load-bearing.
+
+    The same verified path drives the chat's **agent settings** (`setAgentOptions`,
+    `POST /api/sessions/:id/agent`). Their *values* are plain reads — `sessions`
+    has `model`, `claude_effort_level`, `fast_mode`, `permission_mode` — so only
+    the writes touch the UI: effort is a button whose **label is its own value**
+    and which *cycles* (Low → Medium → High → Extra high → Max → Ultracode → wrap),
+    so we press until the label matches; Plan is an `AXCheckBox` with readable
+    state; the model picker is an `AXMenu` (labels carry badges — "Opus 5 NEW" —
+    so matching prefers exact then unique-prefix, and `GET …/models` enumerates it
+    live rather than hard-coding a list that would rot). **Fast has no readable
+    state and only exists for some models**, so the DB decides whether to press it
+    and a missing button is reported, not ignored. Every change is confirmed
+    against the DB before the API returns success.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently
@@ -96,6 +134,15 @@ unit test.
   contexts without a corepack shim (CI, a bare shell) must `corepack enable` first
   — see `.github/workflows/ci.yml`. The verify script is named `verify`, not `check`
   (collides with a Yarn Classic builtin).
+- **Editing the AppleScript in `writes.ts`: two silent traps.** (1) Inside a
+  `tell application "System Events"` block, ordinary-looking variable names
+  resolve as **System Events terms** — `tabs` and `groups` become "every tab/group
+  of the process", so a loop over your own list quietly iterates the wrong thing
+  and the handler returns nothing. Keep logic *outside* the tell and reach in via
+  one-line helpers (`tabLabel`, `paneLabels`), or name variables `strip`/`pane`.
+  (2) The script lives in a **TS template literal** — a backtick in an AppleScript
+  comment terminates it and `tsc` reports a nonsense error tens of lines away.
+  Use quotes in those comments.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."

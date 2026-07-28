@@ -10,9 +10,18 @@ import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
 import { mergePr } from './merge.ts'
 import { attachPrStatus } from './pr.ts'
-import { Reads } from './reads.ts'
+import { Reads, type SessionRow, type Workspace } from './reads.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
-import { describeActuator, newChat, pickActuator } from './writes.ts'
+import {
+	type AgentOptions,
+	type ChatTab,
+	describeActuator,
+	EFFORT_LABELS,
+	listAgentModels,
+	newChat,
+	pickActuator,
+	setAgentOptions
+} from './writes.ts'
 
 const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
@@ -36,6 +45,37 @@ async function confirmDelivery(sessionId: string, text: string, sinceRowid: numb
 		const { entries } = reads.getMessages(sessionId, sinceRowid)
 		if (entries.some(e => e.role === 'user' && e.text.trim() === target)) return true
 		await sleep(350)
+	}
+	return false
+}
+
+/**
+ * Where a chat sits in Conductor's tab strip. Both write paths need it: the
+ * actuator selects that tab before touching anything, otherwise it acts on
+ * whichever tab happens to be active.
+ */
+function locateChat(
+	ws: Workspace,
+	sessionId: string
+): { tab: ChatTab | undefined; session: SessionRow | undefined } | { error: string } {
+	const sessions = reads.listSessions(ws.id)
+	const index = sessions.findIndex(s => s.id === sessionId)
+	if (index < 0 && sessions.length > 1) return { error: 'chat is no longer one of the workspace’s tabs' }
+	if (index < 0) return { tab: undefined, session: undefined }
+	return {
+		tab: { index: index + 1, count: sessions.length, title: sessions[index].title ?? '' },
+		session: sessions[index]
+	}
+}
+
+/** Poll the DB until Conductor records the setting we just drove through the UI. */
+async function confirmAgentOptions(ws: Workspace, sessionId: string, opts: AgentOptions): Promise<boolean> {
+	for (let attempt = 0; attempt < 10; attempt++) {
+		const s = reads.listSessions(ws.id).find(row => row.id === sessionId)
+		const effortOk = !opts.effort || s?.claude_effort_level === opts.effort
+		const planOk = opts.plan === undefined || s?.permission_mode === (opts.plan ? 'plan' : 'default')
+		if (effortOk && planOk) return true
+		await sleep(300)
 	}
 	return false
 }
@@ -218,6 +258,59 @@ const server = http.createServer(async (req, res) => {
 			return json(req, res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
 		}
 
+		// GET /api/sessions/:id/models?workspaceId= — labels from Conductor's live picker
+		m = pathname.match(/^\/api\/sessions\/([^/]+)\/models$/)
+		if (req.method === 'GET' && m) {
+			const sessionId = decodeURIComponent(m[1])
+			const ws = reads.getWorkspace(url.searchParams.get('workspaceId') ?? '')
+			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			const located = locateChat(ws, sessionId)
+			if ('error' in located) return json(req, res, 409, { error: located.error })
+			const result = await listAgentModels({ workspace: ws, sessionId, tab: located.tab })
+			return json(req, res, result.ok ? 200 : 502, result)
+		}
+
+		// POST /api/sessions/:id/agent  { effort?, plan?, fast?, model? }
+		// Drives the composer's own model/effort/plan/fast controls for one chat.
+		m = pathname.match(/^\/api\/sessions\/([^/]+)\/agent$/)
+		if (req.method === 'POST' && m) {
+			const sessionId = decodeURIComponent(m[1])
+			const body = JSON.parse((await readBody(req)) || '{}') as {
+				effort?: string
+				plan?: boolean
+				fast?: boolean
+				model?: string
+				workspaceId?: string
+			}
+			if (body.effort && !EFFORT_LABELS[body.effort]) {
+				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
+			}
+			const ws = body.workspaceId
+				? reads.getWorkspace(body.workspaceId)
+				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			const located = locateChat(ws, sessionId)
+			if ('error' in located) return json(req, res, 409, { error: located.error })
+			// Fast mode exposes no readable state in the UI, so the DB decides whether
+			// the button actually needs pressing — pressing blindly would toggle it off.
+			const opts: AgentOptions = {
+				effort: body.effort,
+				plan: body.plan,
+				model: body.model,
+				toggleFast: body.fast === undefined ? false : body.fast !== Boolean(located.session?.fast_mode)
+			}
+			const result = await setAgentOptions({ workspace: ws, sessionId, tab: located.tab }, opts)
+			if (!result.ok) return json(req, res, 502, result)
+			if (!(await confirmAgentOptions(ws, sessionId, opts))) {
+				return json(req, res, 502, {
+					ok: false,
+					strategy: result.strategy,
+					error: 'Conductor didn’t record the change — it may have been asleep. Try again.'
+				})
+			}
+			return json(req, res, 200, { ok: true, session: reads.listSessions(ws.id).find(s => s.id === sessionId) })
+		}
+
 		// POST /api/sessions/:id/prompt  { text }
 		m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
 		if (req.method === 'POST' && m) {
@@ -229,9 +322,12 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			const located = locateChat(ws, sessionId)
+			if ('error' in located) return json(req, res, 409, { error: located.error })
+			const { tab } = located
 			// Snapshot the transcript cursor so we can confirm the prompt actually lands.
 			const beforeRowid = reads.getMessages(sessionId).cursor
-			const result = await actuator.send({ workspace: ws, sessionId }, text)
+			const result = await actuator.send({ workspace: ws, sessionId, tab }, text)
 			if (result.ok && !(await confirmDelivery(sessionId, text, beforeRowid))) {
 				return json(req, res, 502, {
 					ok: false,

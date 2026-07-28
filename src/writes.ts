@@ -12,10 +12,23 @@ export interface SendResult {
 	error?: string
 }
 
+/**
+ * Where the target chat sits in Conductor's tab strip. `index` is 1-based in
+ * `reads.listSessions` order (created_at ASC) — verified to match the strip's
+ * left-to-right order — and `title` is the tab label used as a sanity check.
+ */
+export interface ChatTab {
+	index: number
+	count: number
+	title: string
+}
+
 /** Who to deliver a prompt to. `sessionId` is the precise target; `workspace` carries the worktree + focus context. */
 export interface SendTarget {
 	workspace: Workspace
 	sessionId: string | null
+	/** Which chat tab to select once the workspace is focused. Omitted → whichever tab is already active. */
+	tab?: ChatTab
 }
 
 export interface Actuator {
@@ -61,18 +74,529 @@ export class SidecarActuator implements Actuator {
 	}
 }
 
-// AppleScript steps that focus a workspace via Conductor's command palette
-// (Esc → Cmd+K → branch → Enter). The branch is read from RELAY_WS_QUERY at run
-// time to dodge AppleScript escaping; the timing delays are load-bearing.
-const FOCUS_WORKSPACE_STEPS = `
-	key code 53
-	delay 0.25
-	keystroke "k" using {command down}
-	delay 0.7
-	keystroke (system attribute "RELAY_WS_QUERY")
+/**
+ * AppleScript handlers that pin down *which chat* the prompt goes to.
+ *
+ * The palette (Cmd+K) only gets us to the right workspace — a workspace holds
+ * several chats, and Conductor keeps typing in whichever tab is already active.
+ * So a send addressed to a non-active chat would land in the wrong agent.
+ *
+ * Conductor's webview exposes the whole tree through macOS Accessibility. The
+ * chat strip is an AXTabGroup whose AXRadioButtons are the tabs (`AXValue`
+ * marks the selected one, `AXPress` switches to it — it does *not* close the
+ * chat). The strip's order matches `reads.listSessions` (created_at ASC), so
+ * the caller addresses a tab by 1-based index and we cross-check the label.
+ *
+ * Two traps this has to survive:
+ *  - **The terminal panel is an AXTabGroup too** (radio buttons named Setup /
+ *    Run / Terminal 1), a sibling of the chat strip in the same pane. Picking
+ *    "the first tab group" would sometimes press a terminal tab, so we *score*
+ *    the candidates on tab count + label and refuse to act on a tie.
+ *  - **The palette can land on the wrong workspace** (a loose query matches a
+ *    command; a deleted branch opens a modal). The pane header carries the
+ *    branch and repo, so we read them back and bail if they disagree.
+ *
+ * Target is read from RELAY_TAB_{INDEX,COUNT,TITLE} + RELAY_WS_{BRANCH,REPO};
+ * index 0 disables the step. Every failure path errors out so the caller aborts
+ * *before* pasting — landing in the wrong chat is worse than not sending.
+ */
+const SELECT_CHAT_TAB_HANDLERS = `
+on splitLines(s)
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to linefeed
+	set parts to text items of s
+	set AppleScript's text item delimiters to saved
+	return parts
+end splitLines
+
+on sidebarLinks()
+	-- The sidebar rows are AXLinks named "<repo> <title> +adds -dels". They live
+	-- two levels under the web area; collect them wherever they are at that depth.
+	tell application "System Events" to tell process "Conductor"
+		set wa to UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
+		set out to {}
+		repeat with a in (UI elements of wa)
+			try
+				repeat with l in (UI elements of a whose role is "AXLink")
+					set end of out to contents of l
+				end repeat
+				repeat with b in (UI elements of a)
+					repeat with l in (UI elements of b whose role is "AXLink")
+						set end of out to contents of l
+					end repeat
+				end repeat
+			end try
+		end repeat
+		return out
+	end tell
+end sidebarLinks
+
+on focusViaSidebar()
+	-- Press the workspace's sidebar row: no keystrokes at all, so nothing can be
+	-- swallowed by a focused field or fire a palette *command*. Only rows that are
+	-- actually rendered exist in the AX tree (a collapsed section has none), and
+	-- the title precedence is Conductor's, so we try each candidate and require a
+	-- unique hit — anything ambiguous falls back to the palette. Being wrong is
+	-- survivable here: assertWorkspace re-checks before we type.
+	set titles to my splitLines(system attribute "RELAY_WS_TITLES")
+	if (count of titles) is 0 then return false
+	set repoName to system attribute "RELAY_WS_REPO"
+	set rows to my sidebarLinks()
+	set hit to missing value
+	repeat with candidate in titles
+		if (candidate as text) is not "" then
+			set matches to {}
+			repeat with entry in rows
+				set row to contents of entry
+				set rowName to my tabLabel(row)
+				if rowName contains (candidate as text) then
+					if repoName is "" or rowName contains repoName then set end of matches to row
+				end if
+			end repeat
+			if (count of matches) is 1 then
+				set hit to item 1 of matches
+				exit repeat
+			end if
+		end if
+	end repeat
+	if hit is missing value then return false
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of hit
+	end tell
 	delay 0.9
-	key code 36
-	delay 1.3`
+	return true
+end focusViaSidebar
+
+on focusViaPalette()
+	tell application "System Events"
+		key code 53
+		delay 0.25
+		keystroke "k" using {command down}
+		delay 0.7
+		keystroke (system attribute "RELAY_WS_QUERY")
+		delay 0.9
+		key code 36
+		delay 1.3
+	end tell
+end focusViaPalette
+
+on focusWorkspace()
+	if (system attribute "RELAY_WS_QUERY") is "" then return
+	if my focusViaSidebar() then
+		try
+			set strips to my tabGroups()
+			if (count of strips) > 0 then
+				my assertWorkspace(item 1 of strips)
+				return
+			end if
+		end try
+	end if
+	my focusViaPalette()
+end focusWorkspace
+
+on tabGroups()
+	-- Level-order search, returning every tab group at the shallowest depth that
+	-- has one (the chat strip and the terminal strip are siblings). Bounded: the
+	-- pane sits ~5 levels down, and we must never descend into the transcript.
+	tell application "System Events" to tell process "Conductor"
+		set level to {window 1}
+		set depth to 0
+		repeat while (count of level) > 0 and depth < 8
+			set found to {}
+			set nextLevel to {}
+			repeat with entry in level
+				set node to contents of entry
+				try
+					repeat with h in (UI elements of node whose role is "AXTabGroup")
+						set end of found to contents of h
+					end repeat
+					set nextLevel to nextLevel & (UI elements of node)
+				end try
+			end repeat
+			if (count of found) > 0 then return found
+			set level to nextLevel
+			set depth to depth + 1
+		end repeat
+	end tell
+	return {}
+end tabGroups
+
+on chatTabs(tg)
+	tell application "System Events" to tell process "Conductor"
+		set direct to (UI elements of tg whose role is "AXRadioButton")
+		if (count of direct) > 0 then return direct
+		set nested to {}
+		repeat with g in (UI elements of tg)
+			repeat with r in (UI elements of g whose role is "AXRadioButton")
+				set end of nested to contents of r
+			end repeat
+		end repeat
+		return nested
+	end tell
+end chatTabs
+
+on tabLabel(t)
+	tell application "System Events" to tell process "Conductor"
+		return (name of t) as text
+	end tell
+end tabLabel
+
+on pickChatStrip(strips, wantCount, wantTitle)
+	-- Score each candidate strip: a label match outweighs a tab-count match, and
+	-- a tie means we cannot tell the chat strip from the terminal strip.
+	set best to missing value
+	set bestTabs to {}
+	set bestScore to 0
+	set tied to false
+	repeat with entry in strips
+		set tg to contents of entry
+		set strip to my chatTabs(tg)
+		set score to 0
+		if wantCount > 0 and (count of strip) is wantCount then set score to score + 1
+		if wantTitle is not "" then
+			repeat with t in strip
+				if (my tabLabel(t)) contains wantTitle then
+					set score to score + 2
+					exit repeat
+				end if
+			end repeat
+		end if
+		if score > bestScore then
+			set bestScore to score
+			set best to tg
+			set bestTabs to strip
+			set tied to false
+		else if score is bestScore and score > 0 then
+			set tied to true
+		end if
+	end repeat
+	if bestScore is 0 then error "couldn't identify the chat tab strip"
+	if tied then error "can't tell which tab strip holds the target chat"
+	return {best, bestTabs}
+end pickChatStrip
+
+on lastPathSegment(s)
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of s
+	set AppleScript's text item delimiters to saved
+	return item -1 of parts
+end lastPathSegment
+
+on paneLabels(tg, wantRole)
+	-- Kept out of the caller's scope on purpose: inside a System Events tell,
+	-- ordinary-looking names (tabs, count) resolve as app terms instead of vars.
+	tell application "System Events" to tell process "Conductor"
+		set pane to value of attribute "AXParent" of tg
+		return (name of (UI elements of pane whose role is wantRole))
+	end tell
+end paneLabels
+
+on anyContains(haystack, needle)
+	repeat with entry in haystack
+		try
+			if (entry as text) contains needle then return true
+		end try
+	end repeat
+	return false
+end anyContains
+
+on assertWorkspace(tg)
+	-- The pane holding the chat strip also labels the open workspace: an
+	-- AXStaticText with the branch (sans owner prefix) and a repo popup button.
+	set wantBranch to system attribute "RELAY_WS_BRANCH"
+	if wantBranch is "" then return
+	set tail to my lastPathSegment(wantBranch)
+	if not (my anyContains(my paneLabels(tg, "AXStaticText"), tail)) then
+		error "the palette didn't land on " & tail
+	end if
+	set wantRepo to system attribute "RELAY_WS_REPO"
+	if wantRepo is not "" then
+		if not (my anyContains(my paneLabels(tg, "AXPopUpButton"), wantRepo)) then
+			error "the palette didn't land in " & wantRepo
+		end if
+	end if
+end assertWorkspace
+
+on normalizeNewlines(s)
+	-- "do shell script" hands back CR-delimited text; the composer reads back LF.
+	-- Without this the verification below never matches a multi-line prompt.
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to return
+	set parts to text items of s
+	set AppleScript's text item delimiters to linefeed
+	set joined to parts as text
+	set AppleScript's text item delimiters to saved
+	return joined
+end normalizeNewlines
+
+on fillComposer(promptText)
+	-- Write the prompt straight into the composer's AXTextArea instead of
+	-- stashing the clipboard, pressing Cmd+L and pasting. AXFocused and AXValue
+	-- are both settable, so this needs no keystrokes and no clipboard hijack.
+	-- Returns false (→ caller falls back to pasting) if anything looks off, but
+	-- *clears whatever it wrote first*: leaving half a prompt behind would make
+	-- the fallback paste append to it and send a garbled prompt.
+	if promptText is "" then return false
+	set strips to my tabGroups()
+	if (count of strips) is 0 then return false
+	try
+		tell application "System Events" to tell process "Conductor"
+			set pane to value of attribute "AXParent" of (item 1 of strips)
+			set composerBox to item 1 of (UI elements of pane whose name is "composer")
+			set textBox to item 1 of (UI elements of composerBox whose role is "AXTextArea")
+			set value of attribute "AXFocused" of textBox to true
+			set value of textBox to promptText
+			delay 0.25
+			if ((value of textBox) as text) does not contain promptText then
+				set value of textBox to ""
+				return false
+			end if
+		end tell
+	on error
+		try
+			my clearComposer()
+		end try
+		return false
+	end try
+	return true
+end fillComposer
+
+on clearComposer()
+	set strips to my tabGroups()
+	if (count of strips) is 0 then return
+	tell application "System Events" to tell process "Conductor"
+		set pane to value of attribute "AXParent" of (item 1 of strips)
+		set composerBox to item 1 of (UI elements of pane whose name is "composer")
+		set value of (item 1 of (UI elements of composerBox whose role is "AXTextArea")) to ""
+	end tell
+end clearComposer
+
+on pasteComposer()
+	-- Fallback for when the composer isn't reachable: Cmd+L focuses it (after the
+	-- palette, focus sits on a button, not the text box), then paste.
+	tell application "System Events"
+		set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
+		keystroke "l" using {command down}
+		delay 0.3
+		keystroke "v" using {command down}
+		delay 0.15
+	end tell
+end pasteComposer
+
+on selectChatTab()
+	set wantIndex to (system attribute "RELAY_TAB_INDEX") as integer
+	if wantIndex is 0 then return
+	set wantCount to (system attribute "RELAY_TAB_COUNT") as integer
+	set wantTitle to system attribute "RELAY_TAB_TITLE"
+	set strips to my tabGroups()
+	if (count of strips) is 0 then
+		-- A lone chat has no ambiguity to resolve; more than one and we must not guess.
+		if wantCount <= 1 then return
+		error "couldn't find the chat tab strip"
+	end if
+	-- Assert the workspace first: every strip lives in the same pane, so this
+	-- reports "wrong workspace" rather than a confusing "no chat strip".
+	my assertWorkspace(item 1 of strips)
+	set picked to my pickChatStrip(strips, wantCount, wantTitle)
+	set tabs to item 2 of picked
+	tell application "System Events" to tell process "Conductor"
+		set target to missing value
+		if wantIndex <= (count of tabs) then
+			set candidate to contents of (item wantIndex of tabs)
+			if wantTitle is "" or (name of candidate) contains wantTitle then set target to candidate
+		end if
+		if target is missing value and wantTitle is not "" then
+			repeat with t in tabs
+				if (name of t) contains wantTitle then
+					if target is not missing value then error "several chat tabs match " & wantTitle
+					set target to contents of t
+				end if
+			end repeat
+		end if
+		if target is missing value then error "chat tab " & wantIndex & " not found"
+		if (value of target) is not true then
+			perform action "AXPress" of target
+			delay 0.5
+		end if
+		if (value of target) is not true then error "couldn't switch to the target chat tab"
+	end tell
+end selectChatTab
+
+on composerControls()
+	set strips to my tabGroups()
+	if (count of strips) is 0 then error "couldn't find the composer"
+	tell application "System Events" to tell process "Conductor"
+		set pane to value of attribute "AXParent" of (item 1 of strips)
+		set composerBox to item 1 of (UI elements of pane whose name is "composer")
+		set out to {}
+		repeat with e in (UI elements of composerBox)
+			set end of out to contents of e
+			repeat with e2 in (UI elements of e)
+				set end of out to contents of e2
+			end repeat
+		end repeat
+		return out
+	end tell
+end composerControls
+
+on controlNamed(wanted)
+	repeat with entry in my composerControls()
+		set c to contents of entry
+		if my tabLabel(c) is wanted then return c
+	end repeat
+	return missing value
+end controlNamed
+
+on effortButton()
+	-- The effort control is a button whose *label is its current value*, so it is
+	-- identified by that label rather than a stable name.
+	set levels to {"Low", "Medium", "High", "Extra high", "Max", "Ultracode"}
+	repeat with entry in my composerControls()
+		set c to contents of entry
+		if my tabLabel(c) is in levels then return c
+	end repeat
+	return missing value
+end effortButton
+
+on setEffort(wanted)
+	-- Pressing cycles Low → Medium → High → Extra high → Max → Ultracode → wrap,
+	-- so step around the ring at most one full turn and confirm the label landed.
+	set btn to my effortButton()
+	if btn is missing value then error "couldn't find the effort control"
+	repeat 7 times
+		if my tabLabel(btn) is wanted then return
+		tell application "System Events" to tell process "Conductor"
+			perform action "AXPress" of btn
+		end tell
+		delay 0.35
+		set btn to my effortButton()
+		if btn is missing value then error "the effort control vanished mid-cycle"
+	end repeat
+	error "couldn't set effort to " & wanted
+end setEffort
+
+on setPlan(wanted)
+	set box to my controlNamed("Plan")
+	if box is missing value then error "couldn't find the Plan toggle"
+	tell application "System Events" to tell process "Conductor"
+		set current to ((value of box) as text)
+		if (wanted is "1" and current is "0") or (wanted is "0" and current is not "0") then
+			perform action "AXPress" of box
+			delay 0.4
+			if ((value of box) as text) is current then error "the Plan toggle didn't change"
+		end if
+	end tell
+end setPlan
+
+on pressFast()
+	-- Fast has no AX state to read (its label is always "Fast"), so the caller
+	-- decides whether a press is needed and re-checks the DB afterwards.
+	set btn to my controlNamed("Fast")
+	if btn is missing value then error "this model has no Fast toggle"
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of btn
+	end tell
+	delay 0.4
+end pressFast
+
+on firstLine(s)
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to linefeed
+	set parts to text items of s
+	set AppleScript's text item delimiters to saved
+	return item 1 of parts
+end firstLine
+
+on setModel(wanted)
+	set popup to missing value
+	repeat with entry in my composerControls()
+		set c to contents of entry
+		if my tabLabel(c) contains "Change agent" then set popup to c
+	end repeat
+	if popup is missing value then error "couldn't find the model picker"
+	if (my tabLabel(popup)) contains ("(" & wanted & ")") then return
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of popup
+	end tell
+	delay 1.0
+	-- Menu labels carry badges ("Opus 5 NEW"), so an exact match is preferred but a
+	-- prefix match is accepted — except when it is ambiguous ("Sonnet 4.6" would
+	-- otherwise also match "Sonnet 4.6 1M"), which must fail rather than guess.
+	set chosen to missing value
+	set loose to {}
+	tell application "System Events" to tell process "Conductor"
+		set wa to UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
+		repeat with m in (UI elements of wa whose role is "AXMenu")
+			repeat with mi in (UI elements of m whose role is "AXMenuItem")
+				set label to my firstLine(my tabLabel(mi))
+				if label is wanted then
+					set chosen to contents of mi
+				else if label starts with wanted then
+					set end of loose to contents of mi
+				end if
+			end repeat
+		end repeat
+	end tell
+	if chosen is missing value and (count of loose) is 1 then set chosen to item 1 of loose
+	if chosen is missing value then
+		tell application "System Events" to key code 53
+		if (count of loose) > 1 then error "several models match " & wanted
+		error "no model named " & wanted
+	end if
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of chosen
+	end tell
+	delay 0.8
+	set popup to missing value
+	repeat with entry in my composerControls()
+		set c to contents of entry
+		if my tabLabel(c) contains "Change agent" then set popup to c
+	end repeat
+	if popup is missing value then error "the model picker vanished"
+	if (my tabLabel(popup)) does not contain ("(" & wanted & ")") then error "the model didn't switch to " & wanted
+end setModel
+
+on listModels()
+	-- Enumerate the picker rather than hard-coding a model list that would rot on
+	-- every Conductor release. Opens the menu, reads the labels, closes it again.
+	set popup to missing value
+	repeat with entry in my composerControls()
+		set c to contents of entry
+		if my tabLabel(c) contains "Change agent" then set popup to c
+	end repeat
+	if popup is missing value then error "couldn't find the model picker"
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of popup
+	end tell
+	delay 1.0
+	set labels to {}
+	tell application "System Events" to tell process "Conductor"
+		set wa to UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
+		repeat with m in (UI elements of wa whose role is "AXMenu")
+			repeat with mi in (UI elements of m whose role is "AXMenuItem")
+				set end of labels to my firstLine(my tabLabel(mi))
+			end repeat
+		end repeat
+	end tell
+	tell application "System Events" to key code 53
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to linefeed
+	set joined to labels as text
+	set AppleScript's text item delimiters to saved
+	return joined
+end listModels
+
+on applyAgentOptions()
+	set wantEffort to system attribute "RELAY_SET_EFFORT"
+	set wantPlan to system attribute "RELAY_SET_PLAN"
+	set wantFast to system attribute "RELAY_SET_FAST"
+	set wantModel to system attribute "RELAY_SET_MODEL"
+	if wantModel is not "" then my setModel(wantModel)
+	if wantEffort is not "" then my setEffort(wantEffort)
+	if wantPlan is not "" then my setPlan(wantPlan)
+	if wantFast is "1" then my pressFast()
+end applyAgentOptions`
 
 /** Conductor's command palette matches workspaces by branch — its unique key. A
  * looser query (directory name) can match a command like unarchive, so prefer
@@ -82,43 +606,79 @@ function focusQuery(ws: Workspace): string {
 }
 
 /**
+ * Every title Conductor might be showing for this workspace in the sidebar
+ * (its precedence: manual name → PR title → humanized branch → codename). The
+ * sidebar press tries each and requires a unique row; a miss just means we fall
+ * back to the palette, so this doesn't have to reproduce the precedence exactly.
+ */
+function sidebarTitles(ws: Workspace): string[] {
+	const slug = ws.branch?.includes('/') ? ws.branch.slice(ws.branch.indexOf('/') + 1) : ws.branch
+	const humanized = slug?.replace(/[-_]/g, ' ').trim()
+	return [
+		ws.workspace_name,
+		ws.pr_title,
+		humanized ? humanized[0].toUpperCase() + humanized.slice(1) : '',
+		ws.directory_name
+	].filter((t): t is string => Boolean(t))
+}
+
+/** The target rides in on the environment, like RELAY_WS_QUERY, to dodge AppleScript escaping. */
+function targetEnv(target: SendTarget): Record<string, string> {
+	return {
+		RELAY_TAB_INDEX: String(target.tab?.index ?? 0),
+		RELAY_TAB_COUNT: String(target.tab?.count ?? 0),
+		RELAY_TAB_TITLE: target.tab?.title ?? '',
+		RELAY_WS_BRANCH: target.workspace.branch ?? '',
+		RELAY_WS_REPO: target.workspace.repo_name ?? '',
+		RELAY_WS_QUERY: focusQuery(target.workspace),
+		RELAY_WS_TITLES: sidebarTitles(target.workspace).join('\n')
+	}
+}
+
+/** osascript echoes the whole failing script back; keep just the reason for the phone. */
+function osaError(err: unknown): string {
+	const raw = err instanceof Error ? err.message : String(err)
+	return raw.match(/execution error: (.+?) \(-?\d+\)/)?.[1] ?? raw.split('\n')[0]
+}
+
+/**
  * Drives Conductor's real send path via macOS Accessibility (AppleScript): focus
  * the target workspace, paste the prompt, press Enter. Uses whatever model /
  * permission mode the session already has (zero risk of altering the agent),
  * which is why it's the default.
  *
  * Precise targeting comes from focusing the intended workspace first through
- * Conductor's command palette (Cmd+K → branch → Enter) before pasting, so the
- * prompt lands in the right session regardless of what was focused — no private
- * IPC and nothing to rebreak on a Conductor update (unlike the sidecar).
+ * Conductor's command palette (Cmd+K → branch → Enter) and then selecting the
+ * target chat's tab (Accessibility, see SELECT_CHAT_TAB_HANDLERS), so the prompt
+ * lands in the right session regardless of what was focused — no private IPC and
+ * nothing to rebreak on a Conductor update (unlike the sidecar).
  */
 export class AppleScriptActuator implements Actuator {
 	readonly name = 'applescript'
-	readonly caveat = 'Focuses the target workspace via the command palette (Cmd+K) before sending.'
+	readonly caveat = 'Focuses the target workspace (Cmd+K) and its chat tab before sending.'
 	readonly precise = true
 
 	async send(target: SendTarget, text: string): Promise<SendResult> {
-		const navQuery = focusQuery(target.workspace)
-		const navigate = navQuery ? FOCUS_WORKSPACE_STEPS : ''
-		// Paste beats keystroke for long/multibyte prompts. Stash the clipboard,
-		// focus the target workspace, paste, send, and restore.
-		// After the palette navigates to the workspace, focus lands on a button, not
-		// the composer — so Cmd+L (Conductor's "focus the composer" shortcut) is the
-		// load-bearing step that puts the caret in the prompt box before we paste.
+		// Focus the target workspace, select its chat tab, fill the composer, send.
+		// Filling is an Accessibility write (no keystrokes, no clipboard); the
+		// clipboard paste is kept only as a fallback, and stashes/restores around it.
 		const script = `
-set savedClipboard to the clipboard
+${SELECT_CHAT_TAB_HANDLERS}
+
 tell application "Conductor" to activate
 delay 0.4
-tell application "System Events"${navigate}
-	set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
-	keystroke "l" using {command down}
-	delay 0.3
-	keystroke "v" using {command down}
-	delay 0.15
+my focusWorkspace()
+my selectChatTab()
+set promptText to my normalizeNewlines(do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
+if not (my fillComposer(promptText)) then
+	set savedClipboard to the clipboard
+	my pasteComposer()
+	delay 0.1
+	set the clipboard to savedClipboard
+end if
+tell application "System Events"
 	key code 36
 end tell
-delay 0.1
-set the clipboard to savedClipboard
 `.trim()
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
 		const os = await import('node:os')
@@ -128,19 +688,103 @@ set the clipboard to savedClipboard
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
 			await exec('osascript', ['-e', script], {
-				env: { ...process.env, RELAY_PROMPT_FILE: tmp, RELAY_WS_QUERY: navQuery },
-				timeout: 15000
+				env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
+				timeout: 20000
 			})
 			return { ok: true, strategy: this.name }
 		} catch (err) {
-			return {
-				ok: false,
-				strategy: this.name,
-				error: err instanceof Error ? err.message : String(err)
-			}
+			return { ok: false, strategy: this.name, error: osaError(err) }
 		} finally {
 			await fs.rm(tmp, { force: true }).catch(() => undefined)
 		}
+	}
+}
+
+/**
+ * Conductor stores the effort level as `sessions.claude_effort_level`, but the
+ * composer button is labelled with the human name and *cycles* through them in
+ * this order. Both directions are needed: the label to press toward, and the DB
+ * value to confirm against.
+ */
+export const EFFORT_LABELS: Record<string, string> = {
+	low: 'Low',
+	medium: 'Medium',
+	high: 'High',
+	xhigh: 'Extra high',
+	max: 'Max',
+	ultracode: 'Ultracode'
+}
+
+/** What a phone can change about the agent before (or instead of) sending a prompt. */
+export interface AgentOptions {
+	/** A `claude_effort_level` value (low…ultracode), not the UI label. */
+	effort?: string
+	plan?: boolean
+	/** Fast mode exposes no readable state, so pass `true` only when it must flip. */
+	toggleFast?: boolean
+	/** The model picker's menu label, e.g. "Opus 5" or "Sonnet 4.6". */
+	model?: string
+}
+
+/**
+ * Apply agent settings to a specific chat: focus its workspace and tab (same
+ * verified path as a send), then drive the composer's own controls. Every step
+ * confirms the control landed on the requested value and errors out otherwise,
+ * so a half-applied change is reported rather than assumed.
+ */
+export async function setAgentOptions(target: SendTarget, opts: AgentOptions): Promise<SendResult> {
+	if (opts.effort && !EFFORT_LABELS[opts.effort]) {
+		return { ok: false, strategy: 'applescript', error: `unknown effort level ${opts.effort}` }
+	}
+	const script = `
+${SELECT_CHAT_TAB_HANDLERS}
+
+tell application "Conductor" to activate
+delay 0.4
+my focusWorkspace()
+my selectChatTab()
+my applyAgentOptions()
+return "ok"`.trim()
+	try {
+		await exec('osascript', ['-e', script], {
+			env: {
+				...process.env,
+				...targetEnv(target),
+				RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
+				RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
+				RELAY_SET_FAST: opts.toggleFast ? '1' : '',
+				RELAY_SET_MODEL: opts.model ?? ''
+			},
+			timeout: 25000
+		})
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/** The model labels Conductor is currently offering, read off the live picker. */
+export async function listAgentModels(target: SendTarget): Promise<{ ok: boolean; models?: string[]; error?: string }> {
+	const script = `
+${SELECT_CHAT_TAB_HANDLERS}
+
+tell application "Conductor" to activate
+delay 0.4
+my focusWorkspace()
+my selectChatTab()
+return my listModels()`.trim()
+	try {
+		const { stdout } = await exec('osascript', ['-e', script], {
+			env: { ...process.env, ...targetEnv(target) },
+			timeout: 25000
+		})
+		const models = stdout
+			.split('\n')
+			.map(s => s.trim())
+			.filter(Boolean)
+		return { ok: true, models }
+	} catch (err) {
+		return { ok: false, error: osaError(err) }
 	}
 }
 
@@ -150,22 +794,24 @@ set the clipboard to savedClipboard
  * caller detects the freshly-created session id from the DB.
  */
 export async function newChat(workspace: Workspace): Promise<SendResult> {
-	const navQuery = focusQuery(workspace)
-	if (!navQuery) return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
+	if (!focusQuery(workspace)) return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
 	const script = `
+${SELECT_CHAT_TAB_HANDLERS}
+
 tell application "Conductor" to activate
 delay 0.4
-tell application "System Events"${FOCUS_WORKSPACE_STEPS}
+my focusWorkspace()
+tell application "System Events"
 	keystroke "t" using {command down}
 end tell`.trim()
 	try {
 		await exec('osascript', ['-e', script], {
-			env: { ...process.env, RELAY_WS_QUERY: navQuery },
+			env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
 			timeout: 15000
 		})
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
-		return { ok: false, strategy: 'applescript', error: err instanceof Error ? err.message : String(err) }
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
 	}
 }
 

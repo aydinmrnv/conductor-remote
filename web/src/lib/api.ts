@@ -1,6 +1,9 @@
 import type {
+	AgentPatch,
+	AgentResult,
 	MergeResult,
 	MessagesResponse,
+	ModelsResult,
 	NewChatResult,
 	SendResult,
 	SessionsResponse,
@@ -132,6 +135,20 @@ export const client = {
 		api<NewChatResult>(
 			`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`,
 			{ method: 'POST' },
+			ACTION_TIMEOUT_MS
+		),
+	/** Change a chat's model / effort / plan / fast via Conductor's own composer controls. */
+	setAgent: (sessionId: string, patch: AgentPatch, workspaceId: string) =>
+		api<AgentResult>(
+			`/api/sessions/${encodeURIComponent(sessionId)}/agent`,
+			{ method: 'POST', body: JSON.stringify({ ...patch, workspaceId }) },
+			ACTION_TIMEOUT_MS
+		),
+	/** Model labels read off Conductor's live picker (it briefly opens the menu). */
+	models: (sessionId: string, workspaceId: string) =>
+		api<ModelsResult>(
+			`/api/sessions/${encodeURIComponent(sessionId)}/models?workspaceId=${encodeURIComponent(workspaceId)}`,
+			{},
 			ACTION_TIMEOUT_MS
 		),
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
