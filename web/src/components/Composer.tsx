@@ -89,7 +89,9 @@ export function Composer({
 					value={text}
 					disabled={disabled}
 					placeholder={disabled ? 'No active session' : 'Send a prompt…'}
-					className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[15px] outline-none placeholder:text-faint disabled:opacity-50"
+					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
+					// takes focus, and never zooms back out on blur.
+					className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-base outline-none placeholder:text-faint disabled:opacity-50"
 					onChange={e => edit(e.target.value)}
 					onKeyDown={e => {
 						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {

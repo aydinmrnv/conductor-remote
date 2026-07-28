@@ -49,6 +49,20 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 		atBottom.current = true
 	}, [sessionId])
 
+	// The scroller shrinks when the software keyboard opens (useVisualViewportHeight
+	// resizes the whole column) and when the composer autogrows. Without this, its
+	// scrollTop stays put and the newest messages slide out of view behind the
+	// composer — re-pin instead, for anyone who was reading the bottom.
+	useEffect(() => {
+		const el = scroller.current
+		if (!el) return
+		const ro = new ResizeObserver(() => {
+			if (atBottom.current) el.scrollTop = el.scrollHeight
+		})
+		ro.observe(el)
+		return () => ro.disconnect()
+	}, [])
+
 	if (!sessionId) return <Empty>No active session in this workspace.</Empty>
 
 	const empty = entries.length === 0 && visiblePending.length === 0

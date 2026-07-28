@@ -276,3 +276,10 @@
 .pb-safe {
 	padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
 }
+/* With the keyboard up (data-keyboard, set by useVisualViewportHeight) the app's
+   bottom edge is the top of the keyboard, not the screen — the home indicator is
+   behind the keyboard, so reserving its inset just floats the composer on a dead
+   band. Drop back to the plain padding. */
+html[data-keyboard] .pb-safe {
+	padding-bottom: 0.5rem;
+}

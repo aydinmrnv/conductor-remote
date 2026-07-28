@@ -52,7 +52,8 @@ export function TokenGate() {
 					}}
 					placeholder="Paste token or URL"
 					aria-label="Access token or URL"
-					className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-center font-mono text-sm text-text placeholder:font-sans placeholder:text-faint"
+					// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
+					className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-center font-mono text-base text-text placeholder:font-sans placeholder:text-faint"
 				/>
 				<button type="submit" className="pill pill-active justify-center py-2.5">
 					Connect

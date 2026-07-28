@@ -106,6 +106,8 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 	}, [drawerRef, setSidebarOpen])
 }
 
+const EDITABLE = 'input, textarea, [contenteditable]:not([contenteditable="false"])'
+
 /**
  * Shrink the layout to fit above the iOS software keyboard — but *only* while the
  * keyboard is actually up. On iOS, `dvh`/`vh` ignore the keyboard (only
@@ -117,33 +119,77 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
  * ends the app above the physical bottom (the exact regression #24 fixed).
  *
  * So we only write `--app-height` (read by html/body/#root in index.css) when the
- * keyboard is up — detected by the visual viewport dropping well below the layout
- * viewport (`innerHeight`, keyboard-independent in standalone). Otherwise we clear
- * it and let `100dvh` fill the whole screen. Forcing residual page scroll back to
- * 0 kills the leftover offset iOS leaves behind on dismiss.
+ * keyboard is up; otherwise we clear it and let `100dvh` fill the whole screen.
+ * Three things decide "keyboard is up", because a bare `innerHeight - vv.height`
+ * threshold answered it wrong in both directions:
+ *
+ * 1. **A text field must be focused.** This is the ground truth iOS gives us, and
+ *    it's what makes dismissal reliable: `focusout` clears the override on the
+ *    spot instead of waiting for a resize event iOS may report late, mid-animation,
+ *    or (on a swipe-to-dismiss) not at all. That stranded the app at keyboard
+ *    height after the field closed.
+ * 2. **The page must not be zoomed.** iOS auto-zooms on focusing a sub-16px field
+ *    and does *not* zoom back out on blur; a zoom shrinks `vv.height` exactly like
+ *    a keyboard does, so the old check locked the app into the zoomed box forever.
+ *    (The fields are all ≥16px now so the auto-zoom shouldn't fire, but a pinch
+ *    must not be able to resurrect this.)
+ * 3. **The drop is measured against the resting height, not `innerHeight`.** The
+ *    resting gap is a per-device safe-area inset, so a fixed 120px threshold was a
+ *    guess; sampling `vv.height` whenever nothing is focused calibrates it live.
+ *
+ * The height also adds `vv.offsetTop` — when iOS shifts the layout viewport under
+ * a fixed visual one, that's how much further down the column must reach for its
+ * bottom edge to meet the top of the keyboard. Forcing residual page scroll back
+ * to 0 kills the leftover offset iOS leaves behind on dismiss.
  */
 export function useVisualViewportHeight() {
 	useEffect(() => {
 		const vv = window.visualViewport
 		if (!vv) return
 		const root = document.documentElement
+		// Visual-viewport height with no keyboard up, measured rather than assumed.
+		let rest = 0
+		const clear = () => {
+			root.style.removeProperty('--app-height') // no keyboard → 100dvh fills the screen
+			root.removeAttribute('data-keyboard')
+		}
 		const apply = () => {
-			// Gap between the layout viewport and the visual viewport ≈ keyboard height.
-			// A small resting gap (home-indicator inset, URL chrome) stays under the
-			// threshold; only a real keyboard (~250–350px) clears it.
-			const keyboardInset = window.innerHeight - vv.height
-			if (keyboardInset > 120) root.style.setProperty('--app-height', `${Math.round(vv.height)}px`)
-			else root.style.removeProperty('--app-height') // no keyboard → 100dvh fills the screen
+			const el = document.activeElement
+			const typing = el instanceof HTMLElement && el.matches(EDITABLE)
+			const zoomed = vv.scale > 1.01
+			if (!typing || zoomed) {
+				if (!zoomed) rest = vv.height
+				clear()
+			} else if ((rest || window.innerHeight) - vv.height > 40) {
+				root.style.setProperty('--app-height', `${Math.round(vv.height + vv.offsetTop)}px`)
+				root.setAttribute('data-keyboard', '')
+			} else {
+				clear()
+			}
 			// The column always fits the visible area, so any page scroll is iOS's
 			// keyboard residual — undo it.
 			if (window.scrollY !== 0) window.scrollTo(0, 0)
 		}
+		// Focus changes land before iOS has resized anything, so also re-check once the
+		// keyboard animation has settled.
+		let settle: ReturnType<typeof setTimeout>
+		const onFocusChange = () => {
+			apply()
+			clearTimeout(settle)
+			settle = setTimeout(apply, 350)
+		}
 		apply()
 		vv.addEventListener('resize', apply)
 		vv.addEventListener('scroll', apply)
+		document.addEventListener('focusin', onFocusChange)
+		document.addEventListener('focusout', onFocusChange)
 		return () => {
+			clearTimeout(settle)
 			vv.removeEventListener('resize', apply)
 			vv.removeEventListener('scroll', apply)
+			document.removeEventListener('focusin', onFocusChange)
+			document.removeEventListener('focusout', onFocusChange)
+			clear()
 		}
 	}, [])
 }
