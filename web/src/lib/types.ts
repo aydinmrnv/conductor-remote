@@ -111,6 +111,29 @@ export interface ModelsResult {
 	error?: string
 }
 
+export interface Repo {
+	name: string
+	/** Absolute checkout path — what the create-workspace deep link targets. */
+	root_path: string | null
+	default_branch: string | null
+	icon: RepoIcon | null
+}
+
+export interface ReposResponse {
+	repos: Repo[]
+}
+
+export interface CreateWorkspaceResult {
+	ok: boolean
+	workspaceId?: string
+	workspace?: Workspace
+	/** Echoed back so the caller can submit it once the worktree is ready. */
+	pendingPrompt?: string
+	sent?: boolean
+	warning?: string
+	error?: string
+}
+
 export interface SessionsResponse {
 	sessions: Session[]
 }

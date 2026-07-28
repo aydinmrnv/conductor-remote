@@ -14,6 +14,25 @@ Two asymmetric halves — keep them separate:
   `git` in each worktree. No Conductor process is involved, no injection. An app
   update can rename every UI string and reads keep working. Never add a write to
   the DB handle in `db.ts`.
+- **Creating a workspace is the one write that isn't fragile.** Conductor's
+  documented deep links (conductor.build/docs/reference/deep-links) are
+  `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and
+  `…async?repo=&plan=<base64>` — **all four create a *new* workspace**, none
+  focuses an existing one, so they can't replace the navigation above. But
+  `createWorkspace` (`POST /api/workspaces`) uses one to start work from the
+  phone with no Accessibility and no keystrokes at all. Two traps: parameters sit
+  *flat* after the scheme (not behind `?`) and must be URL-encoded (which is also
+  what stops a prompt containing `&path=` from moving the workspace), and **an
+  unmatched or absent `path` silently falls back to the first repo** — so the
+  relay resolves a real `repos.root_path` and 404s an unknown name. **`prompt` is
+  optional** — a bare `conductor://path=…` opens an empty workspace like
+  Conductor's own New workspace; that form is *undocumented* (every documented
+  route carries a prompt) but verified live, so suspect it first if creation
+  breaks. The link is fire-and-forget and only *pre-fills* the composer, so the
+  relay watches the DB for the new row and the PWA parks any prompt
+  (`web/src/lib/firstPrompt.ts`) until the worktree is `ready`, guarded on
+  `last_user_message_at` so it can't double-send. Don't block the request on
+  setup: it measured 30s+, past the phone's own 25s budget.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's

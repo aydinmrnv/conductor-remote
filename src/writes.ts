@@ -789,6 +789,47 @@ return my listModels()`.trim()
 }
 
 /**
+ * Create a *new workspace*, optionally with a first prompt, via Conductor's
+ * deep-link scheme (conductor.build/docs/reference/deep-links).
+ *
+ * This is the one write here that touches no UI at all: no Accessibility, no
+ * keystrokes, no focus dependency — macOS hands the URL to Conductor and it
+ * creates the worktree. Nothing to rebreak on an update, unlike every other
+ * path in this file.
+ *
+ * Three things the scheme dictates:
+ *  - Parameters sit *flat* after the scheme (`conductor://prompt=…&path=…`), not
+ *    behind a `?`, and every value must be URL-encoded — which is also what stops
+ *    a prompt containing `&path=` from redirecting the workspace to another repo.
+ *  - **An unmatched (or absent) `path` silently falls back to the first repo**, so
+ *    the caller resolves a real `root_path` first rather than trusting a name.
+ *  - **`prompt` is optional**: a bare `conductor://path=…` opens an empty
+ *    workspace, same as Conductor's own New workspace. That form isn't in the
+ *    docs (every documented route carries a prompt) but is verified against the
+ *    live app — so if it ever stops working, this is the line to suspect.
+ *
+ * The link is fire-and-forget: it reports that Conductor was *handed* the URL,
+ * never that a workspace appeared. The caller watches the DB for that.
+ */
+export async function createWorkspace(prompt: string, repoPath: string | null): Promise<SendResult> {
+	if (!prompt.trim() && !repoPath) {
+		return { ok: false, strategy: 'deeplink', error: 'a new workspace needs a repo or a first prompt' }
+	}
+	const query = [
+		prompt.trim() ? `prompt=${encodeURIComponent(prompt)}` : '',
+		repoPath ? `path=${encodeURIComponent(repoPath)}` : ''
+	]
+		.filter(Boolean)
+		.join('&')
+	try {
+		await exec('open', [`conductor://${query}`], { timeout: 15000 })
+		return { ok: true, strategy: 'deeplink' }
+	} catch (err) {
+		return { ok: false, strategy: 'deeplink', error: osaError(err) }
+	}
+}
+
+/**
  * Open a new chat in the target workspace — Conductor's "New chat, same files"
  * (Cmd+T). Focuses the workspace first (command palette → branch), then Cmd+T; the
  * caller detects the freshly-created session id from the DB.

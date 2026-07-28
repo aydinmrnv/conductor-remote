@@ -1,24 +1,23 @@
-import { ChevronDown, QrCode, SlidersHorizontal, X } from 'lucide-react'
+import { ChevronDown, Plus, QrCode, SlidersHorizontal, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useRepoIcon, useWorkspaces } from '../hooks.ts'
+import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	isSettingUp,
 	relativeTime,
-	repoMonogram,
 	STATUS_ORDER,
 	shortModel,
 	workspaceLabel,
 	workspaceStatus,
 	workspaceStatusLabel
 } from '../lib/format.ts'
-import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
 import type { Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
-import { Badge, Chip, Empty, Spinner, StatusDot } from './ui.tsx'
+import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
+import { Badge, Chip, Empty, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
@@ -66,6 +65,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const toggleGroup = useApp(s => s.toggleGroup)
 	const [controlsOpen, setControlsOpen] = useState(false)
 	const [connectOpen, setConnectOpen] = useState(false)
+	const [newOpen, setNewOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
@@ -93,6 +93,14 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					subtitle={subtitle}
 					right={
 						<>
+							<button
+								type="button"
+								onClick={() => setNewOpen(true)}
+								aria-label="New workspace"
+								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+							>
+								<Plus size={20} />
+							</button>
 							<button
 								type="button"
 								onClick={() => setControlsOpen(o => !o)}
@@ -181,6 +189,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				)}
 			</nav>
 			{connectOpen ? <ConnectSheet version={data?.version} onClose={() => setConnectOpen(false)} /> : null}
+			{newOpen ? <NewWorkspaceSheet onClose={() => setNewOpen(false)} /> : null}
 		</div>
 	)
 }
@@ -279,77 +288,13 @@ function ViewSelect({
 	)
 }
 
-const AVATAR_TILE = 'grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 font-semibold text-muted'
-
-/**
- * Repo avatar, mirroring Conductor's resolution: an emoji or named glyph the user
- * picked, else the repo's own icon file, else the GitHub owner's avatar, else a
- * letter monogram. `failed` demotes a broken image (missing file / avatar) to the
- * monogram.
- */
-function RepoAvatar({ w }: { w: Workspace }) {
-	const { icon } = w
-	const monogram = <div className={cn(AVATAR_TILE, 'text-xs')}>{repoMonogram(w)}</div>
-	if (!icon) return monogram
-
-	if (icon.kind === 'emoji') return <div className={cn(AVATAR_TILE, 'text-lg leading-none')}>{icon.value}</div>
-
-	if (icon.kind === 'named') {
-		const Glyph = LUCIDE_ICONS[icon.value]
-		return Glyph ? (
-			<div className={AVATAR_TILE}>
-				<Glyph size={18} className="text-muted" />
-			</div>
-		) : (
-			monogram
-		)
-	}
-
-	// GitHub owner avatar: public, external, no token — loads straight from github.com.
-	if (icon.kind === 'github')
-		return (
-			<ImgTile
-				src={`https://github.com/${encodeURIComponent(icon.owner)}.png?size=64`}
-				fit="cover"
-				fallback={monogram}
-			/>
-		)
-
-	// Relay-served repo file: fetched with the auth header (token stays out of the URL). Monogram until then.
-	return <RepoFileIcon repoName={w.repo_name} fallback={monogram} />
-}
-
-/** A raster avatar tile that falls back to the monogram if the image fails to load. */
-function ImgTile({ src, fit, fallback }: { src: string; fit: 'cover' | 'contain'; fallback: ReactNode }) {
-	const [failed, setFailed] = useState(false)
-	if (failed) return <>{fallback}</>
-	return (
-		<div className={AVATAR_TILE}>
-			<img
-				src={src}
-				alt=""
-				loading="lazy"
-				className={cn('size-full', fit === 'cover' ? 'object-cover' : 'object-contain')}
-				onError={() => setFailed(true)}
-			/>
-		</div>
-	)
-}
-
-/** Repo icon served by the relay, fetched with the auth header. Shows the monogram while loading or on error. */
-function RepoFileIcon({ repoName, fallback }: { repoName: string | null; fallback: ReactNode }) {
-	const { data, isError } = useRepoIcon(repoName)
-	if (!repoName || isError || !data) return <>{fallback}</>
-	return <ImgTile src={data} fit="contain" fallback={fallback} />
-}
-
 function WorkspaceCard({ w, selected }: { w: Workspace; selected: boolean }) {
 	const model = shortModel(w.model)
 	const ctx = w.context_used_percent
 	return (
 		<>
 			<div className="relative shrink-0 self-start">
-				<RepoAvatar w={w} />
+				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceLabel(w)} />
 				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 ring-2 ring-surface" />
 			</div>
 			<div className="min-w-0 flex-1 overflow-hidden">
