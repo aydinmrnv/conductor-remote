@@ -37,7 +37,14 @@ export interface SessionRow {
 	status: string | null
 	title: string | null
 	model: string | null
+	/** 'plan' when the chat is in plan mode, else 'default'. */
 	permission_mode: string | null
+	/** low | medium | high | xhigh | max | ultracode (null for non-Claude agents). */
+	claude_effort_level: string | null
+	/** 1 when Conductor's "Fast" toggle is on. */
+	fast_mode: number | null
+	/** claude | codex | cursor | acp — the agent family `model` belongs to. */
+	agent_type: string | null
 	context_used_percent: number | null
 	unread_count: number | null
 	created_at: string
@@ -154,7 +161,8 @@ export class Reads {
 	listSessions(workspaceId: string): SessionRow[] {
 		// created_at ASC keeps tab order stable (matches the desktop app) instead of jumping on activity.
 		return this.db.query<SessionRow>(
-			`SELECT id, status, title, model, permission_mode, context_used_percent, unread_count,
+			`SELECT id, status, title, model, permission_mode, claude_effort_level, fast_mode, agent_type,
+			        context_used_percent, unread_count,
 			        created_at, updated_at, last_user_message_at
 			 FROM sessions
 			 WHERE workspace_id = ? AND COALESCE(is_hidden, 0) = 0

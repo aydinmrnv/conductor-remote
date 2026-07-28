@@ -76,12 +76,39 @@ export interface Session {
 	status: string | null
 	title: string | null
 	model: string | null
+	/** 'plan' when the chat is in plan mode, else 'default'. */
 	permission_mode: string | null
+	/** low | medium | high | xhigh | max | ultracode (null for non-Claude agents). */
+	claude_effort_level: string | null
+	/** 1 when Conductor's "Fast" toggle is on. */
+	fast_mode: number | null
+	/** claude | codex | cursor | acp — the agent family `model` belongs to. */
+	agent_type: string | null
 	context_used_percent: number | null
 	unread_count: number | null
 	created_at: string
 	updated_at: string
 	last_user_message_at: string | null
+}
+
+/** What the phone can change about a chat's agent (mirrors `AgentOptions` in src/writes.ts). */
+export interface AgentPatch {
+	effort?: string
+	plan?: boolean
+	fast?: boolean
+	model?: string
+}
+
+export interface AgentResult {
+	ok: boolean
+	session?: Session
+	error?: string
+}
+
+export interface ModelsResult {
+	ok: boolean
+	models?: string[]
+	error?: string
 }
 
 export interface SessionsResponse {
