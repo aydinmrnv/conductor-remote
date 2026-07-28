@@ -115,7 +115,8 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					rows={6}
 					// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
 					autoFocus
-					className="w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-[15px] outline-none placeholder:text-faint"
+					// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
+					className="w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-base outline-none placeholder:text-faint"
 				/>
 				{error ? <div className="text-xs text-del">{error}</div> : null}
 			</div>
