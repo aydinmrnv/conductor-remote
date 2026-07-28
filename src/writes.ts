@@ -88,44 +88,58 @@ const FOCUS_WORKSPACE_STEPS = `
 	delay 1.3`
 
 /**
- * AppleScript handlers that pick a *chat tab* inside the focused workspace.
+ * AppleScript handlers that pin down *which chat* the prompt goes to.
  *
  * The palette (Cmd+K) only gets us to the right workspace — a workspace holds
  * several chats, and Conductor keeps typing in whichever tab is already active.
  * So a send addressed to a non-active chat would land in the wrong agent.
  *
- * Conductor's webview exposes the strip through macOS Accessibility: an
- * AXTabGroup whose AXRadioButtons are the tabs (`AXValue` marks the selected
- * one, `AXPress` switches to it — it does *not* close the chat). The strip's
- * order matches `reads.listSessions` (created_at ASC), so the caller addresses
- * a tab by 1-based index and we cross-check the label before pressing.
+ * Conductor's webview exposes the whole tree through macOS Accessibility. The
+ * chat strip is an AXTabGroup whose AXRadioButtons are the tabs (`AXValue`
+ * marks the selected one, `AXPress` switches to it — it does *not* close the
+ * chat). The strip's order matches `reads.listSessions` (created_at ASC), so
+ * the caller addresses a tab by 1-based index and we cross-check the label.
  *
- * Target is read from RELAY_TAB_{INDEX,COUNT,TITLE}; index 0 disables the step.
- * Every failure path errors out so the caller aborts *before* pasting — landing
- * in the wrong chat is worse than not sending.
+ * Two traps this has to survive:
+ *  - **The terminal panel is an AXTabGroup too** (radio buttons named Setup /
+ *    Run / Terminal 1), a sibling of the chat strip in the same pane. Picking
+ *    "the first tab group" would sometimes press a terminal tab, so we *score*
+ *    the candidates on tab count + label and refuse to act on a tie.
+ *  - **The palette can land on the wrong workspace** (a loose query matches a
+ *    command; a deleted branch opens a modal). The pane header carries the
+ *    branch and repo, so we read them back and bail if they disagree.
+ *
+ * Target is read from RELAY_TAB_{INDEX,COUNT,TITLE} + RELAY_WS_{BRANCH,REPO};
+ * index 0 disables the step. Every failure path errors out so the caller aborts
+ * *before* pasting — landing in the wrong chat is worse than not sending.
  */
 const SELECT_CHAT_TAB_HANDLERS = `
-on findTabGroup()
+on tabGroups()
+	-- Level-order search, returning every tab group at the shallowest depth that
+	-- has one (the chat strip and the terminal strip are siblings). Bounded: the
+	-- pane sits ~5 levels down, and we must never descend into the transcript.
 	tell application "System Events" to tell process "Conductor"
-		set queue to {window 1}
-		set visited to 0
-		repeat while (count of queue) > 0 and visited < 120
-			set node to item 1 of queue
-			if (count of queue) > 1 then
-				set queue to items 2 thru -1 of queue
-			else
-				set queue to {}
-			end if
-			set visited to visited + 1
-			try
-				set hits to (UI elements of node whose role is "AXTabGroup")
-				if (count of hits) > 0 then return item 1 of hits
-				set queue to queue & (UI elements of node)
-			end try
+		set level to {window 1}
+		set depth to 0
+		repeat while (count of level) > 0 and depth < 8
+			set found to {}
+			set nextLevel to {}
+			repeat with entry in level
+				set node to contents of entry
+				try
+					repeat with h in (UI elements of node whose role is "AXTabGroup")
+						set end of found to contents of h
+					end repeat
+					set nextLevel to nextLevel & (UI elements of node)
+				end try
+			end repeat
+			if (count of found) > 0 then return found
+			set level to nextLevel
+			set depth to depth + 1
 		end repeat
 	end tell
-	return missing value
-end findTabGroup
+	return {}
+end tabGroups
 
 on chatTabs(tg)
 	tell application "System Events" to tell process "Conductor"
@@ -141,18 +155,171 @@ on chatTabs(tg)
 	end tell
 end chatTabs
 
+on tabLabel(t)
+	tell application "System Events" to tell process "Conductor"
+		return (name of t) as text
+	end tell
+end tabLabel
+
+on pickChatStrip(strips, wantCount, wantTitle)
+	-- Score each candidate strip: a label match outweighs a tab-count match, and
+	-- a tie means we cannot tell the chat strip from the terminal strip.
+	set best to missing value
+	set bestTabs to {}
+	set bestScore to 0
+	set tied to false
+	repeat with entry in strips
+		set tg to contents of entry
+		set strip to my chatTabs(tg)
+		set score to 0
+		if wantCount > 0 and (count of strip) is wantCount then set score to score + 1
+		if wantTitle is not "" then
+			repeat with t in strip
+				if (my tabLabel(t)) contains wantTitle then
+					set score to score + 2
+					exit repeat
+				end if
+			end repeat
+		end if
+		if score > bestScore then
+			set bestScore to score
+			set best to tg
+			set bestTabs to strip
+			set tied to false
+		else if score is bestScore and score > 0 then
+			set tied to true
+		end if
+	end repeat
+	if bestScore is 0 then error "couldn't identify the chat tab strip"
+	if tied then error "can't tell which tab strip holds the target chat"
+	return {best, bestTabs}
+end pickChatStrip
+
+on lastPathSegment(s)
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of s
+	set AppleScript's text item delimiters to saved
+	return item -1 of parts
+end lastPathSegment
+
+on paneLabels(tg, wantRole)
+	-- Kept out of the caller's scope on purpose: inside a System Events tell,
+	-- ordinary-looking names (tabs, count) resolve as app terms instead of vars.
+	tell application "System Events" to tell process "Conductor"
+		set pane to value of attribute "AXParent" of tg
+		return (name of (UI elements of pane whose role is wantRole))
+	end tell
+end paneLabels
+
+on anyContains(haystack, needle)
+	repeat with entry in haystack
+		try
+			if (entry as text) contains needle then return true
+		end try
+	end repeat
+	return false
+end anyContains
+
+on assertWorkspace(tg)
+	-- The pane holding the chat strip also labels the open workspace: an
+	-- AXStaticText with the branch (sans owner prefix) and a repo popup button.
+	set wantBranch to system attribute "RELAY_WS_BRANCH"
+	if wantBranch is "" then return
+	set tail to my lastPathSegment(wantBranch)
+	if not (my anyContains(my paneLabels(tg, "AXStaticText"), tail)) then
+		error "the palette didn't land on " & tail
+	end if
+	set wantRepo to system attribute "RELAY_WS_REPO"
+	if wantRepo is not "" then
+		if not (my anyContains(my paneLabels(tg, "AXPopUpButton"), wantRepo)) then
+			error "the palette didn't land in " & wantRepo
+		end if
+	end if
+end assertWorkspace
+
+on normalizeNewlines(s)
+	-- "do shell script" hands back CR-delimited text; the composer reads back LF.
+	-- Without this the verification below never matches a multi-line prompt.
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to return
+	set parts to text items of s
+	set AppleScript's text item delimiters to linefeed
+	set joined to parts as text
+	set AppleScript's text item delimiters to saved
+	return joined
+end normalizeNewlines
+
+on fillComposer(promptText)
+	-- Write the prompt straight into the composer's AXTextArea instead of
+	-- stashing the clipboard, pressing Cmd+L and pasting. AXFocused and AXValue
+	-- are both settable, so this needs no keystrokes and no clipboard hijack.
+	-- Returns false (→ caller falls back to pasting) if anything looks off, but
+	-- *clears whatever it wrote first*: leaving half a prompt behind would make
+	-- the fallback paste append to it and send a garbled prompt.
+	if promptText is "" then return false
+	set strips to my tabGroups()
+	if (count of strips) is 0 then return false
+	try
+		tell application "System Events" to tell process "Conductor"
+			set pane to value of attribute "AXParent" of (item 1 of strips)
+			set composerBox to item 1 of (UI elements of pane whose name is "composer")
+			set textBox to item 1 of (UI elements of composerBox whose role is "AXTextArea")
+			set value of attribute "AXFocused" of textBox to true
+			set value of textBox to promptText
+			delay 0.25
+			if ((value of textBox) as text) does not contain promptText then
+				set value of textBox to ""
+				return false
+			end if
+		end tell
+	on error
+		try
+			my clearComposer()
+		end try
+		return false
+	end try
+	return true
+end fillComposer
+
+on clearComposer()
+	set strips to my tabGroups()
+	if (count of strips) is 0 then return
+	tell application "System Events" to tell process "Conductor"
+		set pane to value of attribute "AXParent" of (item 1 of strips)
+		set composerBox to item 1 of (UI elements of pane whose name is "composer")
+		set value of (item 1 of (UI elements of composerBox whose role is "AXTextArea")) to ""
+	end tell
+end clearComposer
+
+on pasteComposer()
+	-- Fallback for when the composer isn't reachable: Cmd+L focuses it (after the
+	-- palette, focus sits on a button, not the text box), then paste.
+	tell application "System Events"
+		set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
+		keystroke "l" using {command down}
+		delay 0.3
+		keystroke "v" using {command down}
+		delay 0.15
+	end tell
+end pasteComposer
+
 on selectChatTab()
 	set wantIndex to (system attribute "RELAY_TAB_INDEX") as integer
 	if wantIndex is 0 then return
 	set wantCount to (system attribute "RELAY_TAB_COUNT") as integer
 	set wantTitle to system attribute "RELAY_TAB_TITLE"
-	set tg to my findTabGroup()
-	if tg is missing value then
+	set strips to my tabGroups()
+	if (count of strips) is 0 then
 		-- A lone chat has no ambiguity to resolve; more than one and we must not guess.
 		if wantCount <= 1 then return
 		error "couldn't find the chat tab strip"
 	end if
-	set tabs to my chatTabs(tg)
+	-- Assert the workspace first: every strip lives in the same pane, so this
+	-- reports "wrong workspace" rather than a confusing "no chat strip".
+	my assertWorkspace(item 1 of strips)
+	set picked to my pickChatStrip(strips, wantCount, wantTitle)
+	set tabs to item 2 of picked
 	tell application "System Events" to tell process "Conductor"
 		set target to missing value
 		if wantIndex <= (count of tabs) then
@@ -183,12 +350,14 @@ function focusQuery(ws: Workspace): string {
 	return ws.branch || ws.workspace_name || ws.directory_name || ''
 }
 
-/** The tab target rides in on the environment, like RELAY_WS_QUERY, to dodge AppleScript escaping. */
-function tabEnv(tab: ChatTab | undefined): Record<string, string> {
+/** The target rides in on the environment, like RELAY_WS_QUERY, to dodge AppleScript escaping. */
+function targetEnv(target: SendTarget): Record<string, string> {
 	return {
-		RELAY_TAB_INDEX: String(tab?.index ?? 0),
-		RELAY_TAB_COUNT: String(tab?.count ?? 0),
-		RELAY_TAB_TITLE: tab?.title ?? ''
+		RELAY_TAB_INDEX: String(target.tab?.index ?? 0),
+		RELAY_TAB_COUNT: String(target.tab?.count ?? 0),
+		RELAY_TAB_TITLE: target.tab?.title ?? '',
+		RELAY_WS_BRANCH: target.workspace.branch ?? '',
+		RELAY_WS_REPO: target.workspace.repo_name ?? ''
 	}
 }
 
@@ -218,30 +387,27 @@ export class AppleScriptActuator implements Actuator {
 	async send(target: SendTarget, text: string): Promise<SendResult> {
 		const navQuery = focusQuery(target.workspace)
 		const navigate = navQuery ? FOCUS_WORKSPACE_STEPS : ''
-		// Paste beats keystroke for long/multibyte prompts. Stash the clipboard,
-		// focus the target workspace and chat tab, paste, send, and restore.
-		// After the palette navigates to the workspace, focus lands on a button, not
-		// the composer — so Cmd+L (Conductor's "focus the composer" shortcut) is the
-		// load-bearing step that puts the caret in the prompt box before we paste.
+		// Focus the target workspace, select its chat tab, fill the composer, send.
+		// Filling is an Accessibility write (no keystrokes, no clipboard); the
+		// clipboard paste is kept only as a fallback, and stashes/restores around it.
 		const script = `
 ${SELECT_CHAT_TAB_HANDLERS}
 
-set savedClipboard to the clipboard
 tell application "Conductor" to activate
 delay 0.4
 tell application "System Events"${navigate}
 end tell
 my selectChatTab()
+set promptText to my normalizeNewlines(do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
+if not (my fillComposer(promptText)) then
+	set savedClipboard to the clipboard
+	my pasteComposer()
+	delay 0.1
+	set the clipboard to savedClipboard
+end if
 tell application "System Events"
-	set the clipboard to (do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
-	keystroke "l" using {command down}
-	delay 0.3
-	keystroke "v" using {command down}
-	delay 0.15
 	key code 36
 end tell
-delay 0.1
-set the clipboard to savedClipboard
 `.trim()
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
 		const os = await import('node:os')
@@ -251,7 +417,7 @@ set the clipboard to savedClipboard
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
 			await exec('osascript', ['-e', script], {
-				env: { ...process.env, RELAY_PROMPT_FILE: tmp, RELAY_WS_QUERY: navQuery, ...tabEnv(target.tab) },
+				env: { ...process.env, RELAY_PROMPT_FILE: tmp, RELAY_WS_QUERY: navQuery, ...targetEnv(target) },
 				timeout: 20000
 			})
 			return { ok: true, strategy: this.name }
