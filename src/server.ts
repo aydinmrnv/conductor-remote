@@ -15,6 +15,7 @@ import { driftWarningLines, tailscaleBin } from './tailscale.ts'
 import {
 	type AgentOptions,
 	type ChatTab,
+	createWorkspace,
 	describeActuator,
 	EFFORT_LABELS,
 	listAgentModels,
@@ -78,6 +79,36 @@ async function confirmAgentOptions(ws: Workspace, sessionId: string, opts: Agent
 		await sleep(300)
 	}
 	return false
+}
+
+/**
+ * Send a freshly-created workspace's first prompt. Never fails the request: the
+ * workspace exists either way, so an unsent prompt is a `warning` (it's still
+ * pre-filled in Conductor's composer, one tap from going) rather than an error.
+ */
+async function submitFirstPrompt(workspaceId: string, prompt: string): Promise<{ sent: boolean; warning?: string }> {
+	// A new workspace is 'setting_up' while its worktree (and setup script) runs;
+	// its composer isn't the visible pane yet, so wait for 'ready' before typing.
+	let ws = reads.getWorkspace(workspaceId)
+	for (let attempt = 0; attempt < 60 && ws?.state !== 'ready'; attempt++) {
+		await sleep(500)
+		ws = reads.getWorkspace(workspaceId)
+	}
+	if (ws?.state !== 'ready') {
+		return { sent: false, warning: 'Workspace created; still setting up, so the prompt is pre-filled but not sent.' }
+	}
+	const located = locateChat(ws, reads.listSessions(workspaceId)[0]?.id ?? '')
+	const tab = 'error' in located ? undefined : located.tab
+	const sessionId = reads.listSessions(workspaceId)[0]?.id
+	if (!sessionId) return { sent: false, warning: 'Workspace created, but it has no chat yet — prompt is pre-filled.' }
+	const beforeRowid = reads.getMessages(sessionId).cursor
+	const result = await actuator.send({ workspace: ws, sessionId, tab }, prompt)
+	if (!result.ok)
+		return { sent: false, warning: `Workspace created; the prompt is pre-filled but wasn’t sent (${result.error}).` }
+	if (!(await confirmDelivery(sessionId, prompt, beforeRowid))) {
+		return { sent: false, warning: 'Workspace created; the prompt is pre-filled but didn’t land — send it again.' }
+	}
+	return { sent: true }
 }
 
 const MIME: Record<string, string> = {
@@ -193,6 +224,53 @@ const server = http.createServer(async (req, res) => {
 				actuator: await describeActuator(actuator),
 				version: update.current,
 				update
+			})
+		}
+
+		// GET /api/repos — repos a new workspace can be created in
+		if (req.method === 'GET' && pathname === '/api/repos') {
+			return json(req, res, 200, { repos: reads.listRepos() })
+		}
+
+		// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
+		if (req.method === 'POST' && pathname === '/api/workspaces') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
+			const prompt = (body.prompt ?? '').trim()
+			if (!prompt) return json(req, res, 400, { error: 'empty prompt' })
+			// Resolve the repo to a real path: an unmatched `path` would silently land
+			// the workspace in whichever repo Conductor happens to list first.
+			const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
+			if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
+			if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
+			const before = new Set(reads.listWorkspaces().map(w => w.id))
+			const result = await createWorkspace(prompt, repo?.root_path ?? null)
+			if (!result.ok) return json(req, res, 502, result)
+			// The deep link is fire-and-forget, so the new row is the only proof it worked.
+			// Creating a worktree takes a beat longer than opening a chat does.
+			let created: Workspace | undefined
+			for (let attempt = 0; attempt < 40 && !created; attempt++) {
+				await sleep(500)
+				created = reads.listWorkspaces().find(w => !before.has(w.id))
+			}
+			if (!created) {
+				return json(req, res, 502, {
+					ok: false,
+					strategy: result.strategy,
+					error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
+				})
+			}
+			// Return as soon as the row exists (~2s) and let the caller submit the prompt
+			// once the worktree is ready. Waiting here would block the request through
+			// Conductor's whole setup — measured at 30s+ on a real repo, past the phone's
+			// own 25s budget. `send:true` opts into the blocking path for API callers.
+			// Whatever happens, the prompt is already pre-filled in Conductor's composer.
+			const body2 = body.send === true ? await submitFirstPrompt(created.id, prompt) : { sent: false }
+			return json(req, res, 200, {
+				ok: true,
+				workspaceId: created.id,
+				workspace: reads.getWorkspace(created.id) ?? created,
+				pendingPrompt: prompt,
+				...body2
 			})
 		}
 

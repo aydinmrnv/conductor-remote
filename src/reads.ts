@@ -32,6 +32,15 @@ export interface WorkspaceRow {
 	context_used_percent: number | null
 }
 
+/** A repo Conductor can create workspaces in (see `Reads.listRepos`). */
+export interface RepoRow {
+	name: string
+	/** Absolute checkout path — the `path=` value a create-workspace deep link needs. */
+	root_path: string | null
+	default_branch: string | null
+	icon: RepoIcon | null
+}
+
 export interface SessionRow {
 	id: string
 	status: string | null
@@ -147,6 +156,32 @@ export class Reads {
 
 	getWorkspace(id: string): Workspace | null {
 		return this.listWorkspaces().find(w => w.id === id) ?? null
+	}
+
+	/**
+	 * The repos Conductor knows about, in its own sidebar order. `root_path` is
+	 * what a `conductor://…&path=` deep link needs to pick the target repo — with
+	 * no path Conductor silently falls back to the *first* repo.
+	 */
+	listRepos(): RepoRow[] {
+		const rows = this.db.query<{
+			name: string
+			root_path: string | null
+			default_branch: string | null
+			icon: string | null
+			remote_url: string | null
+		}>(
+			`SELECT name, root_path, default_branch, icon, remote_url
+			 FROM repos
+			 WHERE COALESCE(hidden, 0) = 0
+			 ORDER BY (display_order IS NULL), display_order, name`
+		)
+		return rows.map(r => ({
+			name: r.name,
+			root_path: r.root_path,
+			default_branch: r.default_branch,
+			icon: describeRepoIcon({ icon: r.icon, repoRoot: r.root_path, remoteUrl: r.remote_url })
+		}))
 	}
 
 	/** Resolve a repo's icon by its name (the sidebar avatar) — null if the repo or icon is unknown. */

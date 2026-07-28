@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Plus, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router'
-import { useSessions, useWorkspaces } from '../hooks.ts'
+import { useSendPrompt, useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { clearFirstPrompt, peekFirstPrompt } from '../lib/firstPrompt.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
-import type { Session } from '../lib/types.ts'
+import type { Session, Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
 import { Composer } from './Composer.tsx'
@@ -32,6 +33,16 @@ export function SessionView() {
 	const ws = data?.workspaces.find(w => w.id === workspaceId)
 	const actuator = data?.actuator
 
+	const sessions = sessionsData?.sessions ?? []
+	const sessionId =
+		(pickedSession && sessions.some(s => s.id === pickedSession) ? pickedSession : null) ??
+		ws?.active_session_id ??
+		sessions[0]?.id ??
+		null
+	const activeSession = sessions.find(s => s.id === sessionId)
+	// Above the early return: hooks must run in the same order on every render.
+	useFirstPrompt(ws, activeSession)
+
 	if (!ws) {
 		return (
 			<div className="flex h-full flex-col overflow-hidden">
@@ -41,15 +52,8 @@ export function SessionView() {
 		)
 	}
 
-	const sessions = sessionsData?.sessions ?? []
-	const sessionId =
-		(pickedSession && sessions.some(s => s.id === pickedSession) ? pickedSession : null) ??
-		ws.active_session_id ??
-		sessions[0]?.id ??
-		null
 	// A fresh send flips the indicator on instantly (the hint); the DB status poll
 	// confirms or, if the send never landed, the hint expires and it drops back off.
-	const activeSession = sessions.find(s => s.id === sessionId)
 	const workingHint = sessionId ? workingHints[sessionId] : undefined
 	const working =
 		activeSession?.status === 'working' || (workingHint !== undefined && Date.now() - workingHint < 15_000)
@@ -111,6 +115,28 @@ export function SessionView() {
 			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}
 		</div>
 	)
+}
+
+/**
+ * Send the parked first prompt of a workspace created from the phone, once its
+ * worktree has finished setting up and its chat exists.
+ *
+ * Guarded on `last_user_message_at` being null: if the prompt already went —
+ * because it was sent from the Mac, where the deep link left it pre-filled in the
+ * composer — this must not send it a second time. That also makes the parked
+ * prompt safe to survive a reload, since setup can outlast the app being open.
+ */
+function useFirstPrompt(ws: Workspace | undefined, session: Session | undefined) {
+	const sendPrompt = useSendPrompt()
+	const fired = useRef(false)
+	useEffect(() => {
+		if (fired.current || ws?.state !== 'ready' || !session || session.last_user_message_at) return
+		const text = peekFirstPrompt(ws.id)
+		if (!text) return
+		fired.current = true
+		clearFirstPrompt(ws.id)
+		sendPrompt({ sessionId: session.id, workspaceId: ws.id, text })
+	}, [ws?.id, ws?.state, session, sendPrompt])
 }
 
 /** Conductor workspaces can hold several sessions — render them as tabs like the desktop app,

@@ -1,10 +1,12 @@
 import type {
 	AgentPatch,
 	AgentResult,
+	CreateWorkspaceResult,
 	MergeResult,
 	MessagesResponse,
 	ModelsResult,
 	NewChatResult,
+	ReposResponse,
 	SendResult,
 	SessionsResponse,
 	StateResponse,
@@ -135,6 +137,19 @@ export const client = {
 		api<NewChatResult>(
 			`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`,
 			{ method: 'POST' },
+			ACTION_TIMEOUT_MS
+		),
+	/** Repos a new workspace can be created in. */
+	repos: () => api<ReposResponse>('/api/repos'),
+	/**
+	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
+	 * soon as the row exists — the worktree may still be setting up, so the caller
+	 * submits the prompt once the workspace is ready.
+	 */
+	createWorkspace: (repo: string, prompt: string) =>
+		api<CreateWorkspaceResult>(
+			'/api/workspaces',
+			{ method: 'POST', body: JSON.stringify({ repo, prompt }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Change a chat's model / effort / plan / fast via Conductor's own composer controls. */

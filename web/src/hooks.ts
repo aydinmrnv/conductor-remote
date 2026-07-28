@@ -180,6 +180,11 @@ export function useWorkspaces() {
 }
 
 /** All (non-hidden) sessions in a workspace — the desktop app's "tabs". */
+/** Repos Conductor knows about — static enough to fetch once per app load. */
+export function useRepos() {
+	return useQuery({ queryKey: ['repos'], queryFn: () => client.repos(), staleTime: 60_000 })
+}
+
 export function useSessions(workspaceId: string | undefined) {
 	const report = useOnline()
 	const query = useQuery({

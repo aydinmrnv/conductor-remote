@@ -21,6 +21,10 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
     (`AXTabGroup`), then writing the composer's `AXTextArea` directly. The same
     path can change the chat's model / effort / plan / fast
     (`POST /api/sessions/:id/agent`); values are read from the DB.
+  - **deep link** (workspace creation only): `POST /api/workspaces` fires
+    `conductor://prompt=…&path=…` — no Accessibility, no keystrokes. All four
+    documented deep-link routes *create* a workspace; none focuses an existing
+    one, so they can't replace Cmd+K/sidebar navigation.
   - `sidecar` (**opt-in**, `WRITE_STRATEGY=sidecar`): precise per-session send
     over Conductor's dispatch socket. Socket + local auth + JSON-RPC protocol
     **validated with safe read RPCs**; a real `query` send is implemented but not
@@ -83,7 +87,7 @@ web/              React PWA (Vite root)
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
   src/lib/        api client, types, format helpers, cn
   src/store.ts    zustand: token + connection status
-  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, ReloadPrompt, ui
+  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, NewWorkspaceSheet, ReloadPrompt, ui
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
