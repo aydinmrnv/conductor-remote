@@ -229,9 +229,20 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			// Where the target chat sits in Conductor's tab strip — the actuator selects it
+			// before typing, otherwise the prompt lands in whichever tab happens to be active.
+			const sessions = reads.listSessions(ws.id)
+			const tabIndex = sessions.findIndex(s => s.id === sessionId)
+			if (tabIndex < 0 && sessions.length > 1) {
+				return json(req, res, 409, { error: 'chat is no longer one of the workspace’s tabs' })
+			}
+			const tab =
+				tabIndex < 0
+					? undefined
+					: { index: tabIndex + 1, count: sessions.length, title: sessions[tabIndex].title ?? '' }
 			// Snapshot the transcript cursor so we can confirm the prompt actually lands.
 			const beforeRowid = reads.getMessages(sessionId).cursor
-			const result = await actuator.send({ workspace: ws, sessionId }, text)
+			const result = await actuator.send({ workspace: ws, sessionId, tab }, text)
 			if (result.ok && !(await confirmDelivery(sessionId, text, beforeRowid))) {
 				return json(req, res, 502, {
 					ok: false,

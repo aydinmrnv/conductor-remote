@@ -16,8 +16,9 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
   entries, diff vs target branch (incl. untracked), token auth (401 without),
   static PWA + SPA deep-link fallback, manifest + service worker + icons.
 - **Writes — two strategies behind the `Actuator` interface:**
-  - `applescript` (**default**): drives Conductor's real UI send → focused
-    session. Safe (reuses the session's own model/permission mode).
+  - `applescript` (**default**): drives Conductor's real UI send, targeting the
+    workspace (Cmd+K palette) *and* its chat tab (Accessibility `AXTabGroup`)
+    before typing. Safe (reuses the session's own model/permission mode).
   - `sidecar` (**opt-in**, `WRITE_STRATEGY=sidecar`): precise per-session send
     over Conductor's dispatch socket. Socket + local auth + JSON-RPC protocol
     **validated with safe read RPCs**; a real `query` send is implemented but not

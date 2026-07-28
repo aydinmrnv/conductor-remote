@@ -16,12 +16,21 @@ Two asymmetric halves — keep them separate:
   the DB handle in `db.ts`.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
-  - `applescript` (**default**): drives Conductor's real UI send, and is now
-    **precise** — before pasting it focuses the target workspace via the command
-    palette (Cmd+K → **branch name** → Enter), so the prompt lands in the right
-    session regardless of what was focused. The branch is the palette's unique
+  - `applescript` (**default**): drives Conductor's real UI send, and is
+    **precise in both axes** — before pasting it focuses the target *workspace*
+    via the command palette (Cmd+K → **branch name** → Enter) **and then selects
+    the target *chat tab*** inside it, so the prompt lands in the right session
+    regardless of what was focused. The branch is the palette's unique
     per-workspace key; a looser query can match a *command* (e.g. unarchive), so
-    `writes.ts` always types `workspace.branch`. No private protocol, nothing to
+    `writes.ts` always types `workspace.branch`. The palette only reaches the
+    workspace — a workspace holds several chats, so without the tab step every
+    prompt lands in whichever tab was already active. The tab step reads
+    Conductor's webview through **macOS Accessibility**: an `AXTabGroup` whose
+    `AXRadioButton`s are the tabs (`AXValue` = selected, `AXPress` = switch, it
+    does *not* close the chat), in the same order as `reads.listSessions`
+    (created_at ASC). It addresses a tab by index, cross-checks the label, and
+    **errors out rather than pasting** if it can't confirm the switch — landing
+    in the wrong agent is worse than not sending. No private protocol, nothing to
     rebreak on a Conductor update. Timing-tuned AppleScript delays are load-bearing.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
