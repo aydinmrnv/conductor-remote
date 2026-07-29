@@ -135,7 +135,21 @@ const EDITABLE = 'input, textarea, [contenteditable]:not([contenteditable="false
  *    must not be able to resurrect this.)
  * 3. **The drop is measured against the resting height, not `innerHeight`.** The
  *    resting gap is a per-device safe-area inset, so a fixed 120px threshold was a
- *    guess; sampling `vv.height` whenever nothing is focused calibrates it live.
+ *    guess; sampling `vv.height` whenever nothing is focused calibrates it live —
+ *    but only at plausible resting values: a blur lands *before* the keyboard has
+ *    animated away, so an unguarded sample poisoned `rest` with a keyboard-height
+ *    reading and the next focus measured "no drop" (composer left behind the
+ *    keyboard).
+ * 4. **The exit can't be event-driven alone.** Standalone iOS swallows the vv
+ *    resize / focusout that should end the override — backgrounding the PWA with
+ *    the keyboard up is the reliable repro (iOS drops the keyboard while the page
+ *    is suspended and never delivers the matching events on resume). Once in that
+ *    state nothing the user taps re-enters this code, so the app stayed shrunk
+ *    with a dead gap under the composer until a full relaunch. Two backstops: a
+ *    watchdog re-checks on a short interval while in the keyboard state (a fresh
+ *    read of `vv.height` is accurate even when the event never fired), and going
+ *    hidden blurs the field and drops the override outright so a resume always
+ *    starts at full height.
  *
  * The height also adds `vv.offsetTop` — when iOS shifts the layout viewport under
  * a fixed visual one, that's how much further down the column must reach for its
@@ -149,16 +163,28 @@ export function useVisualViewportHeight() {
 		const root = document.documentElement
 		// Visual-viewport height with no keyboard up, measured rather than assumed.
 		let rest = 0
+		let watchdog: ReturnType<typeof setInterval> | undefined
 		const clear = () => {
 			root.style.removeProperty('--app-height') // no keyboard → 100dvh fills the screen
 			root.removeAttribute('data-keyboard')
+		}
+		// Watchdog while a field is focused or the override is live (trap 4): idle at
+		// rest, and a stuck override self-heals within a tick instead of never.
+		const watch = (on: boolean) => {
+			if (on && !watchdog) watchdog = setInterval(apply, 300)
+			else if (!on && watchdog) {
+				clearInterval(watchdog)
+				watchdog = undefined
+			}
 		}
 		const apply = () => {
 			const el = document.activeElement
 			const typing = el instanceof HTMLElement && el.matches(EDITABLE)
 			const zoomed = vv.scale > 1.01
 			if (!typing || zoomed) {
-				if (!zoomed) rest = vv.height
+				// Recalibrate only near the full window height (trap 3): mid-dismiss and
+				// backgrounded readings still carry the keyboard, never the resting inset.
+				if (!zoomed && window.innerHeight - vv.height < 120) rest = vv.height
 				clear()
 			} else if ((rest || window.innerHeight) - vv.height > 40) {
 				root.style.setProperty('--app-height', `${Math.round(vv.height + vv.offsetTop)}px`)
@@ -166,6 +192,7 @@ export function useVisualViewportHeight() {
 			} else {
 				clear()
 			}
+			watch(typing || root.hasAttribute('data-keyboard'))
 			// The column always fits the visible area, so any page scroll is iOS's
 			// keyboard residual — undo it.
 			if (window.scrollY !== 0) window.scrollTo(0, 0)
@@ -178,15 +205,30 @@ export function useVisualViewportHeight() {
 			clearTimeout(settle)
 			settle = setTimeout(apply, 350)
 		}
+		// Going hidden, exit the keyboard state deliberately (trap 4); coming back,
+		// re-measure now and again once the resume has settled.
+		const onVisibility = () => {
+			if (document.visibilityState === 'hidden') {
+				const el = document.activeElement
+				if (el instanceof HTMLElement && el.matches(EDITABLE)) el.blur()
+				clear()
+				watch(false)
+			} else onFocusChange()
+		}
 		apply()
 		vv.addEventListener('resize', apply)
 		vv.addEventListener('scroll', apply)
+		window.addEventListener('pageshow', onFocusChange)
+		document.addEventListener('visibilitychange', onVisibility)
 		document.addEventListener('focusin', onFocusChange)
 		document.addEventListener('focusout', onFocusChange)
 		return () => {
 			clearTimeout(settle)
+			watch(false)
 			vv.removeEventListener('resize', apply)
 			vv.removeEventListener('scroll', apply)
+			window.removeEventListener('pageshow', onFocusChange)
+			document.removeEventListener('visibilitychange', onVisibility)
 			document.removeEventListener('focusin', onFocusChange)
 			document.removeEventListener('focusout', onFocusChange)
 			clear()
