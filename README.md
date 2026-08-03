@@ -262,6 +262,9 @@ the timeout — nothing permanent, nothing left on your machine:
 conductor-remote nosleep 2h     # also 90m, 30s, bare seconds; no arg = until Ctrl-C
 ```
 
+The confirmation carries the wall-clock **expiry**, measured from when your password lands
+rather than when you typed the command — `✓ Sleep disabled until 21:45 (2h, incl. lid closed).`
+
 It prompts for `sudo` once and runs in the foreground (the background LaunchAgent has no
 terminal to prompt on, so it can't self-arm). Since sending from the phone already means
 manually turning on your hotspot, flipping this on for the session is the same kind of

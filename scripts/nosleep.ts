@@ -52,9 +52,17 @@ function main(): void {
 		`pmset -g custom | awk '/^Battery Power:/{b=1;next} /^AC Power:/{b=0} b&&$1=="${key}"{print $2;exit}'`
 	// Confirm *inside* the root shell, after pmset applies: this line prints only once the
 	// password was accepted and the setting actually took — without it, entering your
-	// password drops into a silent `sleep` with no signal that anything happened. `arg` is
-	// regex-validated (digits + s/m/h), so it's safe in the single-quoted echo.
-	const durClause = seconds !== null ? ` for ${arg}` : ''
+	// password drops into a silent `sleep` with no signal that anything happened. It also
+	// carries the wall-clock **expiry**, computed here rather than before the spawn, because
+	// the clock that matters starts when the password lands, not when the command was typed.
+	// `arg` is regex-validated (digits + s/m/h), so it's safe to interpolate. `clock` prints an
+	// epoch as HH:MM, weekday-prefixed when it lands on another day (a long window is otherwise
+	// ambiguous — "until 15:45" reads as today).
+	const clock = `clock() { if [ "$(date -r "$1" '+%j')" = "$(date '+%j')" ]; then date -r "$1" '+%H:%M'; else date -r "$1" '+%a %H:%M'; fi; }`
+	const armed =
+		seconds !== null
+			? `echo "✓ Sleep disabled until $(clock $(( $(date +%s) + ${seconds} ))) (${arg}, incl. lid closed). Ctrl-C to restore."`
+			: `echo "✓ Sleep disabled at $(date '+%H:%M') (incl. lid closed) — until you press Ctrl-C."`
 	const script = [
 		`sb=$(${battValue('standby')})`,
 		`pn=$(${battValue('powernap')})`,
@@ -63,8 +71,9 @@ function main(): void {
 		`trap "pmset -b standby \${sb:-1} powernap \${pn:-1}; pmset -a disablesleep \${ds:-0}" EXIT INT TERM`,
 		'pmset -b standby 0 powernap 0',
 		'pmset -a disablesleep 1',
+		clock,
 		"echo ''",
-		`echo '✓ Sleep disabled — this Mac will stay awake${durClause} (incl. lid closed). Ctrl-C to restore.'`,
+		armed,
 		sleepStep
 	].join('\n')
 
