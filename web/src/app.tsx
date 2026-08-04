@@ -4,7 +4,7 @@ import { ReloadPrompt } from './components/ReloadPrompt.tsx'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
-import { useEdgeSwipeDrawer, useVisualViewportHeight } from './hooks.ts'
+import { useEdgeSwipeDrawer, useFirstPromptDelivery, useVisualViewportHeight } from './hooks.ts'
 import { cn } from './lib/cn.ts'
 import { useApp } from './store.ts'
 
@@ -42,6 +42,9 @@ function Shell() {
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const drawerRef = useRef<HTMLElement>(null)
 	useEdgeSwipeDrawer(drawerRef)
+	// Shell-level, not session-level: a workspace created from the phone finishes
+	// setting up long after the user has looked away from it.
+	useFirstPromptDelivery()
 	return (
 		<div className="flex h-full overflow-hidden">
 			{sidebarOpen ? (

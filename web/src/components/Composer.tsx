@@ -1,28 +1,15 @@
 import { ArrowUp, Info, WifiOff } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useSendPrompt } from '../hooks.ts'
 import type { ActuatorInfo } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
-// Persist an unsent prompt per workspace so a force-quit (or reload) never loses
-// typing. Keyed by workspace id; cleared on send.
-const DRAFT_PREFIX = 'conductor-remote-draft:'
-
-function loadDraft(workspaceId: string): string {
-	try {
-		return localStorage.getItem(DRAFT_PREFIX + workspaceId) ?? ''
-	} catch {
-		return ''
-	}
-}
-
-function saveDraft(workspaceId: string, value: string) {
-	try {
-		if (value) localStorage.setItem(DRAFT_PREFIX + workspaceId, value)
-		else localStorage.removeItem(DRAFT_PREFIX + workspaceId)
-	} catch {}
-}
-
+/**
+ * The draft lives in the store (persisted per workspace — see lib/draft.ts), not
+ * in local state: a first prompt that couldn't be delivered is stashed straight
+ * into it, and the box has to show that the moment it lands rather than on the
+ * next remount.
+ */
 export function Composer({
 	sessionId,
 	workspaceId,
@@ -32,7 +19,8 @@ export function Composer({
 	workspaceId: string
 	actuator?: ActuatorInfo
 }) {
-	const [text, setText] = useState(() => loadDraft(workspaceId))
+	const text = useApp(s => s.drafts[workspaceId] ?? '')
+	const setDraft = useApp(s => s.setDraft)
 	const online = useApp(s => s.online)
 	const sendPrompt = useSendPrompt()
 	const ref = useRef<HTMLTextAreaElement>(null)
@@ -44,14 +32,9 @@ export function Composer({
 		el.style.height = `${Math.min(el.scrollHeight, 160)}px`
 	}
 
-	// Grow the box to fit a restored draft on mount (SessionView keys us per workspace).
-	useEffect(autosize, [])
-
-	const edit = (value: string) => {
-		setText(value)
-		saveDraft(workspaceId, value)
-		autosize()
-	}
+	// Fit a restored — or externally stashed — draft, not just what's being typed.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure whenever the text changes, however it changed
+	useEffect(autosize, [text])
 
 	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
 	// feedback now, so we clear the box immediately instead of awaiting the send.
@@ -59,9 +42,7 @@ export function Composer({
 		const value = text.trim()
 		if (!value || !sessionId || !online) return
 		void sendPrompt({ sessionId, workspaceId, text: value })
-		setText('')
-		saveDraft(workspaceId, '')
-		requestAnimationFrame(autosize)
+		setDraft(workspaceId, '')
 	}
 
 	const disabled = !sessionId
@@ -92,7 +73,7 @@ export function Composer({
 					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
 					// takes focus, and never zooms back out on blur.
 					className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-base outline-none placeholder:text-faint disabled:opacity-50"
-					onChange={e => edit(e.target.value)}
+					onChange={e => setDraft(workspaceId, e.target.value)}
 					onKeyDown={e => {
 						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
 							e.preventDefault()
