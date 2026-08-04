@@ -39,6 +39,14 @@ Two asymmetric halves — keep them separate:
     webview exposes its whole tree to macOS Accessibility** (the old "Tauri shows
     no AX text" belief was wrong), so nearly nothing is keystrokes — every
     targeting decision is a read of the live UI, and each one fails closed:
+    0. **A window must exist first.** Every AX read is rooted at `window 1`, but
+       Conductor keeps *running with all its windows closed* (the red button
+       doesn't quit) and a cold launch draws one late — both surfaced as
+       "Can't get window 1 … Invalid index." from whichever handler ran first.
+       So `activateConductor` activates, then waits ~4s for a real window,
+       nudging with **`reopen`** (the dock-click event — `activate` alone won't
+       recreate a closed window), and every `window 1` read stays behind
+       `requireWindow`/`webArea` so a window closing mid-run says so in words.
     1. **Workspace** — press its sidebar row (an `AXLink` named
        "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing can be
        swallowed by a focused field. Only *rendered* rows exist in the AX tree, so
