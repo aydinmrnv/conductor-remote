@@ -200,6 +200,7 @@ src/                the Node relay (no build step)
   git.ts            workspace diff vs target branch (incl. untracked)
   sidecar.ts        Conductor sidecar IPC client (precise write path)
   writes.ts         Actuator interface + AppleScript (default) + Sidecar (opt-in)
+  logbuf.ts         console capture + log-file tail behind /api/logs (token redacted)
 web/                the React PWA (Vite)
   index.html, src/  app shell, components, hooks, api client
 public/             icon.svg + PWA PNGs (repo-root so Conductor's icon lookup finds them)
@@ -221,6 +222,26 @@ dist/               built PWA (gitignored) — what the relay serves
   Your data stays on your machine — nothing is sent anywhere.
 
 ## Troubleshooting
+
+### Something failed and the Mac is somewhere else
+
+The relay's own log is readable from the phone: **Connect sheet ▸ Relay logs**
+(the QR button in the workspace header). It has three sources — `Live` is the
+running relay's console, ordered and timestamped; `relay.log` / `relay.err.log`
+tail the LaunchAgent's files on disk, which is where the output of a *previous*
+process survives a crash-and-restart. **Problems only** filters to warnings and
+errors, and **Copy** puts the visible lines on the clipboard for pasting into an
+issue.
+
+The same thing over HTTP (the access token is redacted from every response, so
+what comes back is safe to share):
+
+```bash
+curl -s -H "authorization: Bearer $TOKEN" "$RELAY/api/logs?limit=100"                  # live
+curl -s -H "authorization: Bearer $TOKEN" "$RELAY/api/logs?file=relay.err.log"         # on disk
+```
+
+On the Mac itself, `conductor-remote service logs` still follows both files.
 
 ### The relay stops answering when the Mac is on battery
 

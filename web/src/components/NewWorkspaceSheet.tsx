@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -62,7 +63,9 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		}
 	}
 
-	return (
+	// Portalled to <body> for the same reason as ConnectSheet/LogsSheet: the drawer <aside> it's
+	// opened from has a `transform`, which would make `fixed inset-0` mean "the drawer", not "the screen".
+	return createPortal(
 		<div className="fixed inset-0 z-50 flex flex-col bg-bg">
 			<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5">
 				<span className="flex-1 text-[15px] font-semibold">New workspace</span>
@@ -133,6 +136,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					{busy ? 'Creating…' : prompt.trim() ? 'Create & start' : 'Create empty workspace'}
 				</button>
 			</div>
-		</div>
+		</div>,
+		document.body
 	)
 }

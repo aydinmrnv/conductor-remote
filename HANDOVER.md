@@ -80,6 +80,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in)
+  logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted
 web/              React PWA (Vite root)
   index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
@@ -87,7 +88,7 @@ web/              React PWA (Vite root)
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
   src/lib/        api client, types, format helpers, cn
   src/store.ts    zustand: token + connection status
-  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, NewWorkspaceSheet, ReloadPrompt, ui
+  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
