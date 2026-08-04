@@ -191,6 +191,18 @@ unit test.
   contexts without a corepack shim (CI, a bare shell) must `corepack enable` first
   — see `.github/workflows/ci.yml`. The verify script is named `verify`, not `check`
   (collides with a Yarn Classic builtin).
+- **The log is a wire surface now, not just a file.** `installLogCapture()`
+  (`src/logbuf.ts`, called first thing in `server.ts`) wraps `console.*`: every line
+  also lands in a 600-entry ring served by `GET /api/logs`, and the stdout copy gains a
+  `YYYY-MM-DD HH:MM:SS` prefix (plus `WARN`/`ERROR` for those levels) — that prefix is
+  what lets `?file=relay.log` parse the *daemon's* on-disk log back into stamped, levelled
+  entries, which is the only way to see a crash that happened before the current process.
+  Two consequences: **the startup banner prints the token**, so everything served goes
+  through `redactSecrets` first (the endpoint is token-gated, but the whole point is
+  pasting logs into an issue) — never add a log surface that skips it; and log lines are
+  now user-visible text, so don't log anything you wouldn't hand to whoever holds the
+  token. The file tabs belong to the LaunchAgent, so the response carries `managed` and
+  the UI says so when this relay isn't the process writing them.
 - **Editing the AppleScript in `writes.ts`: two silent traps.** (1) Inside a
   `tell application "System Events"` block, ordinary-looking variable names
   resolve as **System Events terms** — `tabs` and `groups` become "every tab/group

@@ -1,5 +1,6 @@
-import { Check, Copy, X } from 'lucide-react'
+import { Check, Copy, LogOut, X } from 'lucide-react'
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useApp } from '../store.ts'
 import { QRCode } from './QRCode.tsx'
 
@@ -7,8 +8,17 @@ import { QRCode } from './QRCode.tsx'
  * Connection sheet — shows a QR + copyable link for THIS device's token URL so you can re-scan it onto
  * another phone or re-add it to the home screen, and disconnect (clears the stored token → TokenGate).
  * The gate itself is tokenless and can't draw this, so the QR lives here. Reached from the sidebar header.
+ * Also the app's diagnostics corner: it carries the relay/app versions, and the way into the relay's logs.
  */
-export function ConnectSheet({ version, onClose }: { version?: string; onClose: () => void }) {
+export function ConnectSheet({
+	version,
+	onLogs,
+	onClose
+}: {
+	version?: string
+	onLogs: () => void
+	onClose: () => void
+}) {
 	const token = useApp(s => s.token)
 	const setToken = useApp(s => s.setToken)
 	const [copied, setCopied] = useState(false)
@@ -27,7 +37,11 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 		}
 	}
 
-	return (
+	// Portalled to <body>: this is opened from the workspace drawer, whose <aside> carries a
+	// `transform` for its slide animation — and a transform makes that element the containing block
+	// for `fixed` descendants, so an in-place sheet is pinned inside the 320px drawer instead of the
+	// screen (on md+ too, where the rail keeps `md:translate-x-0`). See LogsSheet, same reason.
+	return createPortal(
 		<>
 			<div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} aria-hidden />
 			<div
@@ -38,14 +52,28 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 			>
 				<div className="flex w-full items-center justify-between">
 					<h2 className="text-base font-semibold">Connect a device</h2>
-					<button
-						type="button"
-						onClick={onClose}
-						aria-label="Close"
-						className="flex size-8 items-center justify-center rounded-full text-muted active:bg-surface-2"
-					>
-						<X size={18} />
-					</button>
+					<div className="flex shrink-0 items-center gap-1">
+						{/* Tinted, not muted like Close beside it: this drops the token and sends you back to the
+						    gate, and getting back in needs the URL from the Mac. The colour is the only thing
+						    separating it from ordinary chrome at a glance. */}
+						<button
+							type="button"
+							onClick={() => setToken(null)}
+							aria-label="Disconnect"
+							title="Disconnect"
+							className="flex size-8 items-center justify-center rounded-full text-del/80 active:bg-surface-2"
+						>
+							<LogOut size={17} />
+						</button>
+						<button
+							type="button"
+							onClick={onClose}
+							aria-label="Close"
+							className="flex size-8 items-center justify-center rounded-full text-muted active:bg-surface-2"
+						>
+							<X size={18} />
+						</button>
+					</div>
 				</div>
 				<p className="text-center text-sm text-muted">
 					Scan on another phone, or re-add this to your home screen. The link carries your access token.
@@ -68,15 +96,12 @@ export function ConnectSheet({ version, onClose }: { version?: string; onClose: 
 						<span className={stale ? 'text-working' : undefined}>app v{__APP_VERSION__}</span>
 						{stale ? ' · update pending' : ''}
 					</span>
-					<button
-						type="button"
-						onClick={() => setToken(null)}
-						className="text-muted underline-offset-2 hover:underline"
-					>
-						Disconnect
+					<button type="button" onClick={onLogs} className="shrink-0 text-muted underline-offset-2 hover:underline">
+						Logs
 					</button>
 				</div>
 			</div>
-		</>
+		</>,
+		document.body
 	)
 }

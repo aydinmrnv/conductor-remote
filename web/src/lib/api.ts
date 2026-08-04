@@ -2,6 +2,7 @@ import type {
 	AgentPatch,
 	AgentResult,
 	CreateWorkspaceResult,
+	LogsResponse,
 	MergeResult,
 	MessagesResponse,
 	ModelsResult,
@@ -166,6 +167,13 @@ export const client = {
 			{},
 			ACTION_TIMEOUT_MS
 		),
+	/**
+	 * The relay's own log. No `file` = the running process's captured console; a file name tails
+	 * the daemon's stdout/stderr on disk (where a crash before the current process still lives).
+	 * The relay redacts the access token, so what comes back is safe to paste into a bug report.
+	 */
+	logs: (file: string | null, limit = 300) =>
+		api<LogsResponse>(`/api/logs?limit=${limit}${file ? `&file=${encodeURIComponent(file)}` : ''}`),
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
 	merge: (workspaceId: string) =>
 		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' }, ACTION_TIMEOUT_MS)

@@ -16,6 +16,7 @@ import type { Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
+import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
 import { Badge, Chip, Empty, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
@@ -66,6 +67,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [controlsOpen, setControlsOpen] = useState(false)
 	const [connectOpen, setConnectOpen] = useState(false)
 	const [newOpen, setNewOpen] = useState(false)
+	const [logsOpen, setLogsOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
@@ -188,8 +190,18 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					})
 				)}
 			</nav>
-			{connectOpen ? <ConnectSheet version={data?.version} onClose={() => setConnectOpen(false)} /> : null}
+			{connectOpen ? (
+				<ConnectSheet
+					version={data?.version}
+					onLogs={() => {
+						setConnectOpen(false)
+						setLogsOpen(true)
+					}}
+					onClose={() => setConnectOpen(false)}
+				/>
+			) : null}
 			{newOpen ? <NewWorkspaceSheet onClose={() => setNewOpen(false)} /> : null}
+			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
 		</div>
 	)
 }

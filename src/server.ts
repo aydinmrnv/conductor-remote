@@ -8,6 +8,16 @@ import { loadConfig } from './config.ts'
 import { ConductorDb } from './db.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
+import {
+	installLogCapture,
+	isManaged,
+	LOG_FILE_NAMES,
+	logFiles,
+	processStartedAt,
+	recentLogs,
+	redactSecrets,
+	tailLogFile
+} from './logbuf.ts'
 import { mergePr } from './merge.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SessionRow, type Workspace } from './reads.ts'
@@ -24,6 +34,10 @@ import {
 	setAgentOptions,
 	setRestartGuard
 } from './writes.ts'
+
+// Before anything that logs: from here on every console line is also kept in memory for
+// `GET /api/logs`, so the phone can read why a send failed without ssh-ing into the Mac.
+installLogCapture()
 
 const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
@@ -238,6 +252,35 @@ const server = http.createServer(async (req, res) => {
 		// GET /api/repos — repos a new workspace can be created in
 		if (req.method === 'GET' && pathname === '/api/repos') {
 			return json(req, res, 200, { repos: reads.listRepos() })
+		}
+
+		// GET /api/logs?file=&limit= — the relay's own log, so a phone can diagnose a failed send
+		// without reaching the Mac. Default is this process's captured console (ordered, timestamped);
+		// `file` tails the daemon's stdout/stderr on disk, which is the only place the *previous*
+		// process's crash survives. Everything is redacted: the startup banner prints the token.
+		if (req.method === 'GET' && pathname === '/api/logs') {
+			const file = url.searchParams.get('file')
+			if (file && !(LOG_FILE_NAMES as readonly string[]).includes(file)) {
+				return json(req, res, 404, { error: `unknown log file ${file}`, files: LOG_FILE_NAMES })
+			}
+			const asked = Number(url.searchParams.get('limit') ?? 300)
+			const limit = Number.isFinite(asked) ? Math.min(2000, Math.max(1, Math.trunc(asked))) : 300
+			let entries: ReturnType<typeof recentLogs>
+			try {
+				entries = file ? tailLogFile(file, limit) : recentLogs(limit)
+			} catch (err) {
+				// The file only exists once the LaunchAgent has run; say so instead of a bare 500.
+				return json(req, res, 404, { error: `can’t read ${file}: ${err instanceof Error ? err.message : err}` })
+			}
+			return json(req, res, 200, {
+				source: file ?? 'live',
+				// False → the files below are some *other* (daemon) process's output, not this relay's.
+				managed: isManaged(),
+				startedAt: processStartedAt(),
+				now: Date.now(),
+				files: logFiles(),
+				entries: entries.map(e => ({ ...e, text: redactSecrets(e.text, cfg.token) }))
+			})
 		}
 
 		// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link

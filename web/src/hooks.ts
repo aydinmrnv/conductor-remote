@@ -317,6 +317,21 @@ export function useRepoIcon(repoName: string | null | undefined) {
 	})
 }
 
+/**
+ * The relay's log, polled while the viewer is open. Deliberately outside the offline reporter: a 404
+ * for a log file that doesn't exist yet is a fact about that file, not a dead relay, and flipping the
+ * whole app to "Offline" over it would be a lie. Retries are off for the same reason.
+ */
+export function useLogs(file: string | null, enabled: boolean) {
+	return useQuery({
+		queryKey: ['logs', file],
+		queryFn: () => client.logs(file),
+		enabled,
+		refetchInterval: 3000,
+		retry: false
+	})
+}
+
 export interface TranscriptState {
 	entries: TranscriptEntry[]
 	loading: boolean

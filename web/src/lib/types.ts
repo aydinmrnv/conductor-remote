@@ -191,6 +191,33 @@ export interface NewChatResult {
 	error?: string
 }
 
+export type LogLevel = 'info' | 'warn' | 'error'
+
+/** One relay log line (mirrors `LogEntry` in src/logbuf.ts). `t` is null for unstamped on-disk lines. */
+export interface LogEntry {
+	t: number | null
+	level: LogLevel
+	text: string
+}
+
+export interface LogFileInfo {
+	name: string
+	size: number
+	modifiedAt: number | null
+}
+
+export interface LogsResponse {
+	/** 'live' = this relay process's captured console; otherwise the log file that was tailed. */
+	source: string
+	/** False when the relay isn't the LaunchAgent — the files then belong to a *different* process. */
+	managed: boolean
+	startedAt: number
+	/** Relay clock, so ages render right even if the phone's clock disagrees. */
+	now: number
+	files: LogFileInfo[]
+	entries: LogEntry[]
+}
+
 export type MergeMethod = 'squash' | 'merge' | 'rebase'
 
 /** Result of POST /api/workspaces/:id/merge — merges the branch's open PR via `gh`. */
