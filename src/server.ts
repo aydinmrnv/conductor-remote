@@ -409,12 +409,16 @@ const server = http.createServer(async (req, res) => {
 			const beforeRowid = reads.getMessages(sessionId).cursor
 			const result = await actuator.send({ workspace: ws, sessionId, tab }, text)
 			if (result.ok && !(await confirmDelivery(sessionId, text, beforeRowid))) {
+				// The phone only ever sees "try again"; the reason a send goes missing lives
+				// on this side, so leave a trail in relay.log rather than nothing at all.
+				console.warn(`[relay] send to ${ws.branch ?? ws.id} drove the UI but never landed in the chat`)
 				return json(req, res, 502, {
 					ok: false,
 					strategy: result.strategy,
 					error: 'Send didn’t land in the chat — Conductor may have been asleep or unfocused. Try again.'
 				})
 			}
+			if (!result.ok) console.warn(`[relay] send to ${ws.branch ?? ws.id} failed: ${result.error}`)
 			return json(req, res, result.ok ? 200 : 502, result)
 		}
 

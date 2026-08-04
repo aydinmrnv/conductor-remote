@@ -32,7 +32,15 @@ Two asymmetric halves — keep them separate:
   relay watches the DB for the new row and the PWA parks any prompt
   (`web/src/lib/firstPrompt.ts`) until the worktree is `ready`, guarded on
   `last_user_message_at` so it can't double-send. Don't block the request on
-  setup: it measured 30s+, past the phone's own 25s budget.
+  setup: it measured 30s+, past the phone's own 25s budget. **Delivery belongs to
+  the app shell** (`hooks.ts` ▸ `useFirstPromptDelivery`), never to the session
+  view: setup outlasts the user's attention, and an iOS relaunch reopens at `/`,
+  so a route-scoped watcher waits for a mount that never comes and the prompt
+  rots in localStorage. That same `last_user_message_at` guard is what makes
+  retrying safe; after three failed sends the text is stashed into the
+  workspace's composer draft (store-backed — `web/src/lib/draft.ts`) so an
+  undeliverable prompt sits in the chat box instead of vanishing, and a send
+  matching the draft clears it so it can't go twice.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's

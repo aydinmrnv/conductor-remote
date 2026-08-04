@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
+import { loadDrafts, writeDraft } from './lib/draft.ts'
 import type { UpdateStatus } from './lib/types.ts'
 
 /** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
@@ -60,6 +61,13 @@ interface AppState {
 	workingHints: Record<string, number>
 	/** Prompts awaiting confirmation, rendered as optimistic in-chat bubbles. */
 	pending: PendingMessage[]
+	/**
+	 * Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts).
+	 * Held here rather than in the Composer's own state because it is also written
+	 * from outside it — an undeliverable first prompt is stashed into the draft, and
+	 * the box has to show it there and then, not on the next remount.
+	 */
+	drafts: Record<string, string>
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
@@ -71,6 +79,11 @@ interface AppState {
 	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string }) => void
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
+	setDraft: (workspaceId: string, text: string) => void
+	/** Park text in a workspace's composer without clobbering what's already typed there. */
+	stashDraft: (workspaceId: string, text: string) => void
+	/** Drop a draft a send just consumed, so a retried stash can't linger and be sent twice. */
+	clearDraftIfEqual: (workspaceId: string, text: string) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -88,6 +101,7 @@ export const useApp = create<AppState>((set, get) => {
 		update: null,
 		workingHints: {},
 		pending: [],
+		drafts: loadDrafts(),
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -110,6 +124,19 @@ export const useApp = create<AppState>((set, get) => {
 		failPending: (id, error) =>
 			set({ pending: get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p)) }),
 		removePending: id => set({ pending: get().pending.filter(p => p.id !== id) }),
+		setDraft: (workspaceId, text) => {
+			writeDraft(workspaceId, text)
+			set({ drafts: { ...get().drafts, [workspaceId]: text } })
+		},
+		stashDraft: (workspaceId, text) => {
+			const current = get().drafts[workspaceId] ?? ''
+			if (current.includes(text)) return
+			// Prepend: the stashed prompt was written first, and joining beats picking a winner.
+			get().setDraft(workspaceId, current ? `${text}\n\n${current}` : text)
+		},
+		clearDraftIfEqual: (workspaceId, text) => {
+			if ((get().drafts[workspaceId] ?? '').trim() === text.trim()) get().setDraft(workspaceId, '')
+		},
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {

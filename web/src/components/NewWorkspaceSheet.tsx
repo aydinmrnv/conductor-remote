@@ -48,9 +48,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				setError(r.error ?? 'could not create the workspace')
 				return
 			}
-			// The session view picks this up and sends it as soon as the worktree is ready.
+			// The shell's delivery hook picks this up and sends it once the worktree is ready.
 			if (text) seedFirstPrompt(r.workspaceId, text)
-			await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
+			// ['state'] is the workspace-list query — an invalidate on any other key silently
+			// does nothing and the new workspace only shows up on the next 2.5s poll.
+			await queryClient.invalidateQueries({ queryKey: ['state'] })
 			onClose()
 			navigate(`/w/${r.workspaceId}`)
 		} catch (e) {
