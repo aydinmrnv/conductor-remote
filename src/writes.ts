@@ -109,11 +109,68 @@ on splitLines(s)
 	return parts
 end splitLines
 
+on hasWindow()
+	-- Also false when the process itself is gone: "tell process" errors there.
+	try
+		tell application "System Events" to tell process "Conductor"
+			return (count of windows) > 0
+		end tell
+	on error
+		return false
+	end try
+end hasWindow
+
+on requireWindow()
+	-- ASCII on purpose: this one reaches the phone, and osascript decodes -e by the
+	-- caller's locale, which a LaunchAgent doesn't set.
+	if not (my hasWindow()) then error "Conductor has no open window - open it on your Mac and try again"
+end requireWindow
+
+on activateConductor()
+	-- Conductor keeps running with every window closed (standard macOS: the red
+	-- button doesn't quit), and a cold launch needs a moment to build one. Both
+	-- look identical from here, and both used to surface as "Can't get window 1 of
+	-- process Conductor. Invalid index." from whichever handler happened to run
+	-- first. So wait for a real window, nudge twice, then say it in words the phone
+	-- can act on. "reopen" is the dock-click event — that is what recreates a
+	-- closed window; "activate" on its own does not.
+	try
+		tell application "Conductor" to activate
+	on error errText
+		error "couldn't bring Conductor to the front: " & errText
+	end try
+	delay 0.4
+	-- ~4s of patience: enough for a reopen to draw, short enough that the caller's
+	-- osascript timeout still has room for the send itself. A cold launch slower
+	-- than this fails with the message below, and the retry finds a warm app.
+	repeat with attempt from 1 to 16
+		if my hasWindow() then return
+		if attempt is 2 or attempt is 8 then
+			try
+				tell application "Conductor" to reopen
+				tell application "Conductor" to activate
+			end try
+		end if
+		delay 0.25
+	end repeat
+	my requireWindow()
+end activateConductor
+
+on webArea()
+	-- The webview root: the window, then four nested containers. Guarded, or a
+	-- window that closed mid-run reappears as an "Invalid index" from a caller
+	-- that has nothing to do with windows.
+	my requireWindow()
+	tell application "System Events" to tell process "Conductor"
+		return UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
+	end tell
+end webArea
+
 on sidebarLinks()
 	-- The sidebar rows are AXLinks named "<repo> <title> +adds -dels". They live
 	-- two levels under the web area; collect them wherever they are at that depth.
+	set wa to my webArea()
 	tell application "System Events" to tell process "Conductor"
-		set wa to UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
 		set out to {}
 		repeat with a in (UI elements of wa)
 			try
@@ -198,6 +255,7 @@ on tabGroups()
 	-- Level-order search, returning every tab group at the shallowest depth that
 	-- has one (the chat strip and the terminal strip are siblings). Bounded: the
 	-- pane sits ~5 levels down, and we must never descend into the transcript.
+	my requireWindow()
 	tell application "System Events" to tell process "Conductor"
 		set level to {window 1}
 		set depth to 0
@@ -525,8 +583,8 @@ on setModel(wanted)
 	-- otherwise also match "Sonnet 4.6 1M"), which must fail rather than guess.
 	set chosen to missing value
 	set loose to {}
+	set wa to my webArea()
 	tell application "System Events" to tell process "Conductor"
-		set wa to UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
 		repeat with m in (UI elements of wa whose role is "AXMenu")
 			repeat with mi in (UI elements of m whose role is "AXMenuItem")
 				set label to my firstLine(my tabLabel(mi))
@@ -571,8 +629,8 @@ on listModels()
 	end tell
 	delay 1.0
 	set labels to {}
+	set wa to my webArea()
 	tell application "System Events" to tell process "Conductor"
-		set wa to UI element 1 of UI element 1 of UI element 1 of UI element 1 of window 1
 		repeat with m in (UI elements of wa whose role is "AXMenu")
 			repeat with mi in (UI elements of m whose role is "AXMenuItem")
 				set end of labels to my firstLine(my tabLabel(mi))
@@ -638,6 +696,11 @@ function targetEnv(target: SendTarget): Record<string, string> {
 /** osascript echoes the whole failing script back; keep just the reason for the phone. */
 function osaError(err: unknown): string {
 	const raw = err instanceof Error ? err.message : String(err)
+	// A timeout kill carries no execution error at all — its first line is
+	// "Command failed: osascript -e" plus the whole script, which is useless here.
+	if (err && typeof err === 'object' && 'killed' in err && (err as { killed?: boolean }).killed) {
+		return 'Conductor took too long to respond'
+	}
 	return raw.match(/execution error: (.+?) \(-?\d+\)/)?.[1] ?? raw.split('\n')[0]
 }
 
@@ -665,8 +728,7 @@ export class AppleScriptActuator implements Actuator {
 		const script = `
 ${SELECT_CHAT_TAB_HANDLERS}
 
-tell application "Conductor" to activate
-delay 0.4
+my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 set promptText to my normalizeNewlines(do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
@@ -739,8 +801,7 @@ export async function setAgentOptions(target: SendTarget, opts: AgentOptions): P
 	const script = `
 ${SELECT_CHAT_TAB_HANDLERS}
 
-tell application "Conductor" to activate
-delay 0.4
+my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 my applyAgentOptions()
@@ -768,8 +829,7 @@ export async function listAgentModels(target: SendTarget): Promise<{ ok: boolean
 	const script = `
 ${SELECT_CHAT_TAB_HANDLERS}
 
-tell application "Conductor" to activate
-delay 0.4
+my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 return my listModels()`.trim()
@@ -839,8 +899,7 @@ export async function newChat(workspace: Workspace): Promise<SendResult> {
 	const script = `
 ${SELECT_CHAT_TAB_HANDLERS}
 
-tell application "Conductor" to activate
-delay 0.4
+my activateConductor()
 my focusWorkspace()
 tell application "System Events"
 	keystroke "t" using {command down}
