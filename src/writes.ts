@@ -234,6 +234,32 @@ on dockClick()
 	end try
 end dockClick
 
+on restartConductor()
+	-- The last lever: Conductor is single-window and single-instance, so when a
+	-- running app answers neither reopen nor a Dock click there is nothing left to
+	-- press. Deliberately fire-and-forget — a cold launch is 5-10s on its own,
+	-- past what the phone's budget leaves once the send's own delays are counted —
+	-- so this returns as soon as the relaunch is under way and the caller tells the
+	-- phone to send again into a warm app. Gated by RELAY_ALLOW_RESTART, which the
+	-- relay only sets when the DB says no session is mid-turn.
+	try
+		tell application "Conductor" to quit
+	on error errText
+		return "couldn't quit Conductor to restart it: " & errText
+	end try
+	repeat with attempt from 1 to 16
+		if not (my conductorRunning()) then exit repeat
+		delay 0.25
+	end repeat
+	if my conductorRunning() then return "Conductor ignored the quit, so the relay left it alone - quit it on your Mac and try again."
+	try
+		tell application "Conductor" to activate
+	on error errText
+		return "quit Conductor but couldn't start it again: " & errText
+	end try
+	return ""
+end restartConductor
+
 on waitForWindow(attempts)
 	-- "reopen" is the dock-click Apple event, and for most apps that is what
 	-- recreates a closed window ("activate" on its own does not). Nudge a few times
@@ -283,6 +309,14 @@ on activateConductor()
 	set patience to 16
 	if not wasRunning then set patience to 36
 	if my waitForWindow(patience) then return
+	-- Running, readable, and still zero windows: reopen and the Dock click have
+	-- both drawn nothing, so a restart is the only thing left. "Open it on your
+	-- Mac" is not advice a phone can act on — that is the whole point of this app.
+	if (system attribute "RELAY_ALLOW_RESTART") is "1" and (item 1 of my windowProbe()) is 0 then
+		set restartError to my restartConductor()
+		if restartError is not "" then error restartError
+		error "Conductor was running with no window and ignored both reopen and a Dock click, so the relay restarted it. Give it a few seconds and send again."
+	end if
 	my requireWindow()
 end activateConductor
 
@@ -810,9 +844,35 @@ function sidebarTitles(ws: Workspace): string[] {
 	].filter((t): t is string => Boolean(t))
 }
 
+/**
+ * May the actuator restart Conductor to force a window into existence?
+ *
+ * Restarting is the only lever left when a running, windowless Conductor ignores
+ * both `reopen` and a Dock click — it is single-window and single-instance, so
+ * there is nothing else to press. It is also the one step here that can destroy
+ * work: quitting takes any agent mid-turn down with it. "Nothing is running" is a
+ * fact only the read side has, so server.ts wires this to a DB read rather than
+ * writes.ts guessing. Unset → never restart, which is the safe default for any
+ * caller that hasn't opted in.
+ */
+let restartGuard: (() => boolean) | null = null
+
+export function setRestartGuard(guard: (() => boolean) | null): void {
+	restartGuard = guard
+}
+
+function restartAllowed(): boolean {
+	try {
+		return restartGuard?.() ?? false
+	} catch {
+		return false
+	}
+}
+
 /** The target rides in on the environment, like RELAY_WS_QUERY, to dodge AppleScript escaping. */
 function targetEnv(target: SendTarget): Record<string, string> {
 	return {
+		RELAY_ALLOW_RESTART: restartAllowed() ? '1' : '',
 		RELAY_TAB_INDEX: String(target.tab?.index ?? 0),
 		RELAY_TAB_COUNT: String(target.tab?.count ?? 0),
 		RELAY_TAB_TITLE: target.tab?.title ?? '',

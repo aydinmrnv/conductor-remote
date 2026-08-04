@@ -21,13 +21,21 @@ import {
 	listAgentModels,
 	newChat,
 	pickActuator,
-	setAgentOptions
+	setAgentOptions,
+	setRestartGuard
 } from './writes.ts'
 
 const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
+
+// A windowless Conductor that ignores reopen *and* a Dock click can only be fixed
+// by restarting it — and quitting takes any agent mid-turn down with it. So the
+// write path may only do that while nothing is working, which is a DB fact, not
+// something AppleScript can see. Read fresh each time: a session can start between
+// the phone opening the app and the send landing.
+setRestartGuard(() => !reads.listWorkspaces().some(w => w.session_status === 'working'))
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 

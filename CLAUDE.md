@@ -69,7 +69,14 @@ Two asymmetric halves — keep them separate:
        matching `Conductor` with its window count, plus the menu bar titles —
        because *which* process owns the on-screen window is the one fact that
        separates "genuinely windowless" from "we're addressing the wrong
-       process".
+       process". Then `restartConductor` quits and relaunches — **the only
+       remaining lever**, and the one step here that can destroy work, so it is
+       gated on `RELAY_ALLOW_RESTART`, which `server.ts` sets from a live DB
+       read (`no workspace is 'working'`) — writes.ts must never decide this
+       itself. It is **fire-and-forget**: a cold launch doesn't fit the phone's
+       budget alongside the send, so it returns as soon as the relaunch starts
+       and tells the phone to send again. "Open it on your Mac" is not advice a
+       phone can act on.
     1. **Workspace** — press its sidebar row (an `AXLink` named
        "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing can be
        swallowed by a focused field. Only *rendered* rows exist in the AX tree, so
