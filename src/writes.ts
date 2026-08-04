@@ -151,6 +151,52 @@ on conductorRunning()
 	end try
 end conductorRunning
 
+on joinList(lst, sep)
+	set saved to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to sep
+	set out to lst as text
+	set AppleScript's text item delimiters to saved
+	return out
+end joinList
+
+on processWindowCounts()
+	-- Every process whose name looks like Conductor, with its window count. If the
+	-- app is visibly on screen while "process Conductor" reports zero, the windows
+	-- belong to a process we are not addressing — and that only shows up here.
+	set out to {}
+	try
+		tell application "System Events"
+			repeat with proc in (every process whose name contains "Conductor")
+				set end of out to ((name of proc) & "=" & (count of windows of proc))
+			end repeat
+		end tell
+	end try
+	return out
+end processWindowCounts
+
+on menuTitles()
+	try
+		tell application "System Events" to tell process "Conductor"
+			return name of every menu bar item of menu bar 1
+		end tell
+	on error
+		return {}
+	end try
+end menuTitles
+
+on windowEvidence()
+	-- Zero windows is a dead end without knowing what the AX tree *does* show, and
+	-- guessing the next thing to press has already cost a round trip (there is no
+	-- "New Window" item — Conductor is single-window). So the error carries the
+	-- evidence instead: who macOS thinks Conductor is, and what its menus offer.
+	set procs to my processWindowCounts()
+	set titles to my menuTitles()
+	set ev to ""
+	if (count of procs) > 0 then set ev to ev & " [processes: " & my joinList(procs, ", ") & "]"
+	if (count of titles) > 0 then set ev to ev & " [menus: " & my joinList(titles, ", ") & "]"
+	return ev
+end windowEvidence
+
 on windowFailure()
 	-- "" when a window is there; otherwise why not, in words the phone can act on.
 	-- ASCII on purpose: these reach the phone, and osascript decodes -e by the
@@ -160,7 +206,7 @@ on windowFailure()
 	set probe to my windowProbe()
 	set winCount to item 1 of probe
 	if winCount > 0 then return ""
-	if winCount is 0 then return "Conductor has no open window - open it on your Mac and try again"
+	if winCount is 0 then return "Conductor is running but exposes no window - reopen and a Dock click both drew nothing. Open or restart it on your Mac and try again." & my windowEvidence()
 	set refusal to my refusalReason(probe)
 	if refusal is not "" then return refusal
 	if not (my conductorRunning()) then return "Conductor is not running - the relay started it, but it did not come up in time. Try again in a few seconds."
@@ -172,30 +218,29 @@ on requireWindow()
 	if reason is not "" then error reason
 end requireWindow
 
-on openNewWindow()
-	-- Last resort when "reopen" draws nothing: press the app's own New Window.
-	-- Exact match only — "New Workspace" is a different command and would create a
-	-- workspace nobody asked for — so an app without that item fails closed and
-	-- silent, leaving windowFailure() to report the honest "no open window".
+on dockClick()
+	-- Last resort when the "reopen" AppleEvent draws nothing: click the app's Dock
+	-- tile. Same intent, different delivery — the Dock raises it through the app's
+	-- own event loop rather than as an Apple event we send, which is what an app
+	-- that never wired up reopen can still answer. (There is no "New Window" menu
+	-- item to press: Conductor is single-window and single-instance.)
 	try
-		tell application "System Events" to tell process "Conductor"
-			repeat with topMenu in (menu bar items of menu bar 1)
-				try
-					click (first menu item of menu 1 of topMenu whose name is "New Window")
-					return true
-				end try
-			end repeat
+		tell application "System Events" to tell application process "Dock"
+			click UI element "Conductor" of list 1
 		end tell
+		return true
+	on error
+		return false
 	end try
-	return false
-end openNewWindow
+end dockClick
 
 on waitForWindow(attempts)
-	-- "reopen" is the dock-click event — that is what recreates a closed window;
-	-- "activate" on its own does not. Nudge a few times across the wait: a cold
-	-- launch can reach "process exists" long before it draws anything. If reopen
-	-- has drawn nothing by ~3s, the app isn't answering that event at all, so
-	-- escalate to its own menu item rather than repeating what already failed.
+	-- "reopen" is the dock-click Apple event, and for most apps that is what
+	-- recreates a closed window ("activate" on its own does not). Nudge a few times
+	-- across the wait: a cold launch can reach "process exists" long before it
+	-- draws anything. If reopen has drawn nothing by ~3s the app isn't answering
+	-- that event, so escalate to a real Dock click rather than repeating what has
+	-- already failed twice.
 	repeat with attempt from 1 to attempts
 		if my hasWindow() then return true
 		if attempt is 2 or attempt is 8 or attempt is 20 then
@@ -204,7 +249,7 @@ on waitForWindow(attempts)
 				tell application "Conductor" to activate
 			end try
 		end if
-		if attempt is 12 or attempt is 28 then my openNewWindow()
+		if attempt is 12 or attempt is 28 then my dockClick()
 		delay 0.25
 	end repeat
 	return false
