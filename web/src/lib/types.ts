@@ -182,6 +182,8 @@ export interface SendResult {
 	strategy: string
 	warning?: string
 	error?: string
+	/** Runs the relay needed to land the prompt (it retries a failed send itself). */
+	attempts?: number
 }
 
 export interface NewChatResult {

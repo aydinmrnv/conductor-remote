@@ -64,8 +64,18 @@ export class ApiError extends Error {
 // poll surfaces an error and the banner shows. Polls stay short (flip to offline
 // fast); mutating calls drive AppleScript + a delivery read-back on the relay, so
 // they get a much longer budget.
+//
+// **These must exceed the relay's own budget for the same call**, or the phone gives
+// up on work that is still running and shows a failure for something that then
+// lands — and the user can't tell the two apart. They didn't: an agent change is
+// 28s of AppleScript + 3s of confirming against the DB, and a workspace creation
+// polls for the new row for 20s, both past the old flat 25s. A send is the long one
+// because the relay retries inside the request (`SEND_BUDGET_MS`, 55s, in
+// src/server.ts) — waiting is cheap here, since the prompt sits in the chat as a
+// "Sending…" bubble rather than blocking the UI.
 const POLL_TIMEOUT_MS = 6000
-const ACTION_TIMEOUT_MS = 25000
+const ACTION_TIMEOUT_MS = 45000
+const SEND_TIMEOUT_MS = 75000
 
 async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIMEOUT_MS): Promise<T> {
 	const token = getToken()
@@ -77,6 +87,13 @@ async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIM
 			headers: {
 				authorization: `Bearer ${token ?? ''}`,
 				'content-type': 'application/json',
+				// How long this request will be waited on. The relay caps its own retrying at
+				// this, so the two budgets can't drift apart across versions: the relay
+				// updates itself (src/autoupdate.ts) while this app sits in a service-worker
+				// cache, so pairing the numbers by hand would eventually have the phone
+				// abandoning a send the relay was still retrying — a failure shown for a
+				// prompt that then lands, the one outcome worse than a plain failure.
+				'x-client-timeout-ms': String(timeoutMs),
 				...opts.headers
 			}
 		})
@@ -127,11 +144,12 @@ export const client = {
 	messages: (sessionId: string, after: number) =>
 		api<MessagesResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${after}`),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`),
+	/** The relay retries a failed send itself (and confirms each try against the transcript), hence the long budget. */
 	sendPrompt: (sessionId: string, text: string, workspaceId: string) =>
 		api<SendResult>(
 			`/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
 			{ method: 'POST', body: JSON.stringify({ text, workspaceId }) },
-			ACTION_TIMEOUT_MS
+			SEND_TIMEOUT_MS
 		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
 	newChat: (workspaceId: string) =>

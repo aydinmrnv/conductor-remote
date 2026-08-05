@@ -37,9 +37,76 @@ export interface Actuator {
 	readonly caveat: string
 	/** True when delivery is addressed to a specific session (no window-focus dependency). */
 	readonly precise: boolean
-	send: (target: SendTarget, text: string) => Promise<SendResult>
+	/** `timeoutMs` caps this one run, so a caller retrying inside a request can size each attempt from what's left of its budget. */
+	send: (target: SendTarget, text: string, timeoutMs?: number) => Promise<SendResult>
 	/** Runtime availability check (e.g. the sidecar socket must be reachable). */
 	available?: () => Promise<boolean>
+}
+
+/**
+ * How long one AppleScript run may take before it's killed.
+ *
+ * Sized from measurement, not taste. A send that *worked* measured 23.6s end to
+ * end on a 30-workspace sidebar — past the 20s ceiling this replaces, which is why
+ * ordinary sends were being killed mid-run and reported as "Conductor took too long
+ * to respond". The cost is Accessibility round trips, not waiting: activating a
+ * backgrounded Conductor and reading the pane cost ~10s cold, and finding the
+ * sidebar row to press another ~10s (see `atTargetWorkspace`, which is why a warm
+ * send is now ~2s). A ceiling costs nothing when a send is fast — only a doomed one
+ * waits it out, and the caller's own deadline is what bounds that.
+ */
+export const SEND_ATTEMPT_MS = 28_000
+
+/**
+ * Only one AppleScript may drive Conductor's UI at a time.
+ *
+ * Every path in this file acts on `window 1` — presses a sidebar row, switches a
+ * tab, writes the composer — so two interleaving is precisely the failure the file
+ * is built to avoid: one run's Enter landing in the chat the other just switched
+ * to. That's easy to reach now a send retries *inside* one request (up to a minute
+ * of wall clock): a second phone, a parked first prompt going out, or a Retry
+ * tapped after the PWA gave up. A second writer is turned away in words rather
+ * than queued — being told to try again is recoverable, typing into the wrong
+ * agent isn't.
+ *
+ * The claim carries a timestamp so a run that somehow escapes its `finally` can't
+ * brick every write until the relay restarts.
+ */
+let uiWriteSince = 0
+const UI_WRITE_STALE_MS = 120_000
+const UI_WRITE_BUSY = 'Conductor is already being driven by another request - try again in a moment'
+
+/**
+ * Failures no amount of retrying will fix, so a caller that retries can stop at
+ * once instead of spending a whole budget to arrive at the same sentence.
+ *
+ * Matched on phrases this file writes itself — the first two from `refusalReason`,
+ * the rest from the target checks below — never on macOS's own wording, which we
+ * quote verbatim precisely because it drifts. The refusals are the ones a node
+ * upgrade causes by silently revoking Accessibility: they fail instantly and
+ * identically every time, so making the phone sit through a whole retry budget to
+ * be told a permission is missing is worse than being told at once. The rest are
+ * malformed targets — no session, no branch — which no attempt can turn into one.
+ */
+const TERMINAL_ERRORS = [
+	'not trusted for Accessibility',
+	'blocked the relay from controlling the UI',
+	'no session id to target',
+	'workspace has no branch to focus'
+]
+
+export function retryWontHelp(error: string | undefined): boolean {
+	return error !== undefined && TERMINAL_ERRORS.some(phrase => error.includes(phrase))
+}
+
+function claimUiWrite(): boolean {
+	if (uiWriteSince && Date.now() - uiWriteSince < UI_WRITE_STALE_MS) return false
+	uiWriteSince = Date.now()
+	return true
+}
+
+function releaseUiWrite(): void {
+	uiWriteSince = 0
 }
 
 /**
@@ -62,7 +129,8 @@ export class SidecarActuator implements Actuator {
 		return sidecarAvailable()
 	}
 
-	async send(target: SendTarget, text: string): Promise<SendResult> {
+	/** `timeoutMs` is ignored — the sidecar is one socket write, with no UI to wait on. */
+	async send(target: SendTarget, text: string, _timeoutMs?: number): Promise<SendResult> {
 		const sessionId = target.sessionId ?? target.workspace.active_session_id
 		if (!sessionId) return { ok: false, strategy: this.name, error: 'no session id to target' }
 		try {
@@ -401,16 +469,35 @@ on focusViaPalette()
 	end tell
 end focusViaPalette
 
+on paneAgrees()
+	-- Nothing in the open pane contradicts the target: a chat pane is there and its
+	-- header assertion passed (which is a no-op when there's no branch to check it
+	-- against). This is what confirms a sidebar press landed.
+	try
+		set strips to my tabGroups()
+		if (count of strips) is 0 then return false
+		my assertWorkspace(item 1 of strips)
+		return true
+	end try
+	return false
+end paneAgrees
+
+on atTargetWorkspace()
+	-- "Are we already there?" — the *strict* form of the question, so it needs a
+	-- branch to have been checked and not merely skipped. Worth asking first because
+	-- the pane header answers in ~0.5s where reading the sidebar's rows to press one
+	-- measured 5-7s, the single largest cost in a send: a phone sends to the same
+	-- workspace over and over, and Conductor stays where it was left. Safe as a
+	-- shortcut because it *is* the assertion the send makes before typing anyway.
+	if (system attribute "RELAY_WS_BRANCH") is "" then return false
+	return my paneAgrees()
+end atTargetWorkspace
+
 on focusWorkspace()
 	if (system attribute "RELAY_WS_QUERY") is "" then return
+	if my atTargetWorkspace() then return
 	if my focusViaSidebar() then
-		try
-			set strips to my tabGroups()
-			if (count of strips) > 0 then
-				my assertWorkspace(item 1 of strips)
-				return
-			end if
-		end try
+		if my paneAgrees() then return
 	end if
 	my focusViaPalette()
 end focusWorkspace
@@ -911,7 +998,7 @@ export class AppleScriptActuator implements Actuator {
 	readonly caveat = 'Focuses the target workspace (Cmd+K) and its chat tab before sending.'
 	readonly precise = true
 
-	async send(target: SendTarget, text: string): Promise<SendResult> {
+	async send(target: SendTarget, text: string, timeoutMs = SEND_ATTEMPT_MS): Promise<SendResult> {
 		// Focus the target workspace, select its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
@@ -932,6 +1019,7 @@ tell application "System Events"
 	key code 36
 end tell
 `.trim()
+		if (!claimUiWrite()) return { ok: false, strategy: this.name, error: UI_WRITE_BUSY }
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
 		const os = await import('node:os')
 		const fs = await import('node:fs/promises')
@@ -941,12 +1029,13 @@ end tell
 		try {
 			await exec('osascript', ['-e', script], {
 				env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
-				timeout: 20000
+				timeout: Math.max(5_000, Math.round(timeoutMs))
 			})
 			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return { ok: false, strategy: this.name, error: osaError(err) }
 		} finally {
+			releaseUiWrite()
 			await fs.rm(tmp, { force: true }).catch(() => undefined)
 		}
 	}
@@ -996,6 +1085,7 @@ my focusWorkspace()
 my selectChatTab()
 my applyAgentOptions()
 return "ok"`.trim()
+	if (!claimUiWrite()) return { ok: false, strategy: 'applescript', error: UI_WRITE_BUSY }
 	try {
 		await exec('osascript', ['-e', script], {
 			env: {
@@ -1006,11 +1096,13 @@ return "ok"`.trim()
 				RELAY_SET_FAST: opts.toggleFast ? '1' : '',
 				RELAY_SET_MODEL: opts.model ?? ''
 			},
-			timeout: 25000
+			timeout: SEND_ATTEMPT_MS
 		})
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	} finally {
+		releaseUiWrite()
 	}
 }
 
@@ -1023,10 +1115,12 @@ my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 return my listModels()`.trim()
+	// Opening the picker's menu would swallow another run's keystrokes, so it claims too.
+	if (!claimUiWrite()) return { ok: false, error: UI_WRITE_BUSY }
 	try {
 		const { stdout } = await exec('osascript', ['-e', script], {
 			env: { ...process.env, ...targetEnv(target) },
-			timeout: 25000
+			timeout: SEND_ATTEMPT_MS
 		})
 		const models = stdout
 			.split('\n')
@@ -1035,6 +1129,8 @@ return my listModels()`.trim()
 		return { ok: true, models }
 	} catch (err) {
 		return { ok: false, error: osaError(err) }
+	} finally {
+		releaseUiWrite()
 	}
 }
 
@@ -1094,14 +1190,19 @@ my focusWorkspace()
 tell application "System Events"
 	keystroke "t" using {command down}
 end tell`.trim()
+	if (!claimUiWrite()) return { ok: false, strategy: 'applescript', error: UI_WRITE_BUSY }
 	try {
+		// Shares the focus path with a send, so it needs the same ceiling: 15s was under
+		// the cost of activating a cold Conductor and finding the row on its own.
 		await exec('osascript', ['-e', script], {
 			env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
-			timeout: 15000
+			timeout: SEND_ATTEMPT_MS
 		})
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	} finally {
+		releaseUiWrite()
 	}
 }
 
