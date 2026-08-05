@@ -70,6 +70,15 @@ interface AppState {
 	 * on the phone from staying unread forever.
 	 */
 	readMarks: ReadMarks
+	/**
+	 * This device's push subscription as the *relay* knows it. Reconciled once at the
+	 * app shell (`usePushSync`) rather than by the Connect sheet, because the whole
+	 * point is to repair a subscription the relay has lost — which has to happen on
+	 * every load, not only when someone opens the sheet to look at it.
+	 * `deviceId` is null when this device isn't subscribed; `devices` counts every
+	 * phone the relay will notify.
+	 */
+	push: { deviceId: string | null; devices: number }
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
@@ -84,6 +93,7 @@ interface AppState {
 	setDraft: (workspaceId: string, text: string) => void
 	/** Note a chat as seen up to `at` (its `updated_at`); older marks never overwrite newer ones. */
 	markRead: (sessionId: string, at: string) => void
+	setPush: (push: { deviceId: string | null; devices: number }) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -103,6 +113,7 @@ export const useApp = create<AppState>((set, get) => {
 		pending: [],
 		drafts: loadDrafts(),
 		readMarks: loadReadMarks(),
+		push: { deviceId: null, devices: 0 },
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -135,6 +146,7 @@ export const useApp = create<AppState>((set, get) => {
 			if ((get().readMarks[sessionId] ?? '') >= at) return
 			set({ readMarks: writeReadMarks({ ...get().readMarks, [sessionId]: at }) })
 		},
+		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {

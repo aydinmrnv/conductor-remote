@@ -4,7 +4,7 @@ import { ReloadPrompt } from './components/ReloadPrompt.tsx'
 import { SessionView } from './components/SessionView.tsx'
 import { TokenGate } from './components/TokenGate.tsx'
 import { WorkspaceList } from './components/WorkspaceList.tsx'
-import { useEdgeSwipeDrawer, useVisualViewportHeight } from './hooks.ts'
+import { useEdgeSwipeDrawer, usePushRouting, usePushSync, useVisualViewportHeight } from './hooks.ts'
 import { cn } from './lib/cn.ts'
 import { useApp } from './store.ts'
 
@@ -42,6 +42,14 @@ function Shell() {
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const drawerRef = useRef<HTMLElement>(null)
 	useEdgeSwipeDrawer(drawerRef)
+	// A tapped notification arrives as a message from the service worker, on whichever
+	// screen the app happens to be showing — so the listener lives with the router.
+	usePushRouting()
+	// Re-register this device's push subscription with the relay on every load.
+	// Shell-level, not the Connect sheet: a subscription the relay has lost still looks
+	// fine from here, so waiting for someone to open a sheet and look would mean it is
+	// usually never repaired.
+	usePushSync()
 	return (
 		<div className="flex h-full overflow-hidden">
 			{sidebarOpen ? (
