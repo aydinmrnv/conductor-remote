@@ -28,19 +28,33 @@ Two asymmetric halves — keep them separate:
   optional** — a bare `conductor://path=…` opens an empty workspace like
   Conductor's own New workspace; that form is *undocumented* (every documented
   route carries a prompt) but verified live, so suspect it first if creation
-  breaks. The link is fire-and-forget and only *pre-fills* the composer, so the
-  relay watches the DB for the new row and the PWA parks any prompt
-  (`web/src/lib/firstPrompt.ts`) until the worktree is `ready`, guarded on
-  `last_user_message_at` so it can't double-send. Don't block the request on
-  setup: it measured 30s+, past the phone's own 25s budget. **Delivery belongs to
-  the app shell** (`hooks.ts` ▸ `useFirstPromptDelivery`), never to the session
-  view: setup outlasts the user's attention, and an iOS relaunch reopens at `/`,
-  so a route-scoped watcher waits for a mount that never comes and the prompt
-  rots in localStorage. That same `last_user_message_at` guard is what makes
-  retrying safe; after three failed sends the text is stashed into the
-  workspace's composer draft (store-backed — `web/src/lib/draft.ts`) so an
-  undeliverable prompt sits in the chat box instead of vanishing, and a send
-  matching the draft clears it so it can't go twice.
+  breaks. The link is fire-and-forget and only *pre-fills* the composer — someone
+  still has to press Enter ~30s later, once the worktree is `ready` and the chat
+  exists. **That someone is the relay** (`src/firstprompt.ts` ▸ `FirstPromptQueue`),
+  never the phone: a phone sleeps, iOS suspends a backgrounded PWA outright, and
+  the delivery hook it used to run only looked at its parked set once per app
+  launch, so prompts sat unsent until the next relaunch. Don't confuse that with
+  "block the request": creation still returns as soon as the row exists (~2s;
+  waiting for setup measured 30s+, past the phone's own 25s budget) and the queue
+  delivers on its own schedule. `send:true` opts an API caller into awaiting it.
+  Three properties hold it up: **one owner** (if the phone delivered too,
+  `last_user_message_at` wouldn't save you — it's a read, not a lock, and both
+  sides can read it null; the guard is still what makes *retrying* safe and what
+  detects a prompt sent by hand from the Mac); **persistence** to
+  `…/conductor-remote/first-prompts.json`, because `autoupdate` deliberately
+  `exit()`s to reload and launchd restarts us mid-setup; and **giving up in
+  public** — after 3 sends or 15 minutes the entry flips to `failed` *and stays*,
+  riding along on `/api/state` as `workspace.pending_prompt` so the chat can show
+  the text with the reason and a Retry (`DELETE …/workspaces/:id/prompt`
+  dismisses it). A waiting prompt shows the same way, because 30s of empty pane
+  reads as "swallowed" and gets retyped — which is the same prompt sent twice.
+- **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
+  here drives Conductor's single shared window, so two overlapping runs interleave
+  and land a prompt in whatever the other one focused — the exact failure every
+  step's fail-closed assertion *cannot* catch, since each script's reads are true
+  when it makes them. It was unreachable while every write was one person tapping
+  one button; the first-prompt queue, which sends on its own schedule, is what made
+  it reachable.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's

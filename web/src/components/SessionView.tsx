@@ -104,7 +104,8 @@ export function SessionView() {
 						creating={creatingChat}
 					/>
 				) : null}
-				<Transcript sessionId={sessionId} working={working} />
+				{/* `pending_prompt` is the relay's undelivered first prompt for this workspace. */}
+				<Transcript sessionId={sessionId} workspaceId={ws.id} working={working} queued={ws.pending_prompt} />
 				{activeSession ? <AgentBar session={activeSession} workspaceId={ws.id} /> : null}
 				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
