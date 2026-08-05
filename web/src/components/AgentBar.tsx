@@ -1,18 +1,22 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Zap } from 'lucide-react'
+import { Check, ChevronDown, RefreshCw, Zap } from 'lucide-react'
 import { useState } from 'react'
-import { client } from '../lib/api.ts'
+import { useModels } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel } from '../lib/format.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 
 /**
- * Conductor's own composer controls, mirrored for the phone. Values are read from
- * the DB (durable, like every other read); changes are driven through the desktop
- * UI by the relay, so this is deliberately optimistic-free — a control stays busy
- * until Conductor confirms the new value, because a half-applied agent setting is
- * worse than a slow one.
+ * Conductor's own composer controls, mirrored for the phone — and rendered
+ * *inside* the composer card (Composer.tsx) so the whole thing has one left edge
+ * and one border, like the desktop app.
+ *
+ * Values are read from the DB (durable, like every other read). Changes are
+ * **staged, not sent**: pushing one costs a slow, focus-stealing AppleScript trip
+ * and only decides what the *next* prompt runs on, so a tap is instant and local,
+ * and the send applies it (hooks.ts ▸ `useSendPrompt`) before the prompt goes.
+ * A staged pill is coloured, and flipping a value back to what Conductor already
+ * has drops the staged one rather than queuing a no-op round trip.
  */
 const EFFORT_LABELS: Record<string, string> = {
 	low: 'Low',
@@ -24,10 +28,18 @@ const EFFORT_LABELS: Record<string, string> = {
 }
 const EFFORT_ORDER = Object.keys(EFFORT_LABELS)
 
+/** Nothing staged — a stable identity so the selector can't loop. */
+const NOTHING: AgentPatch = {}
+
+/** A staged value only exists while it differs from Conductor's; flipping back clears it. */
+function change<T>(next: T, current: T): T | undefined {
+	return next === current ? undefined : next
+}
+
 /**
  * The pill shows the DB's model id (`opus-5-1m`) while the picker lists Conductor's
  * menu labels (`Opus 5 NEW`). There's no reliable mapping between the two, so the
- * list deliberately doesn't mark a "current" entry rather than mark the wrong one.
+ * list marks the *staged* entry only, rather than mark the wrong one as current.
  */
 function modelPill(session: Session): string {
 	const raw = shortModel(session.model)
@@ -36,114 +48,112 @@ function modelPill(session: Session): string {
 }
 
 export function AgentBar({ session, workspaceId }: { session: Session; workspaceId: string }) {
-	const [busy, setBusy] = useState<string | null>(null)
-	const [error, setError] = useState<string | null>(null)
-	const [models, setModels] = useState<string[] | null>(null)
 	const [picking, setPicking] = useState(false)
-	const online = useApp(s => s.online)
-	const queryClient = useQueryClient()
+	const staged = useApp(s => s.agentDrafts[session.id]) ?? NOTHING
+	const stageAgent = useApp(s => s.stageAgent)
+	// A send in flight is what pushes the staged settings. The controls stay live
+	// through it — anything changed mid-send simply stages for the next one, which
+	// the store's key-wise `clearAgentDraft` is what makes safe.
+	const sending = useApp(s => s.pending.some(p => p.sessionId === session.id && p.status === 'sending'))
+	const { data: models, isFetching, isError } = useModels(session, workspaceId, picking)
 
-	const apply = async (what: string, patch: AgentPatch) => {
-		if (busy || !online) return
-		setBusy(what)
-		setError(null)
-		try {
-			const r = await client.setAgent(session.id, patch, workspaceId)
-			if (!r.ok) setError(r.error ?? 'change failed')
-			await queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
-		} catch (e) {
-			setError(e instanceof Error ? e.message : 'change failed')
-		} finally {
-			setBusy(null)
-		}
-	}
+	const stage = (patch: AgentPatch) => stageAgent(session.id, patch)
 
-	const openModels = async () => {
-		setPicking(p => !p)
-		if (models || busy) return
-		setBusy('model')
-		try {
-			const r = await client.models(session.id, workspaceId)
-			if (r.ok && r.models) setModels(r.models)
-			else setError(r.error ?? 'could not read the model list')
-		} catch (e) {
-			setError(e instanceof Error ? e.message : 'could not read the model list')
-		} finally {
-			setBusy(null)
-		}
-	}
+	const dbEffort = session.claude_effort_level ?? undefined
+	const dbPlan = session.permission_mode === 'plan'
+	const dbFast = Boolean(session.fast_mode)
+	const effort = staged.effort ?? dbEffort
+	const planOn = staged.plan ?? dbPlan
+	const fastOn = staged.fast ?? dbFast
+	const anyStaged = Object.keys(staged).length > 0
 
 	// Tapping effort steps to the next level, matching the desktop button's own behaviour.
-	const nextEffort = () => {
-		const i = EFFORT_ORDER.indexOf(session.claude_effort_level ?? '')
-		return EFFORT_ORDER[(i + 1) % EFFORT_ORDER.length]
-	}
-
-	const planOn = session.permission_mode === 'plan'
-	const fastOn = Boolean(session.fast_mode)
+	const nextEffort = () => EFFORT_ORDER[(EFFORT_ORDER.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]
 
 	return (
-		<div className="shrink-0 border-t border-border-soft bg-bg px-3 pt-2">
-			<div className="flex flex-wrap items-center gap-1.5">
-				<button
-					type="button"
-					onClick={openModels}
-					disabled={!online || busy !== null}
-					className="pill flex items-center gap-1 disabled:opacity-40"
-				>
-					{modelPill(session)}
-					<ChevronDown size={13} />
-				</button>
-				{session.claude_effort_level ? (
+		<div className="min-w-0 flex-1">
+			<div className="flex flex-wrap items-center gap-0.5">
+				<div className="relative">
+					{/* Not gated on `online`: picking is local, and the cached list means the
+					    picker still works with the relay down — the change goes when the send does. */}
 					<button
 						type="button"
-						onClick={() => apply('effort', { effort: nextEffort() })}
-						disabled={!online || busy !== null}
-						className="pill disabled:opacity-40"
+						onClick={() => setPicking(p => !p)}
+						className={cn('ctl flex max-w-40 items-center gap-1', staged.model && 'ctl-staged')}
 					>
-						{busy === 'effort' ? '…' : EFFORT_LABELS[session.claude_effort_level]}
+						<span className="truncate">{staged.model ?? modelPill(session)}</span>
+						<ChevronDown size={13} className="shrink-0" />
+					</button>
+					{picking ? (
+						<>
+							{/* Tap-anywhere-else dismiss — a phone has no blur to lean on. */}
+							<button
+								type="button"
+								aria-label="Close model picker"
+								onClick={() => setPicking(false)}
+								className="fixed inset-0 z-30 cursor-default"
+							/>
+							<div className="absolute bottom-full left-0 z-40 mb-2 max-h-64 w-56 overflow-y-auto rounded-xl border border-border bg-surface-2 py-1 shadow-xl shadow-black/40">
+								<div className="flex items-center gap-1.5 px-3 py-1 text-[11px] text-faint">
+									Model
+									{isFetching ? <RefreshCw size={10} className="animate-spin" /> : null}
+								</div>
+								{models?.length ? (
+									models.map(m => (
+										<button
+											type="button"
+											key={m}
+											onClick={() => {
+												setPicking(false)
+												stage({ model: change(m, staged.model) })
+											}}
+											className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm active:bg-surface"
+										>
+											<span className="min-w-0 flex-1 truncate">{m}</span>
+											<Check size={13} className={cn('shrink-0 text-accent', staged.model !== m && 'invisible')} />
+										</button>
+									))
+								) : (
+									<div className="px-3 py-2 text-sm text-muted">
+										{isError ? 'Couldn’t read the model list.' : 'Reading Conductor’s model list…'}
+									</div>
+								)}
+								{/* A refresh that failed on top of a cached list: say so, keep the list usable. */}
+								{isError && models?.length ? (
+									<div className="px-3 py-1.5 text-[11px] text-del">Couldn’t refresh — showing the last list.</div>
+								) : null}
+							</div>
+						</>
+					) : null}
+				</div>
+				{effort ? (
+					<button
+						type="button"
+						onClick={() => stage({ effort: change(nextEffort(), dbEffort) })}
+						className={cn('ctl', staged.effort && 'ctl-staged')}
+					>
+						{EFFORT_LABELS[effort]}
 					</button>
 				) : null}
 				<button
 					type="button"
-					onClick={() => apply('plan', { plan: !planOn })}
-					disabled={!online || busy !== null}
-					className={cn('pill disabled:opacity-40', planOn && 'pill-active')}
+					onClick={() => stage({ plan: change(!planOn, dbPlan) })}
+					className={cn('ctl', planOn && 'ctl-on', staged.plan !== undefined && 'ctl-staged')}
 				>
-					{busy === 'plan' ? '…' : 'Plan'}
+					Plan
 				</button>
 				<button
 					type="button"
-					onClick={() => apply('fast', { fast: !fastOn })}
-					disabled={!online || busy !== null}
-					className={cn('pill flex items-center gap-1 disabled:opacity-40', fastOn && 'pill-active')}
+					onClick={() => stage({ fast: change(!fastOn, dbFast) })}
+					className={cn('ctl flex items-center gap-1', fastOn && 'ctl-on', staged.fast !== undefined && 'ctl-staged')}
 				>
 					<Zap size={13} />
-					{busy === 'fast' ? '…' : 'Fast'}
+					Fast
 				</button>
 			</div>
-			{picking ? (
-				<div className="mt-2 max-h-44 overflow-y-auto rounded-lg border border-border-soft">
-					{models === null ? (
-						<div className="px-3 py-2 text-sm text-muted">Reading Conductor’s model list…</div>
-					) : (
-						models.map(m => (
-							<button
-								type="button"
-								key={m}
-								onClick={() => {
-									setPicking(false)
-									apply('model', { model: m })
-								}}
-								className="block w-full px-3 py-2 text-left text-sm active:bg-surface-2"
-							>
-								{m}
-							</button>
-						))
-					)}
-				</div>
+			{anyStaged ? (
+				<div className="px-2 pt-0.5 text-[11px] text-faint">{sending ? 'Applying…' : 'Applies when you send'}</div>
 			) : null}
-			{error ? <div className="mt-1.5 text-xs text-del">{error}</div> : null}
 		</div>
 	)
 }

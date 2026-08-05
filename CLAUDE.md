@@ -154,6 +154,22 @@ Two asymmetric halves — keep them separate:
     state and only exists for some models**, so the DB decides whether to press it
     and a missing button is reported, not ignored. Every change is confirmed
     against the DB before the API returns success.
+
+    **The phone doesn't push these on tap — the send does.** A tap only *stages*
+    the change (`web/src/lib/agentDraft.ts`, keyed by session id and persisted
+    exactly like the composer draft it belongs to), and `useSendPrompt` POSTs the
+    patch *before* the prompt and drops the prompt if it didn't stick — running it
+    on the model the user just moved away from is the same class of mistake as
+    landing it in the wrong workspace. That's why staged pills are coloured, why
+    staging still works with the relay down, and why flipping a value back to
+    Conductor's own clears the staged one instead of queuing a no-op round trip
+    (`clearAgentDraft` clears key by key, so a change made *during* a send stages
+    for the next one instead of being swallowed). `GET …/models` is then the only
+    tap-time trip left, and it's the expensive one — it activates Conductor and
+    opens the real menu — so its result is cached per `agent_type` and served
+    stale-while-revalidate (`web/src/lib/models.ts` ▸ `useModels`): the picker
+    paints from the last list and refreshes behind it, and a refresh that fails
+    keeps that list on screen and says so rather than emptying it.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently
