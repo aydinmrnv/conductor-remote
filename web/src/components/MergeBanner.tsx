@@ -17,11 +17,18 @@ interface LocalState {
  *  - resolve → PR has merge conflicts; button asks the agent to resolve them
  *  - merge   → PR is mergeable; button merges it (gh pr merge)
  *  - draft   → PR isn't ready; shown, no action
+ *  - merged  → the PR landed; shown purple, no action, purely to keep the #NN
+ *    link reachable. The bar used to vanish on merge, which took the only route
+ *    to the PR on the phone with it — and merged is exactly when you want to go
+ *    read it.
  * `push`/`resolve` just send a chat message (like Conductor); `merge` acts.
  */
-type Action = 'push' | 'resolve' | 'merge' | 'draft'
+type Action = 'push' | 'resolve' | 'merge' | 'draft' | 'merged'
 
 function pickAction(ws: Workspace, local?: LocalState): Action | null {
+	// merged outranks local dirt: pushing more onto a landed branch isn't the
+	// next step, and the link is what the bar is still here for.
+	if (ws.pr_status === 'merged') return 'merged'
 	if (local && (local.dirty || local.unpushed)) return 'push'
 	switch (ws.pr_status) {
 		case 'conflicts':
@@ -39,7 +46,8 @@ const STATUS: Record<Action, { label: string; tone: string; icon?: ReactNode }> 
 	push: { label: 'Uncommitted changes', tone: 'text-working', icon: <UploadCloud size={14} /> },
 	resolve: { label: 'Merge conflicts', tone: 'text-muted', icon: <AlertTriangle size={14} /> },
 	merge: { label: 'Ready to merge', tone: 'text-add' },
-	draft: { label: 'Draft', tone: 'text-muted' }
+	draft: { label: 'Draft', tone: 'text-muted' },
+	merged: { label: 'Merged', tone: 'text-pr-merged', icon: <GitMerge size={14} /> }
 }
 
 /** The message each delegating action sends into the chat. */
@@ -59,7 +67,10 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 	const [busy, setBusy] = useState(false)
 	const [done, setDone] = useState<{ ok: boolean; msg: string } | null>(null)
 
-	if (done?.ok)
+	// The local "Merged" receipt only has to cover the gap until `pr_status` catches
+	// up (the PR cache is up to 60s stale); after that the purple bar says the same
+	// thing and carries the link, so let it take over.
+	if (done?.ok && ws.pr_status !== 'merged')
 		return (
 			<Bar>
 				<Check size={15} className="shrink-0 text-add" />
@@ -67,7 +78,6 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 			</Bar>
 		)
 
-	if (ws.pr_status === 'merged') return null
 	const action = pickAction(ws, local)
 	if (!action) return null
 	const { label, tone, icon } = STATUS[action]
@@ -109,13 +119,16 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 	}
 
 	return (
-		<Bar tint={action === 'merge'}>
+		<Bar tint={action === 'merge' ? 'add' : action === 'merged' ? 'merged' : undefined}>
 			{ws.pr_number ? (
 				<a
 					href={ws.pr_url ?? undefined}
 					target="_blank"
 					rel="noreferrer"
-					className="flex shrink-0 items-center gap-0.5 rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-muted active:bg-surface"
+					className={cn(
+						'flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-0.5 font-mono text-[11px] active:bg-surface',
+						action === 'merged' ? 'bg-pr-merged/15 text-pr-merged' : 'bg-surface-2 text-muted'
+					)}
 				>
 					#{ws.pr_number}
 					<ArrowUpRight size={12} />
@@ -128,7 +141,7 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 
 			<div className="ml-auto flex shrink-0 items-center gap-2">
 				{done && !done.ok ? <span className="max-w-36 truncate text-[11px] text-del">{done.msg}</span> : null}
-				{action === 'draft' ? null : action === 'merge' ? (
+				{action === 'draft' || action === 'merged' ? null : action === 'merge' ? (
 					confirming ? (
 						<>
 							<CancelBtn onClick={() => setConfirming(false)} />
@@ -195,12 +208,14 @@ function CancelBtn({ onClick }: { onClick: () => void }) {
 	)
 }
 
-function Bar({ tint, children }: { tint?: boolean; children: ReactNode }) {
+const TINTS = { add: 'bg-add/10', merged: 'bg-pr-merged/10' }
+
+function Bar({ tint, children }: { tint?: keyof typeof TINTS; children: ReactNode }) {
 	return (
 		<div
 			className={cn(
 				'sticky top-0 z-10 flex items-center gap-2 border-b border-border-soft px-3 py-2 backdrop-blur',
-				tint ? 'bg-add/10' : 'bg-surface/95'
+				tint ? TINTS[tint] : 'bg-surface/95'
 			)}
 		>
 			{children}
