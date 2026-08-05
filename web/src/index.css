@@ -84,6 +84,20 @@
 	.pill-active {
 		@apply bg-surface-2 text-text;
 	}
+	/* Composer control (components/AgentBar.tsx): a tighter pill whose 8px gutter
+	   matches the textarea's own text inset, so every label inside the composer
+	   card starts on the same vertical rule as the prompt. */
+	.ctl {
+		@apply rounded-full px-2 py-1 text-[13px] font-medium text-muted transition;
+	}
+	.ctl-on {
+		@apply bg-surface-2 text-text;
+	}
+	/* Chosen on the phone, not yet pushed into Conductor — it rides along with the
+	   next message. Deliberately the accent, so "staged" can't read as "on". */
+	.ctl-staged {
+		@apply bg-accent-soft text-accent;
+	}
 	.dot {
 		@apply size-2.5 shrink-0 rounded-full bg-faint;
 		/* The colour a `.dot-pulse` halo mixes from; overridden inline per dot. */

@@ -8,7 +8,6 @@ import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceLabel } from '../lib/format.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
-import { AgentBar } from './AgentBar.tsx'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
@@ -105,8 +104,8 @@ export function SessionView() {
 					/>
 				) : null}
 				<Transcript sessionId={sessionId} working={working} />
-				{activeSession ? <AgentBar session={activeSession} workspaceId={ws.id} /> : null}
-				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
+				{/* The agent controls render inside the composer card (see Composer.tsx). */}
+				<Composer key={ws.id} session={activeSession} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
 
 			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}

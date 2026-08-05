@@ -1,7 +1,8 @@
 import { create } from 'zustand'
+import { loadAgentDrafts, writeAgentDraft } from './lib/agentDraft.ts'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 import { loadDrafts, writeDraft } from './lib/draft.ts'
-import type { UpdateStatus } from './lib/types.ts'
+import type { AgentPatch, UpdateStatus } from './lib/types.ts'
 
 /** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
 export type GroupBy = 'status' | 'repo' | 'none'
@@ -32,6 +33,16 @@ export interface PendingMessage {
 	status: 'sending' | 'error'
 	error?: string
 	createdAt: number
+}
+
+/** Drop keys with no staged value, so "nothing staged" is `{}` and never `{ plan: undefined }`. */
+function prunePatch(patch: AgentPatch): AgentPatch {
+	const next: AgentPatch = {}
+	if (patch.model !== undefined) next.model = patch.model
+	if (patch.effort !== undefined) next.effort = patch.effort
+	if (patch.plan !== undefined) next.plan = patch.plan
+	if (patch.fast !== undefined) next.fast = patch.fast
+	return next
 }
 
 function loadView(): ViewPrefs {
@@ -68,6 +79,15 @@ interface AppState {
 	 * the box has to show it there and then, not on the next remount.
 	 */
 	drafts: Record<string, string>
+	/**
+	 * Agent settings chosen on the phone but not yet pushed into Conductor, per
+	 * session id (mirrored to localStorage — see lib/agentDraft.ts). A model or
+	 * effort change costs a slow, focus-stealing AppleScript round trip and only
+	 * matters for the *next* prompt, so the phone holds it here and the send
+	 * applies it (hooks.ts ▸ `useSendPrompt`) — exactly like the desktop composer,
+	 * where the picker changes what the next message runs on.
+	 */
+	agentDrafts: Record<string, AgentPatch>
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
@@ -84,6 +104,10 @@ interface AppState {
 	stashDraft: (workspaceId: string, text: string) => void
 	/** Drop a draft a send just consumed, so a retried stash can't linger and be sent twice. */
 	clearDraftIfEqual: (workspaceId: string, text: string) => void
+	/** Stage an agent change for the next send. A key set to `undefined` unstages it. */
+	stageAgent: (sessionId: string, patch: AgentPatch) => void
+	/** Drop the staged keys a send just applied — anything staged since survives. */
+	clearAgentDraft: (sessionId: string, applied: AgentPatch) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -102,6 +126,7 @@ export const useApp = create<AppState>((set, get) => {
 		workingHints: {},
 		pending: [],
 		drafts: loadDrafts(),
+		agentDrafts: loadAgentDrafts(),
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -136,6 +161,25 @@ export const useApp = create<AppState>((set, get) => {
 		},
 		clearDraftIfEqual: (workspaceId, text) => {
 			if ((get().drafts[workspaceId] ?? '').trim() === text.trim()) get().setDraft(workspaceId, '')
+		},
+		stageAgent: (sessionId, patch) => {
+			const next = prunePatch({ ...get().agentDrafts[sessionId], ...patch })
+			writeAgentDraft(sessionId, next)
+			set({ agentDrafts: { ...get().agentDrafts, [sessionId]: next } })
+		},
+		// Key by key rather than wholesale: a setting changed *while* the send was in
+		// flight is staged for the next one, and clearing the whole entry would eat it.
+		clearAgentDraft: (sessionId, applied) => {
+			const current = get().agentDrafts[sessionId]
+			if (!current) return
+			const next = prunePatch({
+				model: current.model === applied.model ? undefined : current.model,
+				effort: current.effort === applied.effort ? undefined : current.effort,
+				plan: current.plan === applied.plan ? undefined : current.plan,
+				fast: current.fast === applied.fast ? undefined : current.fast
+			})
+			writeAgentDraft(sessionId, next)
+			set({ agentDrafts: { ...get().agentDrafts, [sessionId]: next } })
 		},
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),

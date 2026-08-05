@@ -85,10 +85,10 @@ web/              React PWA (Vite root)
   index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
-  src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
-  src/lib/        api client, types, format helpers, cn
-  src/store.ts    zustand: token + connection status
-  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
+  src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (SWR) / useSendPrompt (applies staged agent settings, then sends)
+  src/lib/        api client, types, format helpers, cn, composer drafts, staged agent settings, model-list cache
+  src/store.ts    zustand: token + connection status + drafts + staged agent settings
+  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer (AgentBar renders inside its card), NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
 scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)

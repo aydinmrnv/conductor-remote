@@ -1,20 +1,30 @@
 import { ArrowUp, Info, WifiOff } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { useSendPrompt } from '../hooks.ts'
-import type { ActuatorInfo } from '../lib/types.ts'
+import type { ActuatorInfo, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { AgentBar } from './AgentBar.tsx'
 
 /**
  * The draft lives in the store (persisted per workspace — see lib/draft.ts), not
  * in local state: a first prompt that couldn't be delivered is stashed straight
  * into it, and the box has to show that the moment it lands rather than on the
  * next remount.
+ *
+ * The agent controls live *inside* the card, under the text and sharing the send
+ * button's row — one border, one left edge (card padding 8px + control padding
+ * 8px = the textarea's own text inset, so labels and prompt line up on the same
+ * rule). They used to be a separate strip above it, which read as a second
+ * toolbar and lined up with nothing.
  */
 export function Composer({
+	session,
 	sessionId,
 	workspaceId,
 	actuator
 }: {
+	/** The chat the controls act on; absent while the workspace has no session yet. */
+	session?: Session
 	sessionId: string | null
 	workspaceId: string
 	actuator?: ActuatorInfo
@@ -63,7 +73,9 @@ export function Composer({
 					</div>
 				)
 			)}
-			<div className="flex items-end gap-2 rounded-2xl border border-border bg-surface px-2.5 py-1.5 focus-within:border-accent/60">
+			{/* `has-[textarea:focus]`, not `focus-within`: the controls inside the card take
+			    focus too, and lighting the whole card up on a Plan tap reads as a typo. */}
+			<div className="rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60">
 				<textarea
 					ref={ref}
 					rows={1}
@@ -72,7 +84,7 @@ export function Composer({
 					placeholder={disabled ? 'No active session' : 'Send a prompt…'}
 					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
 					// takes focus, and never zooms back out on blur.
-					className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-base outline-none placeholder:text-faint disabled:opacity-50"
+					className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
 					onChange={e => setDraft(workspaceId, e.target.value)}
 					onKeyDown={e => {
 						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -81,15 +93,18 @@ export function Composer({
 						}
 					}}
 				/>
-				<button
-					type="button"
-					onClick={send}
-					disabled={disabled || !text.trim() || !online}
-					aria-label="Send"
-					className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
-				>
-					<ArrowUp size={19} />
-				</button>
+				<div className="mt-1 flex items-end gap-2">
+					{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
+					<button
+						type="button"
+						onClick={send}
+						disabled={disabled || !text.trim() || !online}
+						aria-label="Send"
+						className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
+					>
+						<ArrowUp size={19} />
+					</button>
+				</div>
 			</div>
 		</div>
 	)
