@@ -1,26 +1,53 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
+import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import type { TranscriptEntry } from '../lib/types.ts'
+import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
 import { Markdown } from './Markdown.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
-export function Transcript({ sessionId, working }: { sessionId: string | null; working?: boolean }) {
+export function Transcript({
+	sessionId,
+	workspaceId,
+	working,
+	queued
+}: {
+	sessionId: string | null
+	workspaceId: string
+	working?: boolean
+	/** The relay's undelivered first prompt for this workspace (src/firstprompt.ts). */
+	queued?: PendingPrompt | null
+}) {
 	const { entries, loading, error } = useTranscript(sessionId)
 	const pending = useApp(s => s.pending)
 	const removePending = useApp(s => s.removePending)
 	const sendPrompt = useSendPrompt()
+	const queryClient = useQueryClient()
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
+
+	// The relay owns the entry, so dropping it is a request, not a local edit.
+	const dismiss = async (id: string) => {
+		await client.dismissPrompt(id).catch(() => undefined)
+		queryClient.invalidateQueries({ queryKey: ['state'] })
+	}
 
 	// This session's optimistic prompts, hiding any still-`sending` one whose text
 	// has already arrived as a real user row — the confirmed bubble replaces it.
 	const delivered = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
 	const mine = pending.filter(p => p.sessionId === sessionId)
 	const visiblePending = mine.filter(p => !(p.status === 'sending' && delivered.has(p.text.trim())))
+
+	// The relay keeps the entry until delivery is *confirmed*, and its own send lands as
+	// a real user row up to a poll before /api/state drops it — so hide the queued bubble
+	// as soon as the text shows up in the chat (or in a bubble of our own), or it doubles.
+	const queuedText = queued?.text.trim() || null
+	const showQueued =
+		queuedText && !delivered.has(queuedText) && !mine.some(p => p.text.trim() === queuedText) ? queued : null
 
 	// Purge confirmed optimistic bubbles from the store once the real row shows (the
 	// send hook also purges on a timer; this catches the fast path so nothing lingers).
@@ -63,9 +90,11 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 		return () => ro.disconnect()
 	}, [])
 
-	if (!sessionId) return <Empty>No active session in this workspace.</Empty>
+	// A workspace still setting up has no chat yet — but if its first prompt is
+	// waiting on that setup, showing it beats an empty pane that looks like a loss.
+	if (!sessionId && !showQueued) return <Empty>No active session in this workspace.</Empty>
 
-	const empty = entries.length === 0 && visiblePending.length === 0
+	const empty = entries.length === 0 && visiblePending.length === 0 && !showQueued
 
 	return (
 		<div ref={scroller} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
@@ -88,6 +117,13 @@ export function Transcript({ sessionId, working }: { sessionId: string | null; w
 							onDismiss={() => removePending(p.id)}
 						/>
 					))}
+					{showQueued ? (
+						<QueuedEntry
+							queued={showQueued}
+							onRetry={sessionId ? () => sendPrompt({ sessionId, workspaceId, text: showQueued.text }) : undefined}
+							onDismiss={() => dismiss(workspaceId)}
+						/>
+					) : null}
 					{working ? <WorkingIndicator /> : null}
 				</div>
 			)}
@@ -153,6 +189,53 @@ function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
 				))}
 			</div>
 		</details>
+	)
+}
+
+/**
+ * The workspace's first prompt, still with the relay. Not a `PendingMessage`: it
+ * belongs to the workspace rather than to a session — usually there isn't one yet,
+ * which is the whole reason it's waiting — and it outlives this app being open.
+ *
+ * `failed` is the relay saying it gave up, so the text is offered back rather than
+ * lost: Retry sends it as an ordinary prompt (which also clears the entry), Dismiss
+ * drops it. It's still pre-filled in Conductor's composer on the Mac either way.
+ */
+function QueuedEntry({
+	queued,
+	onRetry,
+	onDismiss
+}: {
+	queued: PendingPrompt
+	onRetry?: () => void
+	onDismiss: () => void
+}) {
+	const failed = queued.status === 'failed'
+	return (
+		<div className="flex flex-col items-end gap-1">
+			<Bubble className={cn('max-w-[85%] bg-accent-soft text-text opacity-60', failed && 'border border-del/40')}>
+				<Markdown>{queued.text}</Markdown>
+			</Bubble>
+			{failed ? (
+				<div className="flex items-center gap-2 pr-1 text-[11px] text-del">
+					<AlertTriangle size={11} className="shrink-0" />
+					<span className="max-w-[55vw] truncate">{queued.error || 'Didn’t send'}</span>
+					{onRetry ? (
+						<button type="button" onClick={onRetry} className="font-semibold underline underline-offset-2">
+							Retry
+						</button>
+					) : null}
+					<button type="button" onClick={onDismiss} className="text-faint underline underline-offset-2">
+						Dismiss
+					</button>
+				</div>
+			) : (
+				<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
+					<Loader2 size={11} className="animate-spin" />
+					Sends when the workspace is ready
+				</span>
+			)}
+		</div>
 	)
 }
 
