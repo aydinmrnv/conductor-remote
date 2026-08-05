@@ -84,7 +84,14 @@ export function workspaceStatus(w: Workspace): string {
 }
 
 /** Group order matches the desktop sidebar (Done → In review → In progress → Setting up → Backlog). */
-export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'setting-up', 'backlog']
+export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'setting-up', 'backlog', 'canceled']
+
+/**
+ * The statuses you can *set*, in the order Conductor's own "Set status" menu lists
+ * them. `setting-up` isn't here on purpose: it's a lifecycle state the app derives
+ * from a provisioning worktree, not something the menu offers.
+ */
+export const SETTABLE_STATUSES = ['backlog', 'in-progress', 'in-review', 'done', 'canceled']
 
 export function workspaceStatusLabel(status: string): string {
 	const labels: Record<string, string> = {
@@ -92,9 +99,18 @@ export function workspaceStatusLabel(status: string): string {
 		'in-review': 'In review',
 		'in-progress': 'In progress',
 		'setting-up': 'Setting up',
-		backlog: 'Backlog'
+		backlog: 'Backlog',
+		canceled: 'Canceled'
 	}
 	return labels[status] ?? status
+}
+
+/** One palette for every status dot, so the header control and the sidebar groups agree. */
+export const STATUS_COLORS: Record<string, string> = {
+	done: 'var(--color-done)',
+	'in-review': 'var(--color-idle)',
+	'in-progress': 'var(--color-working)',
+	'setting-up': 'var(--color-working)'
 }
 
 /** Compact model name: strip the `claude-`/date noise for the phone. */

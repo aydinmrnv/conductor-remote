@@ -376,18 +376,15 @@ on sidebarLinks()
 	end tell
 end sidebarLinks
 
-on focusViaSidebar()
-	-- Press the workspace's sidebar row: no keystrokes at all, so nothing can be
-	-- swallowed by a focused field or fire a palette *command*. Only rows that are
-	-- actually rendered exist in the AX tree (a collapsed section has none), and
-	-- the title precedence is Conductor's, so we try each candidate and require a
-	-- unique hit — anything ambiguous falls back to the palette. Being wrong is
-	-- survivable here: assertWorkspace re-checks before we type.
+on findSidebarRow()
+	-- The workspace's own sidebar row. Only rows that are actually rendered exist
+	-- in the AX tree (a collapsed section has none), and the title follows
+	-- Conductor's precedence, so we try each candidate and require a *unique* hit —
+	-- anything ambiguous returns nothing rather than guessing at a neighbour.
 	set titles to my splitLines(system attribute "RELAY_WS_TITLES")
-	if (count of titles) is 0 then return false
+	if (count of titles) is 0 then return missing value
 	set repoName to system attribute "RELAY_WS_REPO"
 	set rows to my sidebarLinks()
-	set hit to missing value
 	repeat with candidate in titles
 		if (candidate as text) is not "" then
 			set matches to {}
@@ -398,12 +395,17 @@ on focusViaSidebar()
 					if repoName is "" or rowName contains repoName then set end of matches to row
 				end if
 			end repeat
-			if (count of matches) is 1 then
-				set hit to item 1 of matches
-				exit repeat
-			end if
+			if (count of matches) is 1 then return item 1 of matches
 		end if
 	end repeat
+	return missing value
+end findSidebarRow
+
+on focusViaSidebar()
+	-- Press that row: no keystrokes at all, so nothing can be swallowed by a
+	-- focused field or fire a palette *command*. Being wrong is survivable here —
+	-- assertWorkspace re-checks before we type — and a miss falls back to the palette.
+	set hit to my findSidebarRow()
 	if hit is missing value then return false
 	tell application "System Events" to tell process "Conductor"
 		perform action "AXPress" of hit
@@ -842,7 +844,152 @@ on applyAgentOptions()
 	if wantEffort is not "" then my setEffort(wantEffort)
 	if wantPlan is not "" then my setPlan(wantPlan)
 	if wantFast is "1" then my pressFast()
-end applyAgentOptions`
+end applyAgentOptions
+
+on axRole(el)
+	tell application "System Events" to tell process "Conductor"
+		try
+			return role of el
+		on error
+			return ""
+		end try
+	end tell
+end axRole
+
+on axKids(el)
+	tell application "System Events" to tell process "Conductor"
+		try
+			return UI elements of el
+		on error
+			return {}
+		end try
+	end tell
+end axKids
+
+on menusUnder(root, maxDepth)
+	-- Every AXMenu at or below root, breadth-first and bounded. The status
+	-- submenu opens *nested inside* the row menu rather than beside it, so a
+	-- search that stops at the first hit (the way setModel scans the web area's
+	-- direct children) never sees it.
+	set level to {root}
+	set found to {}
+	set depth to 0
+	repeat while (count of level) > 0 and depth < maxDepth
+		set nextLevel to {}
+		repeat with entry in level
+			set node to contents of entry
+			if (my axRole(node)) is "AXMenu" then set end of found to node
+			set nextLevel to nextLevel & (my axKids(node))
+		end repeat
+		set level to nextLevel
+		set depth to depth + 1
+	end repeat
+	return found
+end menusUnder
+
+on waitForMenu(root, maxDepth, attempts)
+	-- A menu is drawn by the webview, not by us, so how long it takes varies with
+	-- what Conductor is busy doing. Poll instead of guessing one delay: the common
+	-- case costs one sweep, and a slow one still lands.
+	repeat with i from 1 to attempts
+		set foundMenus to my menusUnder(root, maxDepth)
+		if (count of foundMenus) > 0 then return item 1 of foundMenus
+		delay 0.5
+	end repeat
+	return missing value
+end waitForMenu
+
+on menuItemNamed(m, wanted)
+	repeat with mi in (my axKids(m))
+		set node to contents of mi
+		if (my axRole(node)) is "AXMenuItem" and (my tabLabel(node)) is wanted then return node
+	end repeat
+	return missing value
+end menuItemNamed
+
+on dismissMenus()
+	-- Two escapes: one for the submenu, one for the row menu. Leaving either open
+	-- would swallow the next run's keystrokes.
+	tell application "System Events"
+		key code 53
+		delay 0.25
+		key code 53
+	end tell
+end dismissMenus
+
+on setWorkspaceStatus()
+	-- Conductor has no menu-bar or palette command for this, so the only lever is
+	-- the sidebar row's own context menu (Mark as unread / Pin / Set status /
+	-- Rename / Copy link / Archive). Right-clicking the row needs no focus change,
+	-- so unlike a send this never disturbs which workspace is on screen.
+	set wanted to system attribute "RELAY_SET_STATUS"
+	if wanted is "" then error "no status requested"
+	set theRow to my findSidebarRow()
+	if theRow is missing value then
+		error "couldn't find this workspace in the sidebar — a collapsed section hides its row from Accessibility"
+	end if
+	-- Scroll it into view first. A row that exists in the AX tree but sits outside
+	-- the sidebar's visible strip accepts AXShowMenu and draws nothing — which is
+	-- exactly what happens right after a status change moves it to another group.
+	tell application "System Events" to tell process "Conductor"
+		try
+			perform action "AXScrollToVisible" of theRow
+		end try
+	end tell
+	delay 0.4
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXShowMenu" of theRow
+	end tell
+	-- Depth 4, not the whole tree: the row menu is a portal near the top of the web
+	-- area, and the *transcript* hangs off that same root — a deep sweep walks every
+	-- message bubble and costs more than the rest of this write put together (it
+	-- grows with the conversation, so it degrades as you use the app).
+	set rowMenu to my waitForMenu(my webArea(), 4, 6)
+	if rowMenu is missing value then
+		my dismissMenus()
+		error "the workspace's menu didn't open"
+	end if
+	set statusItem to my menuItemNamed(rowMenu, "Set status")
+	if statusItem is missing value then
+		my dismissMenus()
+		error "that menu has no Set status item — Conductor may have moved it"
+	end if
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of statusItem
+	end tell
+	-- The submenu is an AXMenu titled "Set status" nested a few levels *inside* the
+	-- row menu (Conductor expands it in place rather than opening a sibling), so
+	-- search from that menu — searching the web area again would re-walk the world.
+	-- Match on the title; the outer menu is untitled.
+	-- Re-find the row menu each pass rather than reusing the handle from before the
+	-- press: expanding the submenu re-renders the menu, and the stale reference
+	-- reports no children rather than an error.
+	set subMenu to missing value
+	repeat with attempt from 1 to 6
+		set liveMenu to my waitForMenu(my webArea(), 4, 1)
+		if liveMenu is not missing value then
+			repeat with entry in my menusUnder(liveMenu, 5)
+				set node to contents of entry
+				if (my tabLabel(node)) is "Set status" then set subMenu to node
+			end repeat
+		end if
+		if subMenu is not missing value then exit repeat
+		delay 0.5
+	end repeat
+	if subMenu is missing value then
+		my dismissMenus()
+		error "the status submenu didn't open"
+	end if
+	set choice to my menuItemNamed(subMenu, wanted)
+	if choice is missing value then
+		my dismissMenus()
+		error "Conductor is not offering a status called " & wanted
+	end if
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of choice
+	end tell
+	delay 0.6
+end setWorkspaceStatus`
 
 /** Conductor's command palette matches workspaces by branch — its unique key. A
  * looser query (directory name) can match a command like unarchive, so prefer
@@ -1032,6 +1179,57 @@ return "ok"`.trim()
 					RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
 					RELAY_SET_FAST: opts.toggleFast ? '1' : '',
 					RELAY_SET_MODEL: opts.model ?? ''
+				},
+				timeout: 25000
+			})
+		)
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
+ * The workspace statuses Conductor's sidebar groups by, mapped from the value it
+ * stores in `workspaces.manual_status` to the label on its own menu. `canceled`
+ * is on the menu but has never been written in this DB, so it's the one spelling
+ * here that is taken from the UI rather than confirmed against stored data — a
+ * mismatch surfaces as a failed confirmation naming what Conductor actually wrote.
+ */
+export const WORKSPACE_STATUS_LABELS: Record<string, string> = {
+	backlog: 'Backlog',
+	'in-progress': 'In progress',
+	'in-review': 'In review',
+	done: 'Done',
+	canceled: 'Canceled'
+}
+
+/**
+ * Move a workspace between the sidebar's status groups — the thing a merged PR
+ * that Conductor never linked can't do for itself.
+ *
+ * Unlike every other write here this one never changes what's on screen: it
+ * right-clicks the workspace's *row* (AXShowMenu) and works the menu, so the
+ * workspace you were reading stays open. It does need the row to be rendered,
+ * which a collapsed sidebar section prevents — that case is reported in words
+ * rather than guessed around, because there is no palette command to fall back to.
+ */
+export async function setWorkspaceStatus(workspace: Workspace, status: string): Promise<SendResult> {
+	const label = WORKSPACE_STATUS_LABELS[status]
+	if (!label) return { ok: false, strategy: 'applescript', error: `unknown status ${status}` }
+	const script = `
+${SELECT_CHAT_TAB_HANDLERS}
+
+my activateConductor()
+my setWorkspaceStatus()
+return "ok"`.trim()
+	try {
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: {
+					...process.env,
+					...targetEnv({ workspace, sessionId: null }),
+					RELAY_SET_STATUS: label
 				},
 				timeout: 25000
 			})

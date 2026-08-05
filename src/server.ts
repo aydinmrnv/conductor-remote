@@ -35,7 +35,9 @@ import {
 	pickActuator,
 	type SendResult,
 	setAgentOptions,
-	setRestartGuard
+	setRestartGuard,
+	setWorkspaceStatus,
+	WORKSPACE_STATUS_LABELS
 } from './writes.ts'
 
 // Before anything that logs: from here on every console line is also kept in memory for
@@ -461,6 +463,42 @@ const server = http.createServer(async (req, res) => {
 			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
 			const result = await mergePr(ws)
 			return json(req, res, result.ok ? 200 : 409, result)
+		}
+
+		// POST /api/workspaces/:id/status { status } — move it between the sidebar's status groups.
+		// Conductor derives that status from a PR it sometimes never links (a PR merged inside its
+		// poll window is invisible to it afterwards), which strands finished work in "In progress"
+		// with no way to correct it from a phone. This is that way.
+		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/status$/)
+		if (req.method === 'POST' && m) {
+			const workspaceId = decodeURIComponent(m[1])
+			const body = JSON.parse((await readBody(req)) || '{}') as { status?: string }
+			const status = body.status ?? ''
+			if (!WORKSPACE_STATUS_LABELS[status]) {
+				const allowed = Object.keys(WORKSPACE_STATUS_LABELS).join(', ')
+				return json(req, res, 400, { error: `status must be one of ${allowed}` })
+			}
+			const ws = reads.getWorkspace(workspaceId)
+			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+			const result = await setWorkspaceStatus(ws, status)
+			if (!result.ok) return json(req, res, 502, result)
+			// The menu press lands in the DB a beat later. Confirm rather than assume —
+			// and if Conductor wrote something else, say what, instead of "didn't work".
+			let observed = ws.manual_status ?? ''
+			for (let i = 0; i < 10 && observed !== status; i++) {
+				await new Promise(r => setTimeout(r, 300))
+				observed = reads.getWorkspace(workspaceId)?.manual_status ?? ''
+			}
+			if (observed !== status) {
+				return json(req, res, 502, {
+					ok: false,
+					strategy: result.strategy,
+					error: observed
+						? `Conductor recorded the status as “${observed}”, not “${status}”.`
+						: 'Conductor didn’t record the change — it may have been asleep. Try again.'
+				})
+			}
+			return json(req, res, 200, { ok: true, workspace: reads.getWorkspace(workspaceId) })
 		}
 
 		// GET /api/sessions/:id/messages?after=<rowid>

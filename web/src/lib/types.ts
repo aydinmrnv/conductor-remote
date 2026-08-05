@@ -285,3 +285,10 @@ export interface MergeResult {
 	method?: MergeMethod
 	error?: string
 }
+
+export interface StatusResult {
+	ok: boolean
+	/** The workspace as the relay re-read it *after* Conductor recorded the change. */
+	workspace?: Workspace
+	error?: string
+}

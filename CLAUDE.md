@@ -154,6 +154,28 @@ Two asymmetric halves — keep them separate:
     state and only exists for some models**, so the DB decides whether to press it
     and a missing button is reported, not ignored. Every change is confirmed
     against the DB before the API returns success.
+
+    **Workspace status** (`setWorkspaceStatus`, `POST /api/workspaces/:id/status`)
+    is the one write that touches no pane at all — it right-clicks the workspace's
+    *sidebar row* (`AXShowMenu`), so what's on screen never changes. Conductor
+    offers this nowhere else: **the menu bar has no status command and the palette
+    has none either**, so the row menu (Mark as unread · Pin · Set status · Rename
+    · Copy link · Archive) is the only lever, and a collapsed sidebar section —
+    which hides the row from Accessibility entirely — is reported rather than
+    worked around, because there is no fallback to fall back to. Three things bite:
+    the row must be **scrolled into view** (`AXScrollToVisible`) or `AXShowMenu`
+    succeeds and draws nothing, which is exactly what happens right after a status
+    change moves the row to a different group; the submenu opens **nested inside
+    the same `AXMenu`** (titled `Set status`) rather than as a sibling, so the
+    `setModel` trick of scanning the web area's direct children misses it; and the
+    outer menu handle goes **stale** across that expansion, so it is re-found each
+    poll. Depth caps on those sweeps are load-bearing — the transcript hangs off
+    the same root, so an unbounded search costs more than the entire write and gets
+    worse the longer the chat is. Why it exists: Conductor derives status from a PR
+    it sometimes never links (one that opens and merges inside its poll window is
+    invisible to it afterwards), stranding finished work in "In progress" with no
+    phone-side fix. Labels come from Conductor's own menu — the `canceled` spelling
+    is the one taken from the UI rather than confirmed against stored data.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently
