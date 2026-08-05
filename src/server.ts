@@ -4,8 +4,9 @@ import http from 'node:http'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
-import { loadConfig } from './config.ts'
+import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
 import {
@@ -19,6 +20,7 @@ import {
 	tailLogFile
 } from './logbuf.ts'
 import { mergePr } from './merge.ts'
+import { notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SessionRow, type Workspace } from './reads.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
@@ -32,7 +34,6 @@ import {
 	newChat,
 	pickActuator,
 	retryWontHelp,
-	SEND_ATTEMPT_MS,
 	type SendResult,
 	setAgentOptions,
 	setRestartGuard
@@ -133,71 +134,6 @@ function sendBudget(req: http.IncomingMessage): number {
 }
 
 /**
- * Deliver a prompt, retrying on our own rather than handing the phone a Retry
- * button.
- *
- * The failures this path hits are overwhelmingly warm-up costs — a cold or busy
- * Conductor makes the first AppleScript run slow enough to be killed, and the
- * second run finds an activated app and lands — which is why tapping Retry has
- * always worked. Two things make doing that automatically safe rather than a way to
- * send a prompt twice:
- *  - **The transcript is the receipt.** Every run is followed by a full
- *    `CONFIRM_WINDOW_MS` of watching for the matching user row, *including* runs
- *    that reported an error, and we re-check immediately before typing again. A run
- *    that actually landed — even one killed just after pressing Enter, or one whose
- *    row appeared after we'd stopped looking — is reported as delivered.
- *  - **The composer is written, not appended to** (`fillComposer` sets AXValue), so
- *    a retry replaces a half-finished attempt's text instead of doubling it.
- *
- * Bounded by a wall clock rather than an attempt count, because a phone is holding
- * this request open: each run is sized from what's left, and we stop rather than
- * start one the budget couldn't confirm.
- */
-async function deliverPrompt(
-	ws: Workspace,
-	sessionId: string,
-	tab: ChatTab | undefined,
-	text: string,
-	budgetMs: number
-): Promise<SendResult & { attempts: number }> {
-	// Snapshot the cursor once: every check below asks "did *this* prompt arrive
-	// since we started", so a retry can't be fooled by an older identical prompt.
-	const beforeRowid = reads.getMessages(sessionId).cursor
-	const label = ws.branch ?? ws.id
-	const deadline = Date.now() + budgetMs
-	let attempts = 0
-	let last: SendResult = { ok: false, strategy: actuator.name }
-	for (;;) {
-		attempts++
-		// Hold back only what a confirm truly needs, so a caller with a tight budget
-		// spends it on the run rather than on watching: a 25s-era phone gets one
-		// full-length attempt instead of two that were never long enough to finish.
-		last = await actuator.send(
-			{ workspace: ws, sessionId, tab },
-			text,
-			Math.min(SEND_ATTEMPT_MS, deadline - Date.now() - MIN_CONFIRM_MS)
-		)
-		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
-			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
-			return { ok: true, strategy: last.strategy, attempts }
-		}
-		if (retryWontHelp(last.error)) break
-		if (deadline - Date.now() < MIN_ATTEMPT_MS + CONFIRM_WINDOW_MS) break
-		// The phone only ever sees the outcome; why a send goes missing lives on this
-		// side, so leave the trail in relay.log rather than nothing at all.
-		console.warn(
-			`[relay] send to ${label} attempt ${attempts} didn’t land (${last.error ?? 'no user row appeared'}) — retrying`
-		)
-	}
-	const tried = attempts > 1 ? ` (tried ${attempts}×)` : ''
-	const error = last.ok
-		? `Send didn’t land in the chat — Conductor may have been asleep or unfocused${tried}. Try again.`
-		: `${last.error}${tried}`
-	console.warn(`[relay] send to ${label} failed after ${attempts} attempt(s): ${error}`)
-	return { ok: false, strategy: last.strategy, attempts, error }
-}
-
-/**
  * Where a chat sits in Conductor's tab strip. Both write paths need it: the
  * actuator selects that tab before touching anything, otherwise it acts on
  * whichever tab happens to be active.
@@ -229,32 +165,97 @@ async function confirmAgentOptions(ws: Workspace, sessionId: string, opts: Agent
 }
 
 /**
- * Send a freshly-created workspace's first prompt. Never fails the request: the
- * workspace exists either way, so an unsent prompt is a `warning` (it's still
- * pre-filled in Conductor's composer, one tap from going) rather than an error.
+ * Deliver a prompt to one chat and confirm it landed, retrying until the caller's
+ * budget runs out. The single write path: the phone's own sends go through it, and so
+ * does the first-prompt queue, so both get the same targeting, the same read-back,
+ * the same retries and the same errors.
+ *
+ * Retrying here rather than handing the phone a Retry button is the point: the
+ * failures this path hits are overwhelmingly warm-up costs — a cold or busy Conductor
+ * makes the first AppleScript run slow enough to be killed, and the second finds an
+ * activated app and lands — which is exactly why tapping Retry always worked. Two
+ * things make doing it automatically safe rather than a way to send a prompt twice:
+ *  - **The transcript is the receipt.** Every run is followed by a full
+ *    `CONFIRM_WINDOW_MS` of watching for the matching user row, *including* runs that
+ *    reported an error, and the last of those checks is the moment before we type
+ *    again. A run that actually landed — even one killed just after pressing Enter,
+ *    or one whose row appeared after we'd stopped looking — is reported as delivered.
+ *  - **The composer is written, not appended to** (`fillComposer` sets AXValue), so a
+ *    retry replaces a half-finished attempt's text instead of doubling it.
+ *
+ * Bounded by a wall clock rather than an attempt count, because someone is holding
+ * this request open: runs are bounded by the caller's deadline, and we stop rather
+ * than start one the budget could not also confirm. The queue's own 3-sends-over-15-
+ * minutes schedule sits *outside* this and is unaffected — it retries a delivery that
+ * never got off the ground (worktree still setting up), not one Conductor fumbled.
  */
-async function submitFirstPrompt(workspaceId: string, prompt: string): Promise<{ sent: boolean; warning?: string }> {
-	// A new workspace is 'setting_up' while its worktree (and setup script) runs;
-	// its composer isn't the visible pane yet, so wait for 'ready' before typing.
-	let ws = reads.getWorkspace(workspaceId)
-	for (let attempt = 0; attempt < 60 && ws?.state !== 'ready'; attempt++) {
-		await sleep(500)
-		ws = reads.getWorkspace(workspaceId)
+async function deliverPrompt(
+	ws: Workspace,
+	sessionId: string,
+	text: string,
+	budgetMs = SEND_BUDGET_MS
+): Promise<SendResult & { attempts: number }> {
+	const located = locateChat(ws, sessionId)
+	if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
+	// Snapshot the cursor once: every check below asks "did *this* prompt arrive since
+	// we started", so a retry can't be fooled by an older identical prompt.
+	const beforeRowid = reads.getMessages(sessionId).cursor
+	const label = ws.branch ?? ws.id
+	const deadline = Date.now() + budgetMs
+	let attempts = 0
+	let last: SendResult = { ok: false, strategy: actuator.name }
+	for (;;) {
+		attempts++
+		// The run gets the deadline, not a duration: `uiTurn` may hold it behind another
+		// write, and only the run knows what was left of the budget when it started. Minus
+		// the confirm, so a caller on a tight budget spends it on the run rather than on
+		// watching — a 25s-era phone gets one full-length attempt, not two too short to finish.
+		last = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, deadline - MIN_CONFIRM_MS)
+		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
+			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
+			return { ok: true, strategy: last.strategy, attempts }
+		}
+		if (retryWontHelp(last.error)) break
+		if (deadline - Date.now() < MIN_ATTEMPT_MS + CONFIRM_WINDOW_MS) break
+		// The phone only ever sees the outcome; why a send goes missing lives on this
+		// side, so leave the trail in relay.log rather than nothing at all.
+		console.warn(
+			`[relay] send to ${label} attempt ${attempts} didn’t land (${last.error ?? 'no user row appeared'}) — retrying`
+		)
 	}
-	if (ws?.state !== 'ready') {
-		return { sent: false, warning: 'Workspace created; still setting up, so the prompt is pre-filled but not sent.' }
-	}
-	const located = locateChat(ws, reads.listSessions(workspaceId)[0]?.id ?? '')
-	const tab = 'error' in located ? undefined : located.tab
-	const sessionId = reads.listSessions(workspaceId)[0]?.id
-	if (!sessionId) return { sent: false, warning: 'Workspace created, but it has no chat yet — prompt is pre-filled.' }
-	// Full budget: this path is the opt-in blocking one, whose caller already accepted
-	// waiting out a whole worktree setup.
-	const result = await deliverPrompt(ws, sessionId, tab, prompt, SEND_BUDGET_MS)
-	if (!result.ok)
-		return { sent: false, warning: `Workspace created; the prompt is pre-filled but wasn’t sent (${result.error}).` }
-	return { sent: true }
+	const tried = attempts > 1 ? ` (tried ${attempts}×)` : ''
+	const error = last.ok
+		? `Send didn’t land in the chat — Conductor may have been asleep or unfocused${tried}. Try again.`
+		: `${last.error}${tried}`
+	console.warn(`[relay] send to ${label} failed after ${attempts} attempt(s): ${error}`)
+	return { ok: false, strategy: last.strategy, attempts, error }
 }
+
+/**
+ * Undelivered first prompts, owned by this process rather than by the phone (see
+ * firstprompt.ts for why). Everything Conductor-side it needs is a plain DB read.
+ */
+const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.json'), {
+	inspect: workspaceId => {
+		const ws = reads.getWorkspace(workspaceId)
+		if (!ws) return null
+		// A new workspace is 'setting_up' while its worktree (and setup script) runs;
+		// its composer isn't the visible pane yet, so wait for 'ready' before typing.
+		const sessions = reads.listSessions(workspaceId)
+		const session = sessions.find(s => s.id === ws.active_session_id) ?? sessions[0]
+		return {
+			ready: ws.state === 'ready',
+			sessionId: session?.id ?? null,
+			alreadySent: !!session?.last_user_message_at
+		}
+	},
+	send: async (workspaceId, sessionId, text) => {
+		const ws = reads.getWorkspace(workspaceId)
+		if (!ws) return { ok: false, error: 'the workspace is gone' }
+		const result = await deliverPrompt(ws, sessionId, text)
+		return { ok: result.ok, error: result.error }
+	}
+})
 
 const MIME: Record<string, string> = {
 	'.html': 'text/html; charset=utf-8',
@@ -364,6 +365,9 @@ const server = http.createServer(async (req, res) => {
 			const update = updateStatus()
 			const workspaces = reads.listWorkspaces()
 			attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
+			// An undelivered first prompt rides along with its workspace: the phone renders it
+			// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
+			for (const ws of workspaces) ws.pending_prompt = firstPrompts.get(ws.id)
 			return json(req, res, 200, {
 				workspaces,
 				actuator: await describeActuator(actuator),
@@ -406,6 +410,54 @@ const server = http.createServer(async (req, res) => {
 			})
 		}
 
+		// GET /api/push — the VAPID public key the phone subscribes with, plus who's already subscribed
+		if (req.method === 'GET' && pathname === '/api/push') {
+			return json(req, res, 200, pushConfig())
+		}
+
+		// POST /api/push/subscribe { subscription, label? } — register (or refresh) this device.
+		// Idempotent by endpoint: the app re-sends on every load, which is what heals a relay that
+		// lost its store, or a subscription the browser silently renewed.
+		if (req.method === 'POST' && pathname === '/api/push/subscribe') {
+			const body = JSON.parse((await readBody(req)) || '{}') as {
+				subscription?: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
+				label?: string
+			}
+			const sub = body.subscription
+			if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys.auth) {
+				return json(req, res, 400, { error: 'need a subscription with endpoint and keys' })
+			}
+			// An endpoint is a URL we will POST to — never accept a non-HTTPS one.
+			if (!/^https:\/\//i.test(sub.endpoint)) return json(req, res, 400, { error: 'endpoint must be https' })
+			const registered = subscribeDevice(
+				{ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } },
+				(body.label ?? '').slice(0, 64)
+			)
+			return json(req, res, 200, { ok: true, ...registered })
+		}
+
+		// POST /api/push/unsubscribe { endpoint } — the phone turned notifications off
+		if (req.method === 'POST' && pathname === '/api/push/unsubscribe') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { endpoint?: string }
+			if (!body.endpoint) return json(req, res, 400, { error: 'need the endpoint' })
+			return json(req, res, 200, { ok: unsubscribeDevice(body.endpoint), devices: pushConfig().devices })
+		}
+
+		// POST /api/push/test { id } — push to one device, so "is this actually wired up?" has an answer
+		if (req.method === 'POST' && pathname === '/api/push/test') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { id?: string }
+			if (!body.id) return json(req, res, 400, { error: 'need the device id' })
+			const result = await notifyDevice(body.id, {
+				title: 'Conductor Remote',
+				body: 'Notifications are working. You’ll get one when an agent finishes.',
+				tag: 'test',
+				url: '/',
+				kind: 'test',
+				ts: Date.now()
+			})
+			return json(req, res, result.ok ? 200 : 502, result)
+		}
+
 		// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
 		if (req.method === 'POST' && pathname === '/api/workspaces') {
 			const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
@@ -435,19 +487,22 @@ const server = http.createServer(async (req, res) => {
 					error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
 				})
 			}
-			// Return as soon as the row exists (~2s) and let the caller submit the prompt
-			// once the worktree is ready. Waiting here would block the request through
-			// Conductor's whole setup — measured at 30s+ on a real repo, on top of the
-			// send — past any budget a phone should hold a request open for. `send:true`
-			// opts into the blocking path for API callers.
+			// Return as soon as the row exists (~2s) — waiting for delivery would block the
+			// request through Conductor's whole setup, measured at 30s+ on a real repo and
+			// past any budget a phone should hold a request open for. The queue delivers on
+			// its own schedule and the phone watches it in /api/state; `send:true` opts API
+			// callers into waiting.
 			// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-			const submitted = body.send === true && prompt ? await submitFirstPrompt(created.id, prompt) : { sent: false }
+			const settled = prompt ? firstPrompts.enqueue(created.id, prompt) : null
+			const failed = settled && body.send === true ? await settled : null
+			settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
 			return json(req, res, 200, {
 				ok: true,
 				workspaceId: created.id,
 				workspace: reads.getWorkspace(created.id) ?? created,
 				pendingPrompt: prompt || undefined,
-				...submitted
+				sent: body.send === true ? !failed : false,
+				warning: failed?.error && `Workspace created; the prompt is pre-filled but wasn’t sent (${failed.error}).`
 			})
 		}
 
@@ -577,12 +632,21 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const located = locateChat(ws, sessionId)
-			if ('error' in located) return json(req, res, 409, { error: located.error })
-			// Retries live in here, confirmed against the transcript each time — the phone
-			// gets one answer it can trust instead of a Retry button for a warm-up failure.
-			const result = await deliverPrompt(ws, sessionId, located.tab, text, sendBudget(req))
+			// Retries live inside deliverPrompt, confirmed against the transcript each time,
+			// and inside the deadline this phone told us it would wait.
+			const result = await deliverPrompt(ws, sessionId, text, sendBudget(req))
+			// Whatever the queue was still holding for this workspace has now been said by
+			// hand — including a failed entry the user retried from the chat.
+			if (result.ok) firstPrompts.forget(ws.id)
 			return json(req, res, result.ok ? 200 : 502, result)
+		}
+
+		// DELETE /api/workspaces/:id/prompt — dismiss an undelivered first prompt
+		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/prompt$/)
+		if (req.method === 'DELETE' && m) {
+			const workspaceId = decodeURIComponent(m[1])
+			if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
+			return json(req, res, 200, { ok: true })
 		}
 
 		return json(req, res, 404, { error: 'no route', pathname })
@@ -613,9 +677,15 @@ server.listen(cfg.port, cfg.host, () => {
 		const drift = driftWarningLines(tsBin)
 		if (drift.length) console.info(`\n${drift.join('\n')}`)
 	}
+	// Pick up any first prompt the previous process was still holding — an auto-update
+	// restart lands mid-setup often enough that this is the normal path, not a rare one.
+	firstPrompts.start()
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a
 	// network change. No-ops unless managed + public (Funnel) posture (see funnel-watchdog.ts).
 	startFunnelWatchdog()
+	// Watch for turns ending and push them to subscribed phones. Idle (one small local
+	// query per tick) until a device subscribes; see notify.ts.
+	startNotifier(reads)
 })

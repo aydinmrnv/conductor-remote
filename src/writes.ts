@@ -5,6 +5,30 @@ import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
 
 const exec = promisify(execFile)
 
+/**
+ * One UI operation at a time.
+ *
+ * Every script below drives Conductor's *shared, single* window — focus a
+ * workspace, select a tab, write the composer — so two of them overlapping
+ * interleaves their steps and lands a prompt in whatever the other one focused.
+ * That is the exact failure the whole fail-closed AX design exists to prevent,
+ * and no amount of per-step assertion catches it, because each script's reads
+ * are true at the moment it makes them.
+ *
+ * It was unreachable while every write was one person tapping one button. It
+ * stopped being unreachable when the relay grew a first-prompt queue that sends
+ * on its own schedule (`firstprompt.ts`), so the queue can now fire while the
+ * phone is mid-send. Cheap insurance either way: these run for seconds, the
+ * caller is already awaiting, and there is never a real queue of them.
+ */
+let uiTail: Promise<unknown> = Promise.resolve()
+function uiTurn<T>(op: () => Promise<T>): Promise<T> {
+	// `.then(op, op)` so a previous failure doesn't skip the next turn.
+	const turn = uiTail.then(op, op)
+	uiTail = turn.catch(() => undefined)
+	return turn
+}
+
 export interface SendResult {
 	ok: boolean
 	strategy: string
@@ -37,8 +61,13 @@ export interface Actuator {
 	readonly caveat: string
 	/** True when delivery is addressed to a specific session (no window-focus dependency). */
 	readonly precise: boolean
-	/** `timeoutMs` caps this one run, so a caller retrying inside a request can size each attempt from what's left of its budget. */
-	send: (target: SendTarget, text: string, timeoutMs?: number) => Promise<SendResult>
+	/**
+	 * `deadline` (epoch ms) is when the caller stops waiting, so a caller retrying
+	 * inside one request bounds every attempt with the *same* number. A deadline
+	 * rather than a duration because `uiTurn` may queue this run: only the run itself
+	 * knows how much of the budget was still left when it finally started.
+	 */
+	send: (target: SendTarget, text: string, deadline?: number) => Promise<SendResult>
 	/** Runtime availability check (e.g. the sidecar socket must be reachable). */
 	available?: () => Promise<boolean>
 }
@@ -58,23 +87,20 @@ export interface Actuator {
 export const SEND_ATTEMPT_MS = 28_000
 
 /**
- * Only one AppleScript may drive Conductor's UI at a time.
+ * A run's own ceiling, taken off the caller's deadline at the moment it actually
+ * starts.
  *
- * Every path in this file acts on `window 1` — presses a sidebar row, switches a
- * tab, writes the composer — so two interleaving is precisely the failure the file
- * is built to avoid: one run's Enter landing in the chat the other just switched
- * to. That's easy to reach now a send retries *inside* one request (up to a minute
- * of wall clock): a second phone, a parked first prompt going out, or a Retry
- * tapped after the PWA gave up. A second writer is turned away in words rather
- * than queued — being told to try again is recoverable, typing into the wrong
- * agent isn't.
- *
- * The claim carries a timestamp so a run that somehow escapes its `finally` can't
- * brick every write until the relay restarts.
+ * Both halves matter. `uiTurn` above means a run can sit in the queue behind
+ * another write, so a duration computed when it was *requested* would let a queued
+ * run overshoot a deadline the caller is still holding a phone open on.
+ * `SEND_ATTEMPT_MS` then caps it, because a caller with a minute of budget still
+ * shouldn't spend all of it on one doomed run when a retry is the thing that works.
+ * The floor keeps a squeezed run honest instead of passing `timeout: 0`, which node
+ * reads as "no timeout at all".
  */
-let uiWriteSince = 0
-const UI_WRITE_STALE_MS = 120_000
-const UI_WRITE_BUSY = 'Conductor is already being driven by another request - try again in a moment'
+function runCeiling(deadline: number): number {
+	return Math.max(5_000, Math.min(SEND_ATTEMPT_MS, deadline - Date.now()))
+}
 
 /**
  * Failures no amount of retrying will fix, so a caller that retries can stop at
@@ -99,16 +125,6 @@ export function retryWontHelp(error: string | undefined): boolean {
 	return error !== undefined && TERMINAL_ERRORS.some(phrase => error.includes(phrase))
 }
 
-function claimUiWrite(): boolean {
-	if (uiWriteSince && Date.now() - uiWriteSince < UI_WRITE_STALE_MS) return false
-	uiWriteSince = Date.now()
-	return true
-}
-
-function releaseUiWrite(): void {
-	uiWriteSince = 0
-}
-
 /**
  * The sidecar IPC path — the precise, per-session write. Delivers straight to
  * `sessionId` over Conductor's own dispatch socket (see sidecar.ts), so it needs
@@ -129,8 +145,8 @@ export class SidecarActuator implements Actuator {
 		return sidecarAvailable()
 	}
 
-	/** `timeoutMs` is ignored — the sidecar is one socket write, with no UI to wait on. */
-	async send(target: SendTarget, text: string, _timeoutMs?: number): Promise<SendResult> {
+	/** `deadline` is ignored — the sidecar is one socket write, with no UI to wait on. */
+	async send(target: SendTarget, text: string, _deadline?: number): Promise<SendResult> {
 		const sessionId = target.sessionId ?? target.workspace.active_session_id
 		if (!sessionId) return { ok: false, strategy: this.name, error: 'no session id to target' }
 		try {
@@ -998,7 +1014,7 @@ export class AppleScriptActuator implements Actuator {
 	readonly caveat = 'Focuses the target workspace (Cmd+K) and its chat tab before sending.'
 	readonly precise = true
 
-	async send(target: SendTarget, text: string, timeoutMs = SEND_ATTEMPT_MS): Promise<SendResult> {
+	async send(target: SendTarget, text: string, deadline = Date.now() + SEND_ATTEMPT_MS): Promise<SendResult> {
 		// Focus the target workspace, select its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
@@ -1019,7 +1035,6 @@ tell application "System Events"
 	key code 36
 end tell
 `.trim()
-		if (!claimUiWrite()) return { ok: false, strategy: this.name, error: UI_WRITE_BUSY }
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
 		const os = await import('node:os')
 		const fs = await import('node:fs/promises')
@@ -1027,15 +1042,16 @@ end tell
 		const tmp = path.join(os.tmpdir(), `relay-prompt-${process.pid}-${Date.now()}.txt`)
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
-			await exec('osascript', ['-e', script], {
-				env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
-				timeout: Math.max(5_000, Math.round(timeoutMs))
-			})
+			await uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
+					timeout: runCeiling(deadline)
+				})
+			)
 			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return { ok: false, strategy: this.name, error: osaError(err) }
 		} finally {
-			releaseUiWrite()
 			await fs.rm(tmp, { force: true }).catch(() => undefined)
 		}
 	}
@@ -1085,24 +1101,23 @@ my focusWorkspace()
 my selectChatTab()
 my applyAgentOptions()
 return "ok"`.trim()
-	if (!claimUiWrite()) return { ok: false, strategy: 'applescript', error: UI_WRITE_BUSY }
 	try {
-		await exec('osascript', ['-e', script], {
-			env: {
-				...process.env,
-				...targetEnv(target),
-				RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
-				RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
-				RELAY_SET_FAST: opts.toggleFast ? '1' : '',
-				RELAY_SET_MODEL: opts.model ?? ''
-			},
-			timeout: SEND_ATTEMPT_MS
-		})
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: {
+					...process.env,
+					...targetEnv(target),
+					RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
+					RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
+					RELAY_SET_FAST: opts.toggleFast ? '1' : '',
+					RELAY_SET_MODEL: opts.model ?? ''
+				},
+				timeout: SEND_ATTEMPT_MS
+			})
+		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
-	} finally {
-		releaseUiWrite()
 	}
 }
 
@@ -1115,13 +1130,13 @@ my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 return my listModels()`.trim()
-	// Opening the picker's menu would swallow another run's keystrokes, so it claims too.
-	if (!claimUiWrite()) return { ok: false, error: UI_WRITE_BUSY }
 	try {
-		const { stdout } = await exec('osascript', ['-e', script], {
-			env: { ...process.env, ...targetEnv(target) },
-			timeout: SEND_ATTEMPT_MS
-		})
+		const { stdout } = await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: { ...process.env, ...targetEnv(target) },
+				timeout: SEND_ATTEMPT_MS
+			})
+		)
 		const models = stdout
 			.split('\n')
 			.map(s => s.trim())
@@ -1129,8 +1144,6 @@ return my listModels()`.trim()
 		return { ok: true, models }
 	} catch (err) {
 		return { ok: false, error: osaError(err) }
-	} finally {
-		releaseUiWrite()
 	}
 }
 
@@ -1168,7 +1181,9 @@ export async function createWorkspace(prompt: string, repoPath: string | null): 
 		.filter(Boolean)
 		.join('&')
 	try {
-		await exec('open', [`conductor://${query}`], { timeout: 15000 })
+		// Serialized with the AX writes: creating a workspace pulls Conductor forward and
+		// switches which one is showing, which is precisely what a concurrent send assumes.
+		await uiTurn(() => exec('open', [`conductor://${query}`], { timeout: 15000 }))
 		return { ok: true, strategy: 'deeplink' }
 	} catch (err) {
 		return { ok: false, strategy: 'deeplink', error: osaError(err) }
@@ -1190,19 +1205,18 @@ my focusWorkspace()
 tell application "System Events"
 	keystroke "t" using {command down}
 end tell`.trim()
-	if (!claimUiWrite()) return { ok: false, strategy: 'applescript', error: UI_WRITE_BUSY }
 	try {
 		// Shares the focus path with a send, so it needs the same ceiling: 15s was under
 		// the cost of activating a cold Conductor and finding the row on its own.
-		await exec('osascript', ['-e', script], {
-			env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
-			timeout: SEND_ATTEMPT_MS
-		})
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
+				timeout: SEND_ATTEMPT_MS
+			})
+		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
-	} finally {
-		releaseUiWrite()
 	}
 }
 

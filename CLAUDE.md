@@ -14,6 +14,20 @@ Two asymmetric halves — keep them separate:
   `git` in each worktree. No Conductor process is involved, no injection. An app
   update can rename every UI string and reads keep working. Never add a write to
   the DB handle in `db.ts`.
+  - **Unread is the one read that needs a second source.** `workspaces.unread` is
+    a **dead column** — Conductor still declares it (its migration still says
+    "when 1, the workspace should be marked visually as unread") but writes 0 on
+    every row (0 of 1691 here), which is why the sidebar's bold/badge never once
+    fired. The live flag is per chat, `sessions.unread_count`, and it *is* a flag
+    — only ever 0 or 1 — so what the sidebar counts is **unread chats**, not the
+    column's value, and one of them draws a dot rather than the meaningless
+    number "1". Conductor clears it when you open the workspace **on the Mac**,
+    and this relay is read-only, so a chat read on the phone would shout forever:
+    the PWA keeps its own marks (`web/src/lib/read.ts`) — the session's own
+    `updated_at` at the moment it was on screen, never our clock, because it is
+    only ever compared against that same column. The session view marks *only*
+    the chat on screen (a sibling tab's badge isn't ours to clear) and only while
+    the page is visible.
 - **Creating a workspace is the one write that isn't fragile.** Conductor's
   documented deep links (conductor.build/docs/reference/deep-links) are
   `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and
@@ -28,19 +42,33 @@ Two asymmetric halves — keep them separate:
   optional** — a bare `conductor://path=…` opens an empty workspace like
   Conductor's own New workspace; that form is *undocumented* (every documented
   route carries a prompt) but verified live, so suspect it first if creation
-  breaks. The link is fire-and-forget and only *pre-fills* the composer, so the
-  relay watches the DB for the new row and the PWA parks any prompt
-  (`web/src/lib/firstPrompt.ts`) until the worktree is `ready`, guarded on
-  `last_user_message_at` so it can't double-send. Don't block the request on
-  setup: it measured 30s+, past the phone's own 25s budget. **Delivery belongs to
-  the app shell** (`hooks.ts` ▸ `useFirstPromptDelivery`), never to the session
-  view: setup outlasts the user's attention, and an iOS relaunch reopens at `/`,
-  so a route-scoped watcher waits for a mount that never comes and the prompt
-  rots in localStorage. That same `last_user_message_at` guard is what makes
-  retrying safe; after three failed sends the text is stashed into the
-  workspace's composer draft (store-backed — `web/src/lib/draft.ts`) so an
-  undeliverable prompt sits in the chat box instead of vanishing, and a send
-  matching the draft clears it so it can't go twice.
+  breaks. The link is fire-and-forget and only *pre-fills* the composer — someone
+  still has to press Enter ~30s later, once the worktree is `ready` and the chat
+  exists. **That someone is the relay** (`src/firstprompt.ts` ▸ `FirstPromptQueue`),
+  never the phone: a phone sleeps, iOS suspends a backgrounded PWA outright, and
+  the delivery hook it used to run only looked at its parked set once per app
+  launch, so prompts sat unsent until the next relaunch. Don't confuse that with
+  "block the request": creation still returns as soon as the row exists (~2s;
+  waiting for setup measured 30s+, past the phone's own 25s budget) and the queue
+  delivers on its own schedule. `send:true` opts an API caller into awaiting it.
+  Three properties hold it up: **one owner** (if the phone delivered too,
+  `last_user_message_at` wouldn't save you — it's a read, not a lock, and both
+  sides can read it null; the guard is still what makes *retrying* safe and what
+  detects a prompt sent by hand from the Mac); **persistence** to
+  `…/conductor-remote/first-prompts.json`, because `autoupdate` deliberately
+  `exit()`s to reload and launchd restarts us mid-setup; and **giving up in
+  public** — after 3 sends or 15 minutes the entry flips to `failed` *and stays*,
+  riding along on `/api/state` as `workspace.pending_prompt` so the chat can show
+  the text with the reason and a Retry (`DELETE …/workspaces/:id/prompt`
+  dismisses it). A waiting prompt shows the same way, because 30s of empty pane
+  reads as "swallowed" and gets retyped — which is the same prompt sent twice.
+- **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
+  here drives Conductor's single shared window, so two overlapping runs interleave
+  and land a prompt in whatever the other one focused — the exact failure every
+  step's fail-closed assertion *cannot* catch, since each script's reads are true
+  when it makes them. It was unreachable while every write was one person tapping
+  one button; the first-prompt queue, which sends on its own schedule, is what made
+  it reachable.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's
@@ -118,9 +146,6 @@ Two asymmetric halves — keep them separate:
     Landing in the wrong agent is worse than not sending, so every step errors out
     rather than guessing. No private protocol, nothing to rebreak on a Conductor
     update. The remaining keystroke delays (palette fallback) are load-bearing.
-    **Only one AppleScript may drive the UI at a time** (`claimUiWrite`): two
-    interleaving is exactly the failure above, so a second writer is refused in
-    words, never queued.
 
     **A failed send retries itself** (`deliverPrompt` in `server.ts`) — the phone
     should not be handed a Retry button for what is nearly always a warm-up cost.
@@ -137,7 +162,11 @@ Two asymmetric halves — keep them separate:
     numbers by hand, because the relay self-updates while the PWA sits in a
     service-worker cache, and a phone that gives up first shows a failure for a
     prompt that then lands. A caller that sends no header gets the budget that fits
-    the *old* PWA's flat 25s abort.
+    the *old* PWA's flat 25s abort. Because `uiTurn` can hold a run behind another
+    write, each run's ceiling comes off that deadline **when it actually starts**
+    (`runCeiling`), never when it was queued. The queue's own 3-sends-over-15-minutes
+    schedule sits outside all of this: it retries a delivery that never got off the
+    ground, not one Conductor fumbled.
 
     Budgets here are measured, not chosen: a send that *worked* took 23.6s against a
     30-workspace sidebar, which is why the 20s per-run ceiling was killing ordinary
@@ -164,6 +193,32 @@ Two asymmetric halves — keep them separate:
     `type:"query"` payload *validates then silently drops* the prompt. **A live
     `query` send injects a real prompt into a running agent; never auto-run it to
     "test."** Since `applescript` is now precise, sidecar buys nothing today.
+
+- **Notifications are a read that pushes** — the cheap third shape, on the durable
+  side of the split. `src/notify.ts` polls the same read-only SQLite for
+  `sessions.status` transitions and POSTs a Web Push message; no Conductor
+  process, no AX, no window. **`working → idle` is the whole trigger** — it is
+  what "done", "asked you a question" and "waiting on a permission prompt" all
+  look like, because each ends the turn — plus `→ error`. Don't hunt for a
+  finer-grained signal: the schema has no permission-request table (checked), and
+  `status` only ever holds `working`/`idle`/`error`. Two invariants keep it from
+  being a nuisance: a transition must **survive one more tick** before it fires
+  (a queued prompt restarting the turn would otherwise buzz for nothing), and the
+  first tick after a device subscribes is a **baseline, not a broadcast** (else
+  enabling it fires once per already-idle workspace). Web Push is written out of
+  `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
+  tarball's **zero runtime deps** — the traps there are that ES256 needs raw
+  `r||s` (`dsaEncoding: 'ieee-p1363'`, not Node's default DER) and that **the
+  VAPID keypair must never be regenerated behind a live subscription**, since
+  `applicationServerKey` is baked in at subscribe time and a re-keyed relay is
+  rejected forever after — hence the persisted `push.json` and the client-side
+  `matchesKey` re-subscribe. The phone re-POSTs its subscription on **every app
+  load** from the shell (`hooks.ts` ▸ `usePushSync`, not the Connect sheet):
+  a subscription the relay has lost still looks enabled from the phone, so
+  repairing it can't wait for someone to open a sheet and look. The push handlers
+  live in `public/push-sw.js` (plain JS, pulled into the Workbox-generated worker
+  via `workbox.importScripts`) and **must always show a notification** — iOS drops
+  the subscription for a silent push.
 
 `sessions.id == claude_session_id` — Conductor is a GUI over Claude Code sessions.
 
@@ -222,6 +277,16 @@ unit test.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.
+- **A workspace's own branch is not the one in the session snapshot, and its
+  "sibling" directory may be itself.** Conductor creates the worktree under a
+  *codename* (`directory_name`, e.g. `…/conductor-remote/ouagadougou`) and renames
+  the branch once the workspace is named, then drops a **symlink beside it named
+  after the new branch** (`collapse-thinking-steps-group → ouagadougou`). So the
+  agent harness's start-of-session `git status` can name a branch
+  (`hyldmo/<codename>`) that no longer exists, `GET /api/state` reports the *live*
+  branch, and the two look like two different workspaces sharing a repo. Read the
+  branch with `git branch --show-current` before acting on it, and resolve a path
+  with `readlink -f` before concluding another workspace is doing your work.
 - **Yarn is standalone here.** Its own `yarn.lock` + `.yarnrc.yml`
   (`nodeLinker: node-modules`) makes this its own project despite a `package.json`
   higher up in `$HOME`. `package.json` pins `yarn@4` via `packageManager`, so
@@ -249,6 +314,30 @@ unit test.
   (2) The script lives in a **TS template literal** — a backtick in an AppleScript
   comment terminates it and `tsc` reports a nonsense error tens of lines away.
   Use quotes in those comments.
+- **The installed PWA's viewport is not the box iOS lays it out in, and `dvh`
+  reports whichever one it currently believes.** Measured in the iOS 26.5
+  Simulator (iPhone 17 Pro, 874pt screen, home-screen web app): `innerHeight`,
+  `100dvh`, `100vh` and `100lvh` all read 874 — but `documentElement.clientHeight`
+  is **812**, the screen minus the top inset. So a `100dvh` app column overflows
+  its own root by 62px and the *page* becomes draggable; dragging it slides the
+  app off the top and opens a dead band at the bottom, which is what "I have to
+  scroll up and down before it's full-screen" actually is. The catch is that the
+  two numbers are coupled: stop the overflow (`position:fixed`, or `height:100%`)
+  and WebKit re-lays-out in the safe box, `innerHeight`/`dvh` *become* 812, and the
+  dead band is now permanent. `100vh` was the only unit that stayed 874 in both
+  states, so `index.css` locks `html,body{overflow:hidden}` and sizes the
+  standalone app off `vh` (browsers keep `dvh` — there `vh` is the *large*
+  viewport and would bury the composer under Safari's toolbar). Corollary: **every
+  scroller must stay an inner element**; the document must never be one.
+- **Verify PWA layout in the iOS Simulator, not by reasoning.** None of this
+  reproduces in desktop Chrome or even simulator *Safari* (there `clientHeight ==
+  innerHeight` and the insets are 0) — only in a real home-screen web app. Recipe:
+  `xcrun simctl boot "iPhone 17 Pro"`, serve the build (`RELAY_PORT=879x yarn
+  start`), `simctl openurl` the token URL, then drive Safari's Share ▸ Add to Home
+  Screen with `cliclick` (map device points to screen with `x+760, y+124` for the
+  default window position; **one click per shell call** — batched clicks get eaten
+  by sheet animations), and read state back with `simctl io booted screenshot`.
+  Tapping the installed icon *resumes*; to load new HTML, re-add the icon.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."

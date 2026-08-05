@@ -14,6 +14,16 @@ export type RepoIcon =
 /** GitHub PR state of the branch (see src/pr.ts) — drives the workspace dot colour. */
 export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'mergeable'
 
+/**
+ * A chat Conductor flags unread, and the activity that flagged it (`at` is the
+ * session's `updated_at`). Compare `at` only against a mark taken from the same
+ * column — see lib/read.ts.
+ */
+export interface UnreadSession {
+	id: string
+	at: string
+}
+
 export interface Workspace {
 	id: string
 	directory_name: string | null
@@ -27,7 +37,8 @@ export interface Workspace {
 	state: string | null
 	created_at: string
 	updated_at: string
-	unread: number | null
+	/** Chats with news Conductor hasn't seen you read — usually empty. */
+	unread_sessions: UnreadSession[]
 	pinned_at: string | null
 	active_session_id: string | null
 	intended_target_branch: string | null
@@ -44,6 +55,22 @@ export interface Workspace {
 	pr_number?: number | null
 	/** PR web URL for the `#N ↗` link. */
 	pr_url?: string | null
+	/** A first prompt the relay hasn't delivered yet — rendered in this workspace's chat. */
+	pending_prompt?: PendingPrompt | null
+}
+
+/**
+ * The prompt a workspace was created with, still undelivered (mirrors `FirstPrompt`
+ * in src/firstprompt.ts). The relay owns delivery; this is the phone's view of it.
+ */
+export interface PendingPrompt {
+	workspaceId: string
+	text: string
+	/** `failed` → the relay gave up and `error` says why; the text is still recoverable. */
+	status: 'waiting' | 'failed'
+	attempts: number
+	createdAt: number
+	error?: string
 }
 
 export interface ActuatorInfo {
@@ -218,6 +245,37 @@ export interface LogsResponse {
 	now: number
 	files: LogFileInfo[]
 	entries: LogEntry[]
+}
+
+/** A phone subscribed to push notifications (mirrors `DeviceInfo` in src/notify.ts). */
+export interface PushDevice {
+	/** Hash of the push endpoint — how a device is addressed without exposing its push URL. */
+	id: string
+	label: string
+	createdAt: number
+	lastOkAt: number | null
+	lastError: string | null
+	failures: number
+}
+
+export interface PushConfig {
+	/** False when the relay was started with `PUSH_NOTIFY=off`. */
+	enabled: boolean
+	/** VAPID public key to subscribe with — stable for the life of the relay's store. */
+	publicKey: string
+	devices: PushDevice[]
+}
+
+export interface PushSubscribeResult {
+	ok: boolean
+	/** This device's id, for `POST /api/push/test`. */
+	id?: string
+	devices: PushDevice[]
+}
+
+export interface PushTestResult {
+	ok: boolean
+	error?: string
 }
 
 export type MergeMethod = 'squash' | 'merge' | 'rebase'
