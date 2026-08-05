@@ -139,7 +139,7 @@ function SessionTabs({
 						onClick={() => onSelect(s.id)}
 						className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
 					>
-						{s.status === 'working' ? <span className="dot dot-working size-1.5!" /> : null}
+						{s.status === 'working' ? <span className="dot-spinner size-3" /> : null}
 						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
 						{s.unread_count ? <Badge>{s.unread_count}</Badge> : null}
 					</button>
