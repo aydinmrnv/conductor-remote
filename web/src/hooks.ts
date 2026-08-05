@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
-import type { ParkedPrompt } from './lib/firstPrompt.ts'
-import { clearFirstPrompt, listFirstPrompts, noteFirstPromptAttempt } from './lib/firstPrompt.ts'
 import { readModelCache, writeModelCache } from './lib/models.ts'
+import type { PushSupport } from './lib/push.ts'
+import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
 import type { Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
@@ -164,6 +165,11 @@ export function useVisualViewportHeight() {
 		const vv = window.visualViewport
 		if (!vv) return
 		const root = document.documentElement
+		// Tells index.css to size the app off `vh` instead of `dvh` — see the comment
+		// there. `navigator.standalone` is the iOS-only fallback for versions whose
+		// home-screen apps don't match the display-mode query.
+		if (matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone)
+			root.setAttribute('data-standalone', '')
 		// Visual-viewport height with no keyboard up, measured rather than assumed.
 		let rest = 0
 		let watchdog: ReturnType<typeof setInterval> | undefined
@@ -448,7 +454,6 @@ export function useSendPrompt() {
 	const failPending = useApp(s => s.failPending)
 	const removePending = useApp(s => s.removePending)
 	const markWorking = useApp(s => s.markWorking)
-	const clearDraftIfEqual = useApp(s => s.clearDraftIfEqual)
 	const clearAgentDraft = useApp(s => s.clearAgentDraft)
 
 	return useCallback(
@@ -475,9 +480,9 @@ export function useSendPrompt() {
 				if (r.ok) {
 					markWorking(sessionId)
 					queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
-					// An undeliverable prompt gets stashed into the draft; once it does go,
-					// that copy has to leave with it or the next tap sends it a second time.
-					clearDraftIfEqual(workspaceId, text)
+					// A send by hand supersedes any first prompt the relay was still holding, and
+					// the relay drops that entry — so re-read the list the queued bubble comes from.
+					queryClient.invalidateQueries({ queryKey: ['state'] })
 					// The confirmed row surfaces on the next poll and hides this bubble;
 					// purge it after a beat so a text-match miss can't leave a duplicate.
 					setTimeout(() => removePending(id), 4000)
@@ -489,81 +494,175 @@ export function useSendPrompt() {
 			}
 			return false
 		},
-		[addPending, failPending, removePending, markWorking, clearDraftIfEqual, clearAgentDraft, queryClient]
+		[addPending, failPending, removePending, markWorking, clearAgentDraft, queryClient]
 	)
 }
 
-/** Sends spent on a parked first prompt before it is handed back to the composer. */
-const FIRST_PROMPT_ATTEMPTS = 3
-/** A workspace that never turned ready this long ago is not going to — stop waiting on it. */
-const FIRST_PROMPT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+/** The relay's push config, shared by the shell's sync and the Connect sheet's toggle. */
+function usePushConfig(enabled: boolean) {
+	return useQuery({ queryKey: ['push'], queryFn: () => client.push(), enabled, staleTime: 30_000 })
+}
 
 /**
- * Deliver the first prompt of a workspace created from the phone, once its
- * worktree has finished setting up and its chat exists.
+ * Keep this device's subscription and the relay's copy of it in agreement.
  *
- * Mounted on the app shell rather than in the session view, because that view is
- * the one place the phone reliably *isn't*: setup measured 30s+, and a locked
- * phone, a tap back to the list, or an iOS relaunch (which reopens at `/`, not
- * the workspace) all left a watcher scoped to that route waiting for a mount
- * that never came, with the prompt sitting invisibly in localStorage.
- *
- * Guarded on `last_user_message_at` being null: if the prompt already went —
- * because it was sent from the Mac, where the deep link left it pre-filled in the
- * composer — this must not send it a second time. That same guard is what makes
- * retrying safe, since an attempt whose read-back timed out but which actually
- * landed shows up as a user row before the next one goes.
- *
- * Nothing is ever dropped on the floor: after `FIRST_PROMPT_ATTEMPTS` failures
- * (or once the workspace is plainly never turning ready) the text is stashed in
- * that workspace's composer draft, so it is sitting in the chat box one tap from
- * going instead of disappearing.
+ * Mounted on the app shell, not on the Connect sheet: the failure it repairs —
+ * the relay no longer holding a subscription that the browser still has, so the
+ * toggle reads "on" while nothing is ever delivered — is invisible from the phone,
+ * and waiting for someone to open the sheet and look would mean it usually never
+ * gets repaired at all. The whole reconciliation lives in `syncSubscription`; this
+ * just runs it whenever the relay's public key appears or changes (a changed key
+ * *is* the signal that the relay lost its store).
  */
-export function useFirstPromptDelivery(): void {
-	const { data } = useWorkspaces()
-	const [parked, setParked] = useState<ParkedPrompt[]>(listFirstPrompts)
-	const sendPrompt = useSendPrompt()
-	const stashDraft = useApp(s => s.stashDraft)
-	const busy = useRef(false)
-
-	// One at a time, oldest first: keeps this to a single extra sessions poll, and
-	// there is realistically never more than one workspace mid-creation anyway.
-	const next = parked[0]
-	const ws = next ? data?.workspaces.find(w => w.id === next.workspaceId) : undefined
-	const { data: sessionsData } = useSessions(ws?.state === 'ready' ? ws.id : undefined)
-	const sessions = sessionsData?.sessions ?? []
-	const session = sessions.find(s => s.id === ws?.active_session_id) ?? sessions[0]
-
+export function usePushSync(): void {
+	const [support] = useState(pushSupport)
+	const setPush = useApp(s => s.setPush)
+	const { data } = usePushConfig(support === 'ok')
+	const publicKey = data?.publicKey
 	useEffect(() => {
-		if (!next || busy.current) return
-		const forget = () => {
-			clearFirstPrompt(next.workspaceId)
-			setParked(listFirstPrompts())
+		if (support !== 'ok' || !publicKey) return
+		let alive = true
+		void syncSubscription(publicKey)
+			.then(result => {
+				if (alive) setPush({ deviceId: result?.id ?? null, devices: result?.devices ?? 0 })
+			})
+			.catch(() => {
+				// A failed re-sync isn't worth surfacing: the toggle still reflects the browser's
+				// own state, and the next load (or focus refetch) tries again.
+			})
+		return () => {
+			alive = false
 		}
-		const retire = () => {
-			stashDraft(next.workspaceId, next.text)
-			forget()
-		}
-		if (Date.now() - next.createdAt > FIRST_PROMPT_MAX_AGE_MS) return retire()
-		// Deliberately no "workspace missing → give up": the list poll that would say
-		// so is up to 2.5s stale, and the freshly-created workspace is missing from it
-		// by definition, so acting on that would retire every prompt on the spot. A
-		// workspace that really is gone falls out via the age cap above.
-		if (ws?.state !== 'ready' || !session) return
-		if (session.last_user_message_at) return forget()
+	}, [support, publicKey, setPush])
+}
 
-		busy.current = true
-		const attempt = noteFirstPromptAttempt(next.workspaceId)
-		const target = { id: `first:${next.workspaceId}`, sessionId: session.id, workspaceId: next.workspaceId }
-		;(async () => {
-			// One pending id across attempts, so retries reuse the bubble instead of stacking.
-			// `sendPrompt` reports failure rather than throwing; the catch is the backstop
-			// that stops an unexpected throw from retrying this forever.
-			const ok = await sendPrompt({ ...target, text: next.text }).catch(() => false)
-			if (ok) forget()
-			else if (attempt >= FIRST_PROMPT_ATTEMPTS) retire()
-			else setParked(listFirstPrompts())
-			busy.current = false
-		})()
-	}, [next, ws, session, sendPrompt, stashDraft])
+export interface PushControls {
+	support: PushSupport
+	/** The browser's own permission state ('unsupported' where the API doesn't exist). */
+	permission: NotificationPermission | 'unsupported'
+	/** This device has a live subscription registered with the relay. */
+	enabled: boolean
+	/** The relay is running with notifications switched off entirely (`PUSH_NOTIFY=off`). */
+	relayDisabled: boolean
+	busy: boolean
+	error: string | null
+	/** How many phones this relay will notify, including this one. */
+	devices: number
+	enable: () => Promise<void>
+	disable: () => Promise<void>
+	test: () => Promise<void>
+}
+
+/**
+ * The Notifications switch. Reads the reconciled state `usePushSync` put in the
+ * store and owns only the three user actions.
+ *
+ * Turning them on has to happen inside the user's tap — `requestPermission()`
+ * needs that activation — so `enable` asks, subscribes and registers in one go
+ * rather than splitting the steps across effects.
+ */
+export function usePush(): PushControls {
+	const [support] = useState(pushSupport)
+	const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+		'Notification' in window ? Notification.permission : 'unsupported'
+	)
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	const { deviceId, devices } = useApp(s => s.push)
+	const setPush = useApp(s => s.setPush)
+	const config = usePushConfig(support === 'ok')
+	const publicKey = config.data?.publicKey
+
+	const enable = useCallback(async () => {
+		setBusy(true)
+		setError(null)
+		try {
+			const permissionResult = await Notification.requestPermission()
+			setPermission(permissionResult)
+			if (permissionResult !== 'granted') {
+				setError(
+					permissionResult === 'denied'
+						? 'Notifications are blocked for this app — allow them in your device settings, then try again.'
+						: 'Notification permission wasn’t granted.'
+				)
+				return
+			}
+			const key = publicKey ?? (await client.push()).publicKey
+			const sub = await subscribe(key)
+			const result = await client.pushSubscribe(toJson(sub), deviceLabel())
+			setPush({ deviceId: result.id ?? null, devices: result.devices.length })
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}, [publicKey, setPush])
+
+	const disable = useCallback(async () => {
+		setBusy(true)
+		setError(null)
+		try {
+			const sub = await currentSubscription()
+			let remaining = 0
+			if (sub) {
+				// Tell the relay first so it stops pushing even if the local unsubscribe fails;
+				// if this call is the one that fails, the next push 410s and prunes it anyway.
+				const result = await client.pushUnsubscribe(sub.endpoint).catch(() => null)
+				remaining = result?.devices.length ?? 0
+				await sub.unsubscribe()
+			}
+			setPush({ deviceId: null, devices: remaining })
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}, [setPush])
+
+	const test = useCallback(async () => {
+		if (!deviceId) return
+		setBusy(true)
+		setError(null)
+		try {
+			const result = await client.pushTest(deviceId)
+			if (!result.ok) setError(result.error ?? 'The push service rejected it.')
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}, [deviceId])
+
+	return {
+		support,
+		permission,
+		enabled: !!deviceId,
+		relayDisabled: config.data?.enabled === false,
+		busy,
+		error,
+		devices,
+		enable,
+		disable,
+		test
+	}
+}
+
+/**
+ * Route a notification tap. The service worker focuses the open app and posts the
+ * target instead of navigating it (see public/push-sw.js) — a real navigation
+ * would remount the token-gated SPA and drop whatever was half-typed.
+ */
+export function usePushRouting(): void {
+	const navigate = useNavigate()
+	useEffect(() => {
+		if (!('serviceWorker' in navigator)) return
+		const onMessage = (event: MessageEvent) => {
+			const data = event.data as { type?: string; url?: string } | null
+			if (data?.type === 'push-navigate' && typeof data.url === 'string' && data.url.startsWith('/')) {
+				navigate(data.url)
+			}
+		}
+		navigator.serviceWorker.addEventListener('message', onMessage)
+		return () => navigator.serviceWorker.removeEventListener('message', onMessage)
+	}, [navigate])
 }

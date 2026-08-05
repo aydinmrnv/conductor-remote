@@ -7,6 +7,9 @@ import type {
 	MessagesResponse,
 	ModelsResult,
 	NewChatResult,
+	PushConfig,
+	PushSubscribeResult,
+	PushTestResult,
 	ReposResponse,
 	SendResult,
 	SessionsResponse,
@@ -142,6 +145,9 @@ export const client = {
 		),
 	/** Repos a new workspace can be created in. */
 	repos: () => api<ReposResponse>('/api/repos'),
+	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
+	dismissPrompt: (workspaceId: string) =>
+		api<{ ok: boolean }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/prompt`, { method: 'DELETE' }),
 	/**
 	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
 	 * soon as the row exists — the worktree may still be setting up, so the caller
@@ -174,6 +180,19 @@ export const client = {
 	 */
 	logs: (file: string | null, limit = 300) =>
 		api<LogsResponse>(`/api/logs?limit=${limit}${file ? `&file=${encodeURIComponent(file)}` : ''}`),
+	/** VAPID public key to subscribe with, plus the phones already subscribed. */
+	push: () => api<PushConfig>('/api/push'),
+	/** Register this device for push. Idempotent by endpoint — the app re-sends it on every load. */
+	pushSubscribe: (subscription: unknown, label: string) =>
+		api<PushSubscribeResult>('/api/push/subscribe', {
+			method: 'POST',
+			body: JSON.stringify({ subscription, label })
+		}),
+	pushUnsubscribe: (endpoint: string) =>
+		api<PushSubscribeResult>('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) }),
+	/** Push one notification to this device — proves the relay → push service → phone path end to end. */
+	pushTest: (id: string) =>
+		api<PushTestResult>('/api/push/test', { method: 'POST', body: JSON.stringify({ id }) }, ACTION_TIMEOUT_MS),
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
 	merge: (workspaceId: string) =>
 		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' }, ACTION_TIMEOUT_MS)

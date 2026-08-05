@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { loadAgentDrafts, writeAgentDraft } from './lib/agentDraft.ts'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 import { loadDrafts, writeDraft } from './lib/draft.ts'
+import { loadReadMarks, type ReadMarks, writeReadMarks } from './lib/read.ts'
 import type { AgentPatch, UpdateStatus } from './lib/types.ts'
 
 /** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
@@ -72,12 +73,7 @@ interface AppState {
 	workingHints: Record<string, number>
 	/** Prompts awaiting confirmation, rendered as optimistic in-chat bubbles. */
 	pending: PendingMessage[]
-	/**
-	 * Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts).
-	 * Held here rather than in the Composer's own state because it is also written
-	 * from outside it — an undeliverable first prompt is stashed into the draft, and
-	 * the box has to show it there and then, not on the next remount.
-	 */
+	/** Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
 	/**
 	 * Agent settings chosen on the phone but not yet pushed into Conductor, per
@@ -88,6 +84,21 @@ interface AppState {
 	 * where the picker changes what the next message runs on.
 	 */
 	agentDrafts: Record<string, AgentPatch>
+	/**
+	 * Per-chat "seen up to here", mirrored to localStorage (see lib/read.ts). Conductor's
+	 * own unread flag can only be cleared from the Mac, so this is what stops a chat read
+	 * on the phone from staying unread forever.
+	 */
+	readMarks: ReadMarks
+	/**
+	 * This device's push subscription as the *relay* knows it. Reconciled once at the
+	 * app shell (`usePushSync`) rather than by the Connect sheet, because the whole
+	 * point is to repair a subscription the relay has lost — which has to happen on
+	 * every load, not only when someone opens the sheet to look at it.
+	 * `deviceId` is null when this device isn't subscribed; `devices` counts every
+	 * phone the relay will notify.
+	 */
+	push: { deviceId: string | null; devices: number }
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
 	view: ViewPrefs
@@ -100,14 +111,13 @@ interface AppState {
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
 	setDraft: (workspaceId: string, text: string) => void
-	/** Park text in a workspace's composer without clobbering what's already typed there. */
-	stashDraft: (workspaceId: string, text: string) => void
-	/** Drop a draft a send just consumed, so a retried stash can't linger and be sent twice. */
-	clearDraftIfEqual: (workspaceId: string, text: string) => void
 	/** Stage an agent change for the next send. A key set to `undefined` unstages it. */
 	stageAgent: (sessionId: string, patch: AgentPatch) => void
 	/** Drop the staged keys a send just applied — anything staged since survives. */
 	clearAgentDraft: (sessionId: string, applied: AgentPatch) => void
+	/** Note a chat as seen up to `at` (its `updated_at`); older marks never overwrite newer ones. */
+	markRead: (sessionId: string, at: string) => void
+	setPush: (push: { deviceId: string | null; devices: number }) => void
 	setSidebarOpen: (open: boolean) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
@@ -127,6 +137,8 @@ export const useApp = create<AppState>((set, get) => {
 		pending: [],
 		drafts: loadDrafts(),
 		agentDrafts: loadAgentDrafts(),
+		readMarks: loadReadMarks(),
+		push: { deviceId: null, devices: 0 },
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
 		view: loadView(),
@@ -153,14 +165,11 @@ export const useApp = create<AppState>((set, get) => {
 			writeDraft(workspaceId, text)
 			set({ drafts: { ...get().drafts, [workspaceId]: text } })
 		},
-		stashDraft: (workspaceId, text) => {
-			const current = get().drafts[workspaceId] ?? ''
-			if (current.includes(text)) return
-			// Prepend: the stashed prompt was written first, and joining beats picking a winner.
-			get().setDraft(workspaceId, current ? `${text}\n\n${current}` : text)
-		},
-		clearDraftIfEqual: (workspaceId, text) => {
-			if ((get().drafts[workspaceId] ?? '').trim() === text.trim()) get().setDraft(workspaceId, '')
+		markRead: (sessionId, at) => {
+			// The session poll re-fires this every couple of seconds while a chat is open;
+			// bail unless it actually moves the mark, or every tick re-renders the sidebar.
+			if ((get().readMarks[sessionId] ?? '') >= at) return
+			set({ readMarks: writeReadMarks({ ...get().readMarks, [sessionId]: at }) })
 		},
 		stageAgent: (sessionId, patch) => {
 			const next = prunePatch({ ...get().agentDrafts[sessionId], ...patch })
@@ -181,6 +190,7 @@ export const useApp = create<AppState>((set, get) => {
 			writeAgentDraft(sessionId, next)
 			set({ agentDrafts: { ...get().agentDrafts, [sessionId]: next } })
 		},
+		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {
