@@ -113,8 +113,13 @@ Two asymmetric halves — keep them separate:
        budget alongside the send, so it returns as soon as the relaunch starts
        and tells the phone to send again. "Open it on your Mac" is not advice a
        phone can act on.
-    1. **Workspace** — press its sidebar row (an `AXLink` named
-       "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing can be
+    1. **Workspace** — first ask whether we're *already there* (`atTargetWorkspace`):
+       the pane header answers in ~0.5s where finding the row to press costs ~10s,
+       and a phone sends to the same workspace over and over. It's safe as a
+       shortcut because it *is* step 2, run early — a header that disagrees (or no
+       branch to check it against) just falls through. Otherwise press its sidebar
+       row (an `AXLink` named "&lt;repo&gt; &lt;title&gt; +adds -dels").
+       No keystrokes at all, so nothing can be
        swallowed by a focused field. Only *rendered* rows exist in the AX tree, so
        a **collapsed sidebar section is invisible** — and the row title follows
        Conductor's precedence (manual name → PR title → humanized branch →
@@ -141,6 +146,31 @@ Two asymmetric halves — keep them separate:
     Landing in the wrong agent is worse than not sending, so every step errors out
     rather than guessing. No private protocol, nothing to rebreak on a Conductor
     update. The remaining keystroke delays (palette fallback) are load-bearing.
+
+    **A failed send retries itself** (`deliverPrompt` in `server.ts`) — the phone
+    should not be handed a Retry button for what is nearly always a warm-up cost.
+    What makes that safe rather than a way to send twice is that **the transcript is
+    the receipt**: every run, *including* one that reported an error, is followed by
+    a `CONFIRM_WINDOW_MS` watch for the matching user row, so an attempt that landed
+    late — or was killed just after pressing Enter — is reported as delivered
+    instead of repeated. (`fillComposer` *setting* AXValue rather than appending is
+    the other half: a retry replaces a half-written prompt.) Two limits keep it
+    honest: refusals a retry can't fix (`retryWontHelp` — a revoked Accessibility
+    grant) stop on the spot rather than burning a budget to say the same thing, and
+    **the relay never outlasts its caller**. The phone states its deadline in
+    `x-client-timeout-ms` and the relay retries inside it; don't re-pair those two
+    numbers by hand, because the relay self-updates while the PWA sits in a
+    service-worker cache, and a phone that gives up first shows a failure for a
+    prompt that then lands. A caller that sends no header gets the budget that fits
+    the *old* PWA's flat 25s abort. Because `uiTurn` can hold a run behind another
+    write, each run's ceiling comes off that deadline **when it actually starts**
+    (`runCeiling`), never when it was queued. The queue's own 3-sends-over-15-minutes
+    schedule sits outside all of this: it retries a delivery that never got off the
+    ground, not one Conductor fumbled.
+
+    Budgets here are measured, not chosen: a send that *worked* took 23.6s against a
+    30-workspace sidebar, which is why the 20s per-run ceiling was killing ordinary
+    sends. Re-measure rather than re-guess (`SEND_ATTEMPT_MS`).
 
     The same verified path drives the chat's **agent settings** (`setAgentOptions`,
     `POST /api/sessions/:id/agent`). Their *values* are plain reads — `sessions`
