@@ -106,6 +106,21 @@ export function shortModel(model: string | null): string {
 		.replace(/-latest$/, '')
 }
 
+/**
+ * One flat line of a prompt, for the jump rail's scrub label (components/MessageRail.tsx).
+ * The first line that has anything in it — a prompt often opens with a heading or a
+ * bullet, and the marker is noise at this size — collapsed and cut to fit one pill.
+ */
+export function messagePreview(text: string, max = 72): string {
+	const line = text.split('\n').find(l => l.trim()) ?? ''
+	const flat = line
+		.replace(/^[\s>#*\-+]+/, '')
+		.replace(/`/g, '')
+		.replace(/\s+/g, ' ')
+		.trim()
+	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
 export function relativeTime(iso: string): string {
 	const then = new Date(iso).getTime()
 	if (!Number.isFinite(then)) return ''
