@@ -122,6 +122,36 @@ export function shortModel(model: string | null): string {
 		.replace(/-latest$/, '')
 }
 
+/**
+ * A running duration for the working indicator: `12s` → `4m 07s` → `1h 04m 07s`.
+ * Padded once a bigger unit is in play so the label stops twitching as it counts,
+ * and clamped at zero — the relay's clock and the phone's don't have to agree.
+ */
+export function elapsed(ms: number): string {
+	const total = Math.max(0, Math.floor(ms / 1000))
+	const s = total % 60
+	const m = Math.floor(total / 60) % 60
+	const h = Math.floor(total / 3600)
+	const pad = (n: number) => String(n).padStart(2, '0')
+	if (h) return `${h}h ${pad(m)}m ${pad(s)}s`
+	if (m) return `${m}m ${pad(s)}s`
+	return `${s}s`
+}
+
+/**
+ * When a message was sent, in the phone's own locale and timezone. The date is only
+ * spelled out once the message isn't from today — a chat left open overnight would
+ * otherwise show two "09:14"s a day apart.
+ */
+export function messageTime(iso: string): string {
+	const at = new Date(iso)
+	if (!Number.isFinite(at.getTime())) return ''
+	const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+	const today = new Date()
+	if (at.toDateString() === today.toDateString()) return time
+	return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
+}
+
 export function relativeTime(iso: string): string {
 	const then = new Date(iso).getTime()
 	if (!Number.isFinite(then)) return ''

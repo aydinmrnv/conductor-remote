@@ -72,6 +72,8 @@ export interface SessionRow {
 	created_at: string
 	updated_at: string
 	last_user_message_at: string | null
+	/** When the turn now in flight was dispatched — see `listSessions`. Null before Conductor's first queued turn. */
+	turn_started_at: string | null
 }
 
 /** GitHub PR state of a workspace's branch, attached best-effort by src/pr.ts. */
@@ -272,13 +274,28 @@ export class Reads {
 
 	listSessions(workspaceId: string): SessionRow[] {
 		// created_at ASC keeps tab order stable (matches the desktop app) instead of jumping on activity.
+		//
+		// `turn_started_at` is when the current answer began, which is NOT
+		// `last_user_message_at`: a message typed while the agent is already working is
+		// *steering* — it joins the running turn rather than starting one, and the phone's
+		// elapsed timer must not restart on it. Conductor separates the two itself.
+		// `session_messages.queue_order` is set exactly on the messages that head a turn
+		// (verified over the whole DB from May 2026, when the column appeared — older rows
+		// are all NULL, so a long-dormant chat reports null here and simply shows no timer),
+		// and `sent_at` is when that head was dispatched, so a prompt that sat in the queue
+		// times from when it actually ran, not from when it was typed. Still-queued heads
+		// have `sent_at` NULL and are skipped, which is why a queued message can't blip the
+		// timer while the previous answer is still going. Served straight off
+		// idx_session_messages_sent_at(session_id, sent_at) — measured free at this poll rate.
 		return this.db.query<SessionRow>(
-			`SELECT id, status, title, model, permission_mode, claude_effort_level, fast_mode, agent_type,
-			        context_used_percent, unread_count,
-			        created_at, updated_at, last_user_message_at
-			 FROM sessions
-			 WHERE workspace_id = ? AND COALESCE(is_hidden, 0) = 0
-			 ORDER BY created_at ASC`,
+			`SELECT s.id, s.status, s.title, s.model, s.permission_mode, s.claude_effort_level, s.fast_mode, s.agent_type,
+			        s.context_used_percent, s.unread_count,
+			        s.created_at, s.updated_at, s.last_user_message_at,
+			        (SELECT MAX(m.sent_at) FROM session_messages m
+			          WHERE m.session_id = s.id AND m.queue_order IS NOT NULL AND m.sent_at IS NOT NULL) AS turn_started_at
+			 FROM sessions s
+			 WHERE s.workspace_id = ? AND COALESCE(s.is_hidden, 0) = 0
+			 ORDER BY s.created_at ASC`,
 			[workspaceId]
 		)
 	}

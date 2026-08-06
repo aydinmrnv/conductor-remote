@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Loader2 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { elapsed, messageTime } from '../lib/format.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
@@ -14,11 +15,14 @@ export function Transcript({
 	sessionId,
 	workspaceId,
 	working,
+	workingSince,
 	queued
 }: {
 	sessionId: string | null
 	workspaceId: string
 	working?: boolean
+	/** Epoch ms the current answer started (see SessionView) — the elapsed timer's origin. */
+	workingSince?: number | null
 	/** The relay's undelivered first prompt for this workspace (src/firstprompt.ts). */
 	queued?: PendingPrompt | null
 }) {
@@ -124,7 +128,7 @@ export function Transcript({
 							onDismiss={() => dismiss(workspaceId)}
 						/>
 					) : null}
-					{working ? <WorkingIndicator /> : null}
+					{working ? <WorkingIndicator since={workingSince} /> : null}
 				</div>
 			)}
 		</div>
@@ -276,11 +280,12 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 function Entry({ e }: { e: TranscriptEntry }) {
 	if (e.role === 'user') {
 		return (
-			<div className="flex justify-end">
+			<div className="flex flex-col items-end gap-0.5">
 				<Bubble className={cn('max-w-[85%] bg-accent-soft text-text', e.queued && 'opacity-60')}>
 					{e.queued ? <Label>queued</Label> : null}
 					<Markdown>{e.text}</Markdown>
 				</Bubble>
+				<span className="pr-1 text-[11px] text-faint">{messageTime(e.ts)}</span>
 			</div>
 		)
 	}
@@ -328,15 +333,28 @@ function Entry({ e }: { e: TranscriptEntry }) {
 	)
 }
 
-/** The classic three-dot "typing" bubble, shown under the last message while the agent works. */
-function WorkingIndicator() {
+/**
+ * The classic three-dot "typing" bubble, shown under the last message while the agent
+ * works — with how long the current answer has been running beside it. `since` is the
+ * turn's dispatch time, so steering the agent mid-answer keeps the clock running and
+ * only a fresh prompt starts it over (see `turn_started_at` in src/reads.ts).
+ */
+function WorkingIndicator({ since }: { since?: number | null }) {
+	const [now, setNow] = useState(() => Date.now())
+	useEffect(() => {
+		if (!since) return
+		setNow(Date.now())
+		const timer = setInterval(() => setNow(Date.now()), 1000)
+		return () => clearInterval(timer)
+	}, [since])
 	return (
-		<div className="fade-in flex justify-start">
+		<div className="fade-in flex items-center justify-start gap-2">
 			<div className="flex items-center gap-1 rounded-2xl bg-surface px-3.5 py-3">
 				<span className="typing-dot" />
 				<span className="typing-dot" />
 				<span className="typing-dot" />
 			</div>
+			{since ? <span className="text-[11px] tabular-nums text-faint">{elapsed(now - since)}</span> : null}
 		</div>
 	)
 }
