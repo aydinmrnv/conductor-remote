@@ -14,6 +14,7 @@ import type {
 	SendResult,
 	SessionsResponse,
 	StateResponse,
+	StatusResult,
 	WorkspaceDiff
 } from './types.ts'
 
@@ -213,5 +214,13 @@ export const client = {
 		api<PushTestResult>('/api/push/test', { method: 'POST', body: JSON.stringify({ id }) }, ACTION_TIMEOUT_MS),
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
 	merge: (workspaceId: string) =>
-		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' }, ACTION_TIMEOUT_MS)
+		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' }, ACTION_TIMEOUT_MS),
+
+	/** Move the workspace between the sidebar's status groups (Conductor's "Set status"). */
+	setStatus: (workspaceId: string, status: string) =>
+		api<StatusResult>(
+			`/api/workspaces/${encodeURIComponent(workspaceId)}/status`,
+			{ method: 'POST', body: JSON.stringify({ status }) },
+			ACTION_TIMEOUT_MS
+		)
 }

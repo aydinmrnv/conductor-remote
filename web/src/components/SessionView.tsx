@@ -12,6 +12,7 @@ import { useApp } from '../store.ts'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
+import { StatusPicker } from './StatusPicker.tsx'
 import { Transcript } from './Transcript.tsx'
 import { Spinner } from './ui.tsx'
 
@@ -94,18 +95,21 @@ export function SessionView() {
 					subtitle={subtitle}
 					menu
 					right={
-						<button
-							type="button"
-							onClick={() => setDiffOpen(o => !o)}
-							aria-label="Toggle diff panel"
-							aria-pressed={diffOpen}
-							className={cn(
-								'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
-								diffOpen && 'bg-surface-2 text-text'
-							)}
-						>
-							<FileDiff size={19} />
-						</button>
+						<>
+							<StatusPicker workspace={ws} />
+							<button
+								type="button"
+								onClick={() => setDiffOpen(o => !o)}
+								aria-label="Toggle diff panel"
+								aria-pressed={diffOpen}
+								className={cn(
+									'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+									diffOpen && 'bg-surface-2 text-text'
+								)}
+							>
+								<FileDiff size={19} />
+							</button>
+						</>
 					}
 				/>
 				{sessions.length > 0 ? (

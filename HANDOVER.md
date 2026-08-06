@@ -105,7 +105,7 @@ web/              React PWA (Vite root)
   src/store.ts    zustand: token + connection status + drafts + staged agent settings + read marks
                   + this device's push subscription
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer (AgentBar renders
-                  inside its card), NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
+                  inside its card), StatusPicker, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
                   (ConnectSheet carries the Notifications switch + "send a test")
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
