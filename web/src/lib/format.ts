@@ -123,6 +123,22 @@ export function shortModel(model: string | null): string {
 }
 
 /**
+ * One flat line of a prompt, for the jump sheet's rows (components/MessageNav.tsx).
+ * The first line that has anything in it — a prompt often opens with a heading or a
+ * bullet, and the marker is noise at this size — collapsed and cut to a little past
+ * the two lines the row clamps to, so the ellipsis lands where the row does.
+ */
+export function messagePreview(text: string, max = 120): string {
+	const line = text.split('\n').find(l => l.trim()) ?? ''
+	const flat = line
+		.replace(/^[\s>#*\-+]+/, '')
+		.replace(/`/g, '')
+		.replace(/\s+/g, ' ')
+		.trim()
+	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/**
  * A running duration for the working indicator: `12s` → `4m 07s` → `1h 04m 07s`.
  * Padded once a bigger unit is in play so the label stops twitching as it counts,
  * and clamped at zero — the relay's clock and the phone's don't have to agree.

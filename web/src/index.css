@@ -306,6 +306,18 @@
 .fade-in {
 	animation: fade-in 0.18s ease-out;
 }
+/* The entrance is the only motion on most of these; drop the travel and keep the
+   opacity so nothing appears out of nowhere. */
+@media (prefers-reduced-motion: reduce) {
+	.fade-in {
+		animation: none;
+		opacity: 1;
+	}
+	.typing-dot {
+		animation: none;
+		opacity: 0.6;
+	}
+}
 
 /* Safe-area padding for notches / home indicator. */
 .pt-safe {

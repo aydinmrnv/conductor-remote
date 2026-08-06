@@ -4,11 +4,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { elapsed, messageTime } from '../lib/format.ts'
+import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
 import { Markdown } from './Markdown.tsx'
+import { MessageNav } from './MessageNav.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function Transcript({
@@ -101,36 +102,46 @@ export function Transcript({
 	const empty = entries.length === 0 && visiblePending.length === 0 && !showQueued
 
 	return (
-		<div ref={scroller} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
-			{loading && empty ? (
-				<Spinner label="Loading transcript…" />
-			) : error && empty ? (
-				<Empty>{error}</Empty>
-			) : empty && !working ? (
-				<Empty>No messages yet.</Empty>
-			) : (
-				<div className="flex min-w-0 flex-col gap-2.5">
-					{groupSteps(entries).map(row =>
-						row.kind === 'steps' ? <StepGroup key={row.key} entries={row.entries} /> : <Entry key={row.key} e={row.e} />
-					)}
-					{visiblePending.map(p => (
-						<PendingEntry
-							key={p.id}
-							p={p}
-							onRetry={() => sendPrompt({ id: p.id, sessionId: p.sessionId, workspaceId: p.workspaceId, text: p.text })}
-							onDismiss={() => removePending(p.id)}
-						/>
-					))}
-					{showQueued ? (
-						<QueuedEntry
-							queued={showQueued}
-							onRetry={sessionId ? () => sendPrompt({ sessionId, workspaceId, text: showQueued.text }) : undefined}
-							onDismiss={() => dismiss(workspaceId)}
-						/>
-					) : null}
-					{working ? <WorkingIndicator since={workingSince} /> : null}
-				</div>
-			)}
+		<div className="relative flex min-h-0 min-w-0 flex-1">
+			<div ref={scroller} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+				{loading && empty ? (
+					<Spinner label="Loading transcript…" />
+				) : error && empty ? (
+					<Empty>{error}</Empty>
+				) : empty && !working ? (
+					<Empty>No messages yet.</Empty>
+				) : (
+					<div className="flex min-w-0 flex-col gap-2.5">
+						{groupSteps(entries).map(row =>
+							row.kind === 'steps' ? (
+								<StepGroup key={row.key} entries={row.entries} />
+							) : (
+								<Entry key={row.key} e={row.e} />
+							)
+						)}
+						{visiblePending.map(p => (
+							<PendingEntry
+								key={p.id}
+								p={p}
+								onRetry={() =>
+									sendPrompt({ id: p.id, sessionId: p.sessionId, workspaceId: p.workspaceId, text: p.text })
+								}
+								onDismiss={() => removePending(p.id)}
+							/>
+						))}
+						{showQueued ? (
+							<QueuedEntry
+								queued={showQueued}
+								onRetry={sessionId ? () => sendPrompt({ sessionId, workspaceId, text: showQueued.text }) : undefined}
+								onDismiss={() => dismiss(workspaceId)}
+							/>
+						) : null}
+						{working ? <WorkingIndicator since={workingSince} /> : null}
+					</div>
+				)}
+			</div>
+			{/* Reads the transcript's own DOM (`data-user-msg`), so it needs no entry list of its own. */}
+			<MessageNav scroller={scroller} />
 		</div>
 	)
 }
@@ -216,7 +227,7 @@ function QueuedEntry({
 }) {
 	const failed = queued.status === 'failed'
 	return (
-		<div className="flex flex-col items-end gap-1">
+		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(queued.text)} data-msg-state="queued">
 			<Bubble className={cn('max-w-[85%] bg-accent-soft text-text opacity-60', failed && 'border border-del/40')}>
 				<Markdown>{queued.text}</Markdown>
 			</Bubble>
@@ -247,7 +258,7 @@ function QueuedEntry({
 function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: () => void; onDismiss: () => void }) {
 	if (p.status === 'error') {
 		return (
-			<div className="flex flex-col items-end gap-1">
+			<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)} data-msg-state="failed">
 				<Bubble className="max-w-[85%] border border-del/40 bg-accent-soft text-text">
 					<Markdown>{p.text}</Markdown>
 				</Bubble>
@@ -265,7 +276,7 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 		)
 	}
 	return (
-		<div className="flex flex-col items-end gap-1">
+		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)} data-msg-state="sending">
 			<Bubble className="max-w-[85%] bg-accent-soft text-text opacity-60">
 				<Markdown>{p.text}</Markdown>
 			</Bubble>
@@ -279,8 +290,12 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 
 function Entry({ e }: { e: TranscriptEntry }) {
 	if (e.role === 'user') {
+		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
+		// the attributes are the row it draws in the sheet. Every user-side bubble carries
+		// one — an optimistic send and the relay's queued prompt are your messages too, and
+		// they're exactly the ones you scroll back to check on.
 		return (
-			<div className="flex flex-col items-end gap-0.5">
+			<div className="flex flex-col items-end gap-0.5" data-user-msg={messagePreview(e.text)} data-msg-ts={e.ts}>
 				<Bubble className={cn('max-w-[85%] bg-accent-soft text-text', e.queued && 'opacity-60')}>
 					{e.queued ? <Label>queued</Label> : null}
 					<Markdown>{e.text}</Markdown>
