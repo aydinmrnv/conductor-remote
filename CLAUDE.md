@@ -28,6 +28,21 @@ Two asymmetric halves — keep them separate:
     only ever compared against that same column. The session view marks *only*
     the chat on screen (a sibling tab's badge isn't ours to clear) and only while
     the page is visible.
+  - **"How long has this answer been running" is not `last_user_message_at`.**
+    That column moves on **every** user message, including one typed *into* a
+    running turn — steering — so the chat's elapsed timer would restart mid-answer
+    on the one message that didn't start an answer. Conductor already separates the
+    two: `session_messages.turn_id` groups a turn (a steering message carries the
+    running turn's id), and **`queue_order` is set exactly on the messages that
+    head a turn** and NULL on steering ones. So `turn_started_at`
+    (`reads.listSessions`) is `MAX(sent_at)` over this session's heads — `sent_at`,
+    not `created_at`, because a prompt can sit queued for minutes before it runs,
+    and skipping the `sent_at IS NULL` ones is what stops a message queued behind
+    the current answer from blipping the timer. `queue_order` only appeared in
+    **May 2026** (every row before that is NULL), so a chat dormant since then
+    reports null and the phone just shows the dots with no timer. It rides on the
+    2s session poll for free — `idx_session_messages_sent_at(session_id, sent_at)`
+    serves it directly.
 - **Creating a workspace is the one write that isn't fragile.** Conductor's
   documented deep links (conductor.build/docs/reference/deep-links) are
   `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and
@@ -200,6 +215,32 @@ Two asymmetric halves — keep them separate:
     stale-while-revalidate (`web/src/lib/models.ts` ▸ `useModels`): the picker
     paints from the last list and refreshes behind it, and a refresh that fails
     keeps that list on screen and says so rather than emptying it.
+
+    **Workspace status** (`setWorkspaceStatus`, `POST /api/workspaces/:id/status`)
+    is the one write that touches no pane at all — it right-clicks the workspace's
+    *sidebar row* (`AXShowMenu`), so what's on screen never changes. Conductor
+    offers this nowhere else: **the menu bar has no status command and the palette
+    has none either**, so the row menu (Mark as unread · Pin · Set status · Rename
+    · Copy link · Archive) is the only lever, and a collapsed sidebar section —
+    which hides the row from Accessibility entirely — is reported rather than
+    worked around, because there is no fallback to fall back to. Three things bite:
+    the row must be **scrolled into view** (`AXScrollToVisible`) or `AXShowMenu`
+    succeeds and draws nothing, which is exactly what happens right after a status
+    change moves the row to a different group; the submenu opens **nested inside
+    the same `AXMenu`** (titled `Set status`) rather than as a sibling, so the
+    `setModel` trick of scanning the web area's direct children misses it; and the
+    outer menu handle goes **stale** across that expansion, so it is re-found each
+    poll. Depth caps on those sweeps are load-bearing — the transcript hangs off
+    the same root, so an unbounded search costs more than the entire write and gets
+    worse the longer the chat is. Why it exists: Conductor derives status from a PR
+    it sometimes never links (one that opens and merges inside its poll window is
+    invisible to it afterwards), stranding finished work in "In progress" with no
+    phone-side fix. Labels come from Conductor's own menu — the `canceled` spelling
+    is the one taken from the UI rather than confirmed against stored data. One
+    caveat when testing: `uiTurn` serializes *our* UI operations, not the human's,
+    and an open menu dies the moment someone clicks elsewhere — so a run that fails
+    while you are using the Mac is contention, not a bug. Uncontended it is 6/6 at
+    ~11s; typing in Conductor at the same time made it look flaky.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently

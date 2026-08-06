@@ -116,6 +116,11 @@ export interface Session {
 	created_at: string
 	updated_at: string
 	last_user_message_at: string | null
+	/**
+	 * When the answer now in flight was dispatched — what the chat's elapsed timer counts
+	 * from. Deliberately not `last_user_message_at`: a steering message doesn't restart it.
+	 */
+	turn_started_at: string | null
 }
 
 /** What the phone can change about a chat's agent (mirrors `AgentOptions` in src/writes.ts). */
@@ -285,5 +290,12 @@ export interface MergeResult {
 	ok: boolean
 	branch: string
 	method?: MergeMethod
+	error?: string
+}
+
+export interface StatusResult {
+	ok: boolean
+	/** The workspace as the relay re-read it *after* Conductor recorded the change. */
+	workspace?: Workspace
 	error?: string
 }

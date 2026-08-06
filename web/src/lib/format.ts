@@ -84,7 +84,14 @@ export function workspaceStatus(w: Workspace): string {
 }
 
 /** Group order matches the desktop sidebar (Done → In review → In progress → Setting up → Backlog). */
-export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'setting-up', 'backlog']
+export const STATUS_ORDER = ['done', 'in-review', 'in-progress', 'setting-up', 'backlog', 'canceled']
+
+/**
+ * The statuses you can *set*, in the order Conductor's own "Set status" menu lists
+ * them. `setting-up` isn't here on purpose: it's a lifecycle state the app derives
+ * from a provisioning worktree, not something the menu offers.
+ */
+export const SETTABLE_STATUSES = ['backlog', 'in-progress', 'in-review', 'done', 'canceled']
 
 export function workspaceStatusLabel(status: string): string {
 	const labels: Record<string, string> = {
@@ -92,9 +99,18 @@ export function workspaceStatusLabel(status: string): string {
 		'in-review': 'In review',
 		'in-progress': 'In progress',
 		'setting-up': 'Setting up',
-		backlog: 'Backlog'
+		backlog: 'Backlog',
+		canceled: 'Canceled'
 	}
 	return labels[status] ?? status
+}
+
+/** One palette for every status dot, so the header control and the sidebar groups agree. */
+export const STATUS_COLORS: Record<string, string> = {
+	done: 'var(--color-done)',
+	'in-review': 'var(--color-idle)',
+	'in-progress': 'var(--color-working)',
+	'setting-up': 'var(--color-working)'
 }
 
 /** Compact model name: strip the `claude-`/date noise for the phone. */
@@ -120,6 +136,36 @@ export function messagePreview(text: string, max = 120): string {
 		.replace(/\s+/g, ' ')
 		.trim()
 	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/**
+ * A running duration for the working indicator: `12s` → `4m 07s` → `1h 04m 07s`.
+ * Padded once a bigger unit is in play so the label stops twitching as it counts,
+ * and clamped at zero — the relay's clock and the phone's don't have to agree.
+ */
+export function elapsed(ms: number): string {
+	const total = Math.max(0, Math.floor(ms / 1000))
+	const s = total % 60
+	const m = Math.floor(total / 60) % 60
+	const h = Math.floor(total / 3600)
+	const pad = (n: number) => String(n).padStart(2, '0')
+	if (h) return `${h}h ${pad(m)}m ${pad(s)}s`
+	if (m) return `${m}m ${pad(s)}s`
+	return `${s}s`
+}
+
+/**
+ * When a message was sent, in the phone's own locale and timezone. The date is only
+ * spelled out once the message isn't from today — a chat left open overnight would
+ * otherwise show two "09:14"s a day apart.
+ */
+export function messageTime(iso: string): string {
+	const at = new Date(iso)
+	if (!Number.isFinite(at.getTime())) return ''
+	const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+	const today = new Date()
+	if (at.toDateString() === today.toDateString()) return time
+	return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
 }
 
 export function relativeTime(iso: string): string {

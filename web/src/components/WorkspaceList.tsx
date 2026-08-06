@@ -6,6 +6,7 @@ import { cn } from '../lib/cn.ts'
 import {
 	isSettingUp,
 	relativeTime,
+	STATUS_COLORS,
 	STATUS_ORDER,
 	shortModel,
 	workspaceLabel,
@@ -214,13 +215,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 /** Status glyph for group headers — backlog is hollow, like the desktop sidebar. */
 function GroupDot({ status }: { status?: string }) {
 	if (!status) return null
-	const colors: Record<string, string> = {
-		done: 'var(--color-done)',
-		'in-review': 'var(--color-idle)',
-		'in-progress': 'var(--color-working)',
-		'setting-up': 'var(--color-working)'
-	}
-	const color = colors[status]
+	const color = STATUS_COLORS[status]
 	if (!color) return <span className="dot size-2 border border-faint bg-transparent" />
 	return <span className="dot size-2" style={{ background: color }} />
 }
