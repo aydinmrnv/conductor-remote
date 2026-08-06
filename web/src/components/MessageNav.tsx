@@ -36,10 +36,15 @@ import { relativeTime } from '../lib/format.ts'
 const IDLE_MS = 2500
 /** Breathing room above the message we land on, so it isn't flush against the tab strip. */
 const HEADROOM = 12
-/** Animate the jump only when it's short enough to read as movement rather than a wait. */
-const SMOOTH_VIEWPORTS = 2.5
 /** Below this there's nothing to navigate — one prompt is already on screen. */
 const MIN_MARKS = 2
+/** The glide: every jump ends with about this much of a screen travelling under you. */
+const APPROACH_VIEWPORTS = 1.1
+/** Duration bounds. A hop shouldn't be instant; a long jump shouldn't be a wait. */
+const MIN_SCROLL_MS = 200
+const MAX_SCROLL_MS = 420
+/** Milliseconds per pixel between those bounds — a longer glide takes a little longer. */
+const MS_PER_PX = 0.6
 
 type Mark = {
 	top: number
@@ -53,8 +58,76 @@ type Mark = {
 
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+
 const sameMarks = (a: Mark[], b: Mark[]) =>
 	a.length === b.length && a.every((m, i) => m.top === b[i].top && m.preview === b[i].preview)
+
+/**
+ * Glide to `to`, and call `onArrive` when we get there.
+ *
+ * Two things `scrollTo({behavior:'smooth'})` won't do, and both matter here:
+ *
+ * - **A long jump skips its own middle.** Twelve screens of markdown animated past you
+ *   is twelve screens the phone has to paint, for a stretch nobody reads. So anything
+ *   past ~one screen teleports to a screen short of the target first and glides only
+ *   that last stretch — every jump costs the same paint budget and arrives the same way,
+ *   whether it moved 300px or 30,000.
+ * - **The user can take it back.** A native smooth scroll ignores a finger landing
+ *   mid-flight; this one stops dead, because a view that keeps moving after you grab it
+ *   is the thing that makes people distrust a jump control.
+ *
+ * Returns its own canceller so a second jump can call off the first.
+ */
+function glideTo(el: HTMLElement, to: number, onArrive: () => void): () => void {
+	const target = clamp(to, 0, el.scrollHeight - el.clientHeight)
+	if (reduceMotion()) {
+		el.scrollTop = target
+		onArrive()
+		return () => {}
+	}
+
+	const approach = el.clientHeight * APPROACH_VIEWPORTS
+	if (Math.abs(target - el.scrollTop) > approach) {
+		el.scrollTop = clamp(target + Math.sign(el.scrollTop - target) * approach, 0, el.scrollHeight - el.clientHeight)
+	}
+
+	const from = el.scrollTop
+	const delta = target - from
+	if (!delta) {
+		onArrive()
+		return () => {}
+	}
+	const duration = clamp(Math.abs(delta) * MS_PER_PX, MIN_SCROLL_MS, MAX_SCROLL_MS)
+	const start = performance.now()
+	let raf = 0
+	let done = false
+
+	const stop = () => {
+		if (done) return
+		done = true
+		cancelAnimationFrame(raf)
+		el.removeEventListener('touchstart', stop)
+		el.removeEventListener('wheel', stop)
+	}
+	// Passive: we never prevent the gesture, we just get out of its way.
+	el.addEventListener('touchstart', stop, { passive: true })
+	el.addEventListener('wheel', stop, { passive: true })
+
+	const tick = (now: number) => {
+		const t = Math.min(1, (now - start) / duration)
+		// Ease-out-quint: leaves fast, settles slowly, no overshoot.
+		el.scrollTop = from + delta * (1 - (1 - t) ** 5)
+		if (t < 1) {
+			raf = requestAnimationFrame(tick)
+			return
+		}
+		stop()
+		onArrive()
+	}
+	raf = requestAnimationFrame(tick)
+	return stop
+}
 
 export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | null> }) {
 	const [marks, setMarks] = useState<Mark[]>([])
@@ -69,6 +142,7 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 	const openRef = useRef(false)
 	const sleepTimer = useRef(0)
 	const frame = useRef(0)
+	const cancelGlide = useRef<() => void>(() => {})
 
 	const wake = useCallback(() => {
 		awakeRef.current = true
@@ -140,6 +214,7 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 			el.removeEventListener('scroll', onScroll)
 			ro.disconnect()
 			mo.disconnect()
+			cancelGlide.current()
 			if (frame.current) cancelAnimationFrame(frame.current)
 			clearTimeout(sleepTimer.current)
 		}
@@ -149,18 +224,17 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 		const el = scroller.current
 		const mark = marksRef.current[i]
 		if (!(el && mark)) return
-		const top = Math.max(0, mark.top - HEADROOM)
-		// Animate a short hop; a jump across ten screens is a wait, not a transition.
-		const near = Math.abs(top - el.scrollTop) < el.clientHeight * SMOOTH_VIEWPORTS
-		el.scrollTo({ top, behavior: near && !reduceMotion() ? 'smooth' : 'auto' })
-		// Flash the bubble: landing somewhere new needs a "here", especially after a jump
-		// the eye couldn't follow.
-		if (!reduceMotion()) {
+		// Tapping through the list shouldn't leave two glides fighting over one scrollTop.
+		cancelGlide.current()
+		cancelGlide.current = glideTo(el, mark.top - HEADROOM, () => {
+			// Flash on arrival, not on departure: it's the "you're here" and it has to land
+			// with you. Reduced motion skips it — the jump was instant, nothing to catch up on.
+			if (reduceMotion()) return
 			mark.node.firstElementChild?.animate(
 				[{ boxShadow: '0 0 0 2px var(--color-accent)' }, { boxShadow: '0 0 0 2px transparent' }],
 				{ duration: 700, easing: 'ease-out' }
 			)
-		}
+		})
 		wake()
 	}
 
