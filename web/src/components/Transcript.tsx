@@ -9,7 +9,7 @@ import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
 import { Markdown } from './Markdown.tsx'
-import { MessageRail } from './MessageRail.tsx'
+import { MessageNav } from './MessageNav.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
 export function Transcript({
@@ -138,7 +138,7 @@ export function Transcript({
 				)}
 			</div>
 			{/* Reads the transcript's own DOM (`data-user-msg`), so it needs no entry list of its own. */}
-			<MessageRail scroller={scroller} />
+			<MessageNav scroller={scroller} />
 		</div>
 	)
 }
@@ -224,7 +224,7 @@ function QueuedEntry({
 }) {
 	const failed = queued.status === 'failed'
 	return (
-		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(queued.text)}>
+		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(queued.text)} data-msg-state="queued">
 			<Bubble className={cn('max-w-[85%] bg-accent-soft text-text opacity-60', failed && 'border border-del/40')}>
 				<Markdown>{queued.text}</Markdown>
 			</Bubble>
@@ -255,7 +255,7 @@ function QueuedEntry({
 function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: () => void; onDismiss: () => void }) {
 	if (p.status === 'error') {
 		return (
-			<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)}>
+			<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)} data-msg-state="failed">
 				<Bubble className="max-w-[85%] border border-del/40 bg-accent-soft text-text">
 					<Markdown>{p.text}</Markdown>
 				</Bubble>
@@ -273,7 +273,7 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 		)
 	}
 	return (
-		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)}>
+		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(p.text)} data-msg-state="sending">
 			<Bubble className="max-w-[85%] bg-accent-soft text-text opacity-60">
 				<Markdown>{p.text}</Markdown>
 			</Bubble>
@@ -287,10 +287,12 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 
 function Entry({ e }: { e: TranscriptEntry }) {
 	if (e.role === 'user') {
-		// `data-user-msg` is what the jump rail maps: the mark's position is this node's,
-		// its label is the attribute. Every user-side bubble carries one, pending included.
+		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
+		// the attributes are the row it draws in the sheet. Every user-side bubble carries
+		// one — an optimistic send and the relay's queued prompt are your messages too, and
+		// they're exactly the ones you scroll back to check on.
 		return (
-			<div className="flex justify-end" data-user-msg={messagePreview(e.text)}>
+			<div className="flex justify-end" data-user-msg={messagePreview(e.text)} data-msg-ts={e.ts}>
 				<Bubble className={cn('max-w-[85%] bg-accent-soft text-text', e.queued && 'opacity-60')}>
 					{e.queued ? <Label>queued</Label> : null}
 					<Markdown>{e.text}</Markdown>

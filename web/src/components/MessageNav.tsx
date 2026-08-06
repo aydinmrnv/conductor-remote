@@ -1,0 +1,357 @@
+import { ChevronDown, ChevronUp, List, X } from 'lucide-react'
+import type { RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { cn } from '../lib/cn.ts'
+import { relativeTime } from '../lib/format.ts'
+
+/**
+ * Jump back to your own prompts.
+ *
+ * The first cut of this drew Conductor's minimap — tick marks down a scrollbar-thin
+ * rail — and it was wrong for a thumb: 3px of ink is not a target, and a mark tells
+ * you a message is *there* without telling you which one, so you scrub and read and
+ * scrub again. What a phone wants is a control with a name on it.
+ *
+ * So: one pill above the composer. Its arrows step a prompt at a time, which is the
+ * common case and needs no aim at all; its middle opens a sheet listing every prompt
+ * with two lines of preview, which is the "which one was it?" case. The counter on
+ * the pill (`3/12`) is the third thing — it says where you are without being asked.
+ *
+ * Two behaviours carry the rest:
+ *
+ * 1. **It wakes on a gesture, not on scroll.** Waking on the `scroll` event would
+ *    light it every time the agent streams a line, because the transcript auto-pins
+ *    to the bottom — a control that blinks through a whole turn is worse than none.
+ *    So `touchmove`/`wheel` (a *person* moving the view) is what reveals it, and once
+ *    lit its own scrolling keeps it lit, which covers iOS momentum running long after
+ *    the finger left. At rest it's gone: no ink over the chat, nothing to mis-tap.
+ * 2. **Positions are measured from the DOM, not from the entry list.** A step group
+ *    opening, an image loading, a markdown table reflowing all move a message without
+ *    changing the list, and the transcript is the one place where "how tall is it
+ *    really" is the only honest answer. Hence `[data-user-msg]` + `getBoundingClientRect`,
+ *    re-measured while awake (and never while asleep, so an idle chat costs nothing).
+ */
+
+/** How long the pill stays up after the last scroll — long enough to reach for it. */
+const IDLE_MS = 2500
+/** Breathing room above the message we land on, so it isn't flush against the tab strip. */
+const HEADROOM = 12
+/** Animate the jump only when it's short enough to read as movement rather than a wait. */
+const SMOOTH_VIEWPORTS = 2.5
+/** Below this there's nothing to navigate — one prompt is already on screen. */
+const MIN_MARKS = 2
+
+type Mark = {
+	top: number
+	preview: string
+	/** ISO timestamp, or null for a prompt that hasn't landed in the transcript yet. */
+	ts: string | null
+	/** `sending` / `queued` for the optimistic and relay-held prompts. */
+	state: string | null
+	node: HTMLElement
+}
+
+const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+const sameMarks = (a: Mark[], b: Mark[]) =>
+	a.length === b.length && a.every((m, i) => m.top === b[i].top && m.preview === b[i].preview)
+
+export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | null> }) {
+	const [marks, setMarks] = useState<Mark[]>([])
+	const [scrollTop, setScrollTop] = useState(0)
+	const [awake, setAwake] = useState(false)
+	const [open, setOpen] = useState(false)
+
+	// Refs shadow the state the listeners read, so a wake acts on what was just measured
+	// rather than on last render's closure.
+	const marksRef = useRef<Mark[]>([])
+	const awakeRef = useRef(false)
+	const openRef = useRef(false)
+	const sleepTimer = useRef(0)
+	const frame = useRef(0)
+
+	const wake = useCallback(() => {
+		awakeRef.current = true
+		setAwake(true)
+		clearTimeout(sleepTimer.current)
+		sleepTimer.current = window.setTimeout(() => {
+			// The sheet outlives the timer; closing it re-arms this.
+			if (openRef.current) return
+			awakeRef.current = false
+			setAwake(false)
+		}, IDLE_MS)
+	}, [])
+
+	const measure = useCallback(() => {
+		const el = scroller.current
+		if (!el) return
+		// Content-space offsets: rect-relative, so no positioned-ancestor assumptions.
+		const base = el.getBoundingClientRect().top - el.scrollTop
+		const next = Array.from(el.querySelectorAll<HTMLElement>('[data-user-msg]'), node => ({
+			top: node.getBoundingClientRect().top - base,
+			preview: node.dataset.userMsg ?? '',
+			ts: node.dataset.msgTs ?? null,
+			state: node.dataset.msgState ?? null,
+			node
+		}))
+		marksRef.current = sameMarks(marksRef.current, next) ? marksRef.current : next
+		setMarks(marksRef.current)
+		setScrollTop(el.scrollTop)
+	}, [scroller])
+
+	const schedule = useCallback(() => {
+		if (frame.current) return
+		frame.current = requestAnimationFrame(() => {
+			frame.current = 0
+			measure()
+		})
+	}, [measure])
+
+	useEffect(() => {
+		const el = scroller.current
+		if (!el) return
+		// A person moving the view is what reveals the pill — never the transcript
+		// scrolling itself, or it would blink through every streamed message.
+		const onGesture = () => {
+			wake()
+			schedule()
+		}
+		// Once up, any scrolling keeps it up: momentum, and the jump we just made.
+		const onScroll = () => {
+			if (!awakeRef.current) return
+			wake()
+			schedule()
+		}
+		el.addEventListener('touchmove', onGesture, { passive: true })
+		el.addEventListener('wheel', onGesture, { passive: true })
+		el.addEventListener('scroll', onScroll, { passive: true })
+		// Both observers only cost anything while the pill is on screen. The mutation one
+		// is what catches a step group being opened under it.
+		const whileAwake = () => {
+			if (awakeRef.current) schedule()
+		}
+		const ro = new ResizeObserver(whileAwake)
+		ro.observe(el)
+		const mo = new MutationObserver(whileAwake)
+		mo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] })
+		return () => {
+			el.removeEventListener('touchmove', onGesture)
+			el.removeEventListener('wheel', onGesture)
+			el.removeEventListener('scroll', onScroll)
+			ro.disconnect()
+			mo.disconnect()
+			if (frame.current) cancelAnimationFrame(frame.current)
+			clearTimeout(sleepTimer.current)
+		}
+	}, [scroller, wake, schedule])
+
+	const jumpTo = (i: number) => {
+		const el = scroller.current
+		const mark = marksRef.current[i]
+		if (!(el && mark)) return
+		const top = Math.max(0, mark.top - HEADROOM)
+		// Animate a short hop; a jump across ten screens is a wait, not a transition.
+		const near = Math.abs(top - el.scrollTop) < el.clientHeight * SMOOTH_VIEWPORTS
+		el.scrollTo({ top, behavior: near && !reduceMotion() ? 'smooth' : 'auto' })
+		// Flash the bubble: landing somewhere new needs a "here", especially after a jump
+		// the eye couldn't follow.
+		if (!reduceMotion()) {
+			mark.node.firstElementChild?.animate(
+				[{ boxShadow: '0 0 0 2px var(--color-accent)' }, { boxShadow: '0 0 0 2px transparent' }],
+				{ duration: 700, easing: 'ease-out' }
+			)
+		}
+		wake()
+	}
+
+	const close = useCallback(() => {
+		openRef.current = false
+		setOpen(false)
+		wake()
+	}, [wake])
+
+	if (marks.length < MIN_MARKS) return null
+
+	// Which prompt you're reading: the last one at or above the top of the view. Above
+	// the first one there's no current, so `next` is the first rather than the second.
+	let current = -1
+	for (let i = 0; i < marks.length; i++) if (marks[i].top <= scrollTop + HEADROOM + 8) current = i
+	const prev = current > 0 ? current - 1 : null
+	const next = current + 1 < marks.length ? current + 1 : null
+	const show = awake || open
+
+	return (
+		<>
+			<div
+				className={cn(
+					'pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-3 transition duration-200 ease-out motion-reduce:transition-none',
+					show ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
+				)}
+			>
+				{/* Opaque, not translucent: it floats over prose, and 95%-plus-a-blur reads as a
+				    smudge where a solid chip reads as a control. A keyboard never fires the
+				    gestures that reveal it, so focus reveals it too — otherwise Tab lands on a
+				    control nobody can see. */}
+				<nav
+					aria-label="Jump to your messages"
+					onFocus={wake}
+					className={cn(
+						'flex h-12 items-stretch overflow-hidden rounded-full border border-border bg-surface-2 shadow-lg shadow-black/60',
+						show ? 'pointer-events-auto' : 'pointer-events-none'
+					)}
+				>
+					<Step dir="up" onClick={() => prev !== null && jumpTo(prev)} disabled={prev === null} />
+					<button
+						type="button"
+						onClick={() => {
+							measure()
+							openRef.current = true
+							setOpen(true)
+							wake()
+						}}
+						aria-haspopup="dialog"
+						aria-expanded={open}
+						aria-label={`Your messages — ${marks.length} in this chat`}
+						className="flex items-center gap-1.5 border-border-soft border-x px-3.5 text-muted transition active:bg-surface active:text-text focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+					>
+						<List size={16} className="shrink-0" />
+						<span className="font-mono text-[13px] tabular-nums">
+							<span className="text-text">{current + 1 || '–'}</span>
+							<span className="text-muted">/{marks.length}</span>
+						</span>
+					</button>
+					<Step dir="down" onClick={() => next !== null && jumpTo(next)} disabled={next === null} />
+				</nav>
+			</div>
+
+			{open ? (
+				<MessageSheet
+					marks={marks}
+					current={current}
+					onPick={i => {
+						close()
+						jumpTo(i)
+					}}
+					onClose={close}
+				/>
+			) : null}
+		</>
+	)
+}
+
+/**
+ * The row's right edge: when it was sent, or why it hasn't been. A prompt that failed
+ * says so here — it's the one you're most likely to be hunting for, and finding it as
+ * an ordinary grey timestamp would be a lie.
+ */
+function RowMeta({ mark }: { mark: Mark }) {
+	if (mark.state === 'failed') return <span className="shrink-0 text-[11px] text-del">didn’t send</span>
+	const label =
+		mark.state === 'sending' ? 'sending…' : mark.state === 'queued' ? 'queued' : mark.ts && relativeTime(mark.ts)
+	if (!label) return null
+	return <span className="shrink-0 text-[11px] text-muted tabular-nums">{label}</span>
+}
+
+/** One arrow of the pill: a 48px target, dimmed and inert at either end of the chat. */
+function Step({ dir, onClick, disabled }: { dir: 'up' | 'down'; onClick: () => void; disabled: boolean }) {
+	const Icon = dir === 'up' ? ChevronUp : ChevronDown
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			disabled={disabled}
+			aria-label={dir === 'up' ? 'Jump to your previous message' : 'Jump to your next message'}
+			className="flex w-12 items-center justify-center text-muted transition active:bg-surface active:text-text disabled:text-faint/40 focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+		>
+			<Icon size={19} />
+		</button>
+	)
+}
+
+/**
+ * The list. A sheet rather than a popover because it's the app's existing vocabulary for
+ * "pick one of these" (ConnectSheet, LogsSheet) and because a row you can read two lines
+ * of needs the width. Rows are real buttons, so this is also the keyboard path the rail
+ * never had.
+ */
+function MessageSheet({
+	marks,
+	current,
+	onPick,
+	onClose
+}: {
+	marks: Mark[]
+	current: number
+	onPick: (i: number) => void
+	onClose: () => void
+}) {
+	const panel = useRef<HTMLDivElement>(null)
+	const currentRow = useRef<HTMLButtonElement>(null)
+
+	// Open on the message you're reading, not on the top of a list you have to scroll.
+	// Focus the panel rather than the row: a row focused programmatically draws a ring
+	// on touch, where a phone user hasn't asked for one.
+	useEffect(() => {
+		panel.current?.focus({ preventScroll: true })
+		currentRow.current?.scrollIntoView({ block: 'center' })
+	}, [])
+
+	return (
+		<>
+			{/* Tap-to-dismiss surface. Keyboard gets Escape and the close button, so it stays hidden. */}
+			<div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} aria-hidden />
+			<div
+				ref={panel}
+				role="dialog"
+				aria-modal="true"
+				aria-label="Your messages"
+				tabIndex={-1}
+				onKeyDown={e => e.key === 'Escape' && onClose()}
+				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[70%] max-w-md flex-col rounded-t-3xl border border-border-soft bg-surface shadow-xl outline-none md:mb-6 md:rounded-3xl"
+			>
+				<header className="flex shrink-0 items-center gap-2 border-b border-border-soft px-4 py-2.5">
+					<h2 className="flex-1 text-[15px] font-semibold">Your messages</h2>
+					<span className="font-mono text-[12px] text-faint tabular-nums">{marks.length}</span>
+					<button
+						type="button"
+						onClick={onClose}
+						aria-label="Close"
+						className="-mr-2 flex size-11 items-center justify-center rounded-full text-muted transition active:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+					>
+						<X size={19} />
+					</button>
+				</header>
+				<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+					{marks.map((m, i) => (
+						<button
+							key={m.top}
+							ref={i === current ? currentRow : undefined}
+							type="button"
+							onClick={() => onPick(i)}
+							aria-current={i === current ? 'true' : undefined}
+							className={cn(
+								// Centred, not top-aligned: a one-line prompt in a 56px row would
+								// otherwise hang from the top with its own number floating beside it.
+								'flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left transition active:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2',
+								i === current && 'bg-surface-2/60'
+							)}
+						>
+							<span
+								className={cn(
+									'w-5 shrink-0 text-right font-mono text-[11px] tabular-nums',
+									i === current ? 'text-accent' : 'text-muted'
+								)}
+							>
+								{i + 1}
+							</span>
+							<span className="line-clamp-2 min-w-0 flex-1 text-[13.5px] leading-snug text-text [overflow-wrap:anywhere]">
+								{m.preview || 'Empty message'}
+							</span>
+							<RowMeta mark={m} />
+						</button>
+					))}
+				</div>
+			</div>
+		</>
+	)
+}
