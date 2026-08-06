@@ -450,7 +450,10 @@ on findSidebarRow()
 			set matches to {}
 			repeat with entry in rows
 				set row to contents of entry
-				set rowName to my tabLabel(row)
+				-- Guarded read: the sidebar re-renders constantly (every commit
+				-- changes a row's "+adds -dels"), and one row that goes stale
+				-- mid-scan must not take the whole search down with it.
+				set rowName to my axName(row)
 				if rowName contains (candidate as text) then
 					if repoName is "" or rowName contains repoName then set end of matches to row
 				end if
@@ -966,25 +969,44 @@ on menusUnder(root, maxDepth)
 	return found
 end menusUnder
 
-on waitForMenu(root, maxDepth, attempts)
-	-- A menu is drawn by the webview, not by us, so how long it takes varies with
-	-- what Conductor is busy doing. Poll instead of guessing one delay: the common
-	-- case costs one sweep, and a slow one still lands.
-	repeat with i from 1 to attempts
-		set foundMenus to my menusUnder(root, maxDepth)
-		if (count of foundMenus) > 0 then return item 1 of foundMenus
-		delay 0.5
-	end repeat
-	return missing value
-end waitForMenu
+on axName(el)
+	-- Guarded: a menu re-renders under us, and reading the name of an element that
+	-- has since gone throws an object-specifier error from wherever we happened to be.
+	tell application "System Events" to tell process "Conductor"
+		try
+			set n to name of el
+			if n is missing value then return ""
+			return n as text
+		on error
+			return ""
+		end try
+	end tell
+end axName
 
 on menuItemNamed(m, wanted)
 	repeat with mi in (my axKids(m))
 		set node to contents of mi
-		if (my axRole(node)) is "AXMenuItem" and (my tabLabel(node)) is wanted then return node
+		if (my axRole(node)) is "AXMenuItem" and (my axName(node)) is wanted then return node
 	end repeat
 	return missing value
 end menuItemNamed
+
+on waitForMenuWith(root, maxDepth, itemName, attempts)
+	-- Identify the menu by an item it *contains*, never as "the first AXMenu on
+	-- screen": a model picker left open, or a menu from the run before, is also an
+	-- AXMenu, and picking it produced "no Set status item" on a menu that had never
+	-- been the workspace's. A menu is drawn by the webview, not by us, so how long
+	-- it takes varies with what Conductor is busy doing — poll rather than guess
+	-- one delay; the common case costs a single sweep.
+	repeat with i from 1 to attempts
+		repeat with entry in my menusUnder(root, maxDepth)
+			set node to contents of entry
+			if (my menuItemNamed(node, itemName)) is not missing value then return node
+		end repeat
+		delay 0.5
+	end repeat
+	return missing value
+end waitForMenuWith
 
 on dismissMenus()
 	-- Two escapes: one for the submenu, one for the row menu. Leaving either open
@@ -1016,6 +1038,10 @@ on setWorkspaceStatus()
 		end try
 	end tell
 	delay 0.4
+	-- Clear anything already open (a picker, or a menu a previous run left behind)
+	-- so the sweep below can only match the one this right-click draws.
+	tell application "System Events" to key code 53
+	delay 0.3
 	tell application "System Events" to tell process "Conductor"
 		perform action "AXShowMenu" of theRow
 	end tell
@@ -1023,47 +1049,36 @@ on setWorkspaceStatus()
 	-- area, and the *transcript* hangs off that same root — a deep sweep walks every
 	-- message bubble and costs more than the rest of this write put together (it
 	-- grows with the conversation, so it degrades as you use the app).
-	set rowMenu to my waitForMenu(my webArea(), 4, 6)
+	set rowMenu to my waitForMenuWith(my webArea(), 4, "Set status", 6)
 	if rowMenu is missing value then
 		my dismissMenus()
-		error "the workspace's menu didn't open"
+		error "the workspace's menu didn't open — or it no longer offers Set status"
 	end if
 	set statusItem to my menuItemNamed(rowMenu, "Set status")
-	if statusItem is missing value then
-		my dismissMenus()
-		error "that menu has no Set status item — Conductor may have moved it"
-	end if
 	tell application "System Events" to tell process "Conductor"
 		perform action "AXPress" of statusItem
 	end tell
-	-- The submenu is an AXMenu titled "Set status" nested a few levels *inside* the
-	-- row menu (Conductor expands it in place rather than opening a sibling), so
-	-- search from that menu — searching the web area again would re-walk the world.
-	-- Match on the title; the outer menu is untitled.
-	-- Re-find the row menu each pass rather than reusing the handle from before the
-	-- press: expanding the submenu re-renders the menu, and the stale reference
-	-- reports no children rather than an error.
+	-- The submenu is an AXMenu nested a few levels *inside* the row menu (Conductor
+	-- expands it in place rather than opening a sibling), so search from that menu —
+	-- searching the web area again would re-walk the world. Two things make this a
+	-- poll rather than a read: the row-menu handle goes stale across the expansion
+	-- (it reports no children instead of erroring), so it is re-found each pass; and
+	-- the submenu's *items* arrive a beat after the submenu itself, so the thing we
+	-- wait for is the wanted status, not the container that will hold it.
 	set subMenu to missing value
-	repeat with attempt from 1 to 6
-		set liveMenu to my waitForMenu(my webArea(), 4, 1)
+	repeat with attempt from 1 to 8
+		set liveMenu to my waitForMenuWith(my webArea(), 4, "Set status", 1)
 		if liveMenu is not missing value then
-			repeat with entry in my menusUnder(liveMenu, 5)
-				set node to contents of entry
-				if (my tabLabel(node)) is "Set status" then set subMenu to node
-			end repeat
+			set subMenu to my waitForMenuWith(liveMenu, 5, wanted, 1)
 		end if
 		if subMenu is not missing value then exit repeat
-		delay 0.5
+		delay 0.4
 	end repeat
 	if subMenu is missing value then
 		my dismissMenus()
-		error "the status submenu didn't open"
+		error "Conductor never offered a status called " & wanted
 	end if
 	set choice to my menuItemNamed(subMenu, wanted)
-	if choice is missing value then
-		my dismissMenus()
-		error "Conductor is not offering a status called " & wanted
-	end if
 	tell application "System Events" to tell process "Conductor"
 		perform action "AXPress" of choice
 	end tell

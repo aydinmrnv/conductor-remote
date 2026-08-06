@@ -221,7 +221,11 @@ Two asymmetric halves — keep them separate:
     it sometimes never links (one that opens and merges inside its poll window is
     invisible to it afterwards), stranding finished work in "In progress" with no
     phone-side fix. Labels come from Conductor's own menu — the `canceled` spelling
-    is the one taken from the UI rather than confirmed against stored data.
+    is the one taken from the UI rather than confirmed against stored data. One
+    caveat when testing: `uiTurn` serializes *our* UI operations, not the human's,
+    and an open menu dies the moment someone clicks elsewhere — so a run that fails
+    while you are using the Mac is contention, not a bug. Uncontended it is 6/6 at
+    ~11s; typing in Conductor at the same time made it look flaky.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently
