@@ -68,6 +68,14 @@ export function SessionView() {
 	const working =
 		activeSession?.status === 'working' || (workingHint !== undefined && Date.now() - workingHint < 15_000)
 
+	// What the indicator's elapsed timer counts from. Whichever source says we're working
+	// is the one that knows when it started: once Conductor's status agrees, its dispatch
+	// time is exact (and survives a reload); until then only the hint from our own send
+	// exists, and the DB's `turn_started_at` is still the *previous* answer's.
+	const turnStart = activeSession?.turn_started_at ? Date.parse(activeSession.turn_started_at) : null
+	const workingSince =
+		(activeSession?.status === 'working' ? (turnStart ?? workingHint) : (workingHint ?? turnStart)) ?? null
+
 	const subtitle = [ws.repo_name, ws.branch, shortModel(ws.model)].filter(Boolean).join(' · ')
 
 	// "New chat, same files" (Cmd+T): the relay focuses this workspace, opens a new
@@ -119,7 +127,13 @@ export function SessionView() {
 					/>
 				) : null}
 				{/* `pending_prompt` is the relay's undelivered first prompt for this workspace. */}
-				<Transcript sessionId={sessionId} workspaceId={ws.id} working={working} queued={ws.pending_prompt} />
+				<Transcript
+					sessionId={sessionId}
+					workspaceId={ws.id}
+					working={working}
+					workingSince={workingSince}
+					queued={ws.pending_prompt}
+				/>
 				{/* The agent controls render inside the composer card (see Composer.tsx). */}
 				<Composer key={ws.id} session={activeSession} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>

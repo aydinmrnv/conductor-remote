@@ -28,6 +28,21 @@ Two asymmetric halves — keep them separate:
     only ever compared against that same column. The session view marks *only*
     the chat on screen (a sibling tab's badge isn't ours to clear) and only while
     the page is visible.
+  - **"How long has this answer been running" is not `last_user_message_at`.**
+    That column moves on **every** user message, including one typed *into* a
+    running turn — steering — so the chat's elapsed timer would restart mid-answer
+    on the one message that didn't start an answer. Conductor already separates the
+    two: `session_messages.turn_id` groups a turn (a steering message carries the
+    running turn's id), and **`queue_order` is set exactly on the messages that
+    head a turn** and NULL on steering ones. So `turn_started_at`
+    (`reads.listSessions`) is `MAX(sent_at)` over this session's heads — `sent_at`,
+    not `created_at`, because a prompt can sit queued for minutes before it runs,
+    and skipping the `sent_at IS NULL` ones is what stops a message queued behind
+    the current answer from blipping the timer. `queue_order` only appeared in
+    **May 2026** (every row before that is NULL), so a chat dormant since then
+    reports null and the phone just shows the dots with no timer. It rides on the
+    2s session poll for free — `idx_session_messages_sent_at(session_id, sent_at)`
+    serves it directly.
 - **Creating a workspace is the one write that isn't fragile.** Conductor's
   documented deep links (conductor.build/docs/reference/deep-links) are
   `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and
