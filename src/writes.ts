@@ -61,9 +61,68 @@ export interface Actuator {
 	readonly caveat: string
 	/** True when delivery is addressed to a specific session (no window-focus dependency). */
 	readonly precise: boolean
-	send: (target: SendTarget, text: string) => Promise<SendResult>
+	/**
+	 * `deadline` (epoch ms) is when the caller stops waiting, so a caller retrying
+	 * inside one request bounds every attempt with the *same* number. A deadline
+	 * rather than a duration because `uiTurn` may queue this run: only the run itself
+	 * knows how much of the budget was still left when it finally started.
+	 */
+	send: (target: SendTarget, text: string, deadline?: number) => Promise<SendResult>
 	/** Runtime availability check (e.g. the sidecar socket must be reachable). */
 	available?: () => Promise<boolean>
+}
+
+/**
+ * How long one AppleScript run may take before it's killed.
+ *
+ * Sized from measurement, not taste. A send that *worked* measured 23.6s end to
+ * end on a 30-workspace sidebar — past the 20s ceiling this replaces, which is why
+ * ordinary sends were being killed mid-run and reported as "Conductor took too long
+ * to respond". The cost is Accessibility round trips, not waiting: activating a
+ * backgrounded Conductor and reading the pane cost ~10s cold, and finding the
+ * sidebar row to press another ~10s (see `atTargetWorkspace`, which is why a warm
+ * send is now ~2s). A ceiling costs nothing when a send is fast — only a doomed one
+ * waits it out, and the caller's own deadline is what bounds that.
+ */
+export const SEND_ATTEMPT_MS = 28_000
+
+/**
+ * A run's own ceiling, taken off the caller's deadline at the moment it actually
+ * starts.
+ *
+ * Both halves matter. `uiTurn` above means a run can sit in the queue behind
+ * another write, so a duration computed when it was *requested* would let a queued
+ * run overshoot a deadline the caller is still holding a phone open on.
+ * `SEND_ATTEMPT_MS` then caps it, because a caller with a minute of budget still
+ * shouldn't spend all of it on one doomed run when a retry is the thing that works.
+ * The floor keeps a squeezed run honest instead of passing `timeout: 0`, which node
+ * reads as "no timeout at all".
+ */
+function runCeiling(deadline: number): number {
+	return Math.max(5_000, Math.min(SEND_ATTEMPT_MS, deadline - Date.now()))
+}
+
+/**
+ * Failures no amount of retrying will fix, so a caller that retries can stop at
+ * once instead of spending a whole budget to arrive at the same sentence.
+ *
+ * Matched on phrases this file writes itself — the first two from `refusalReason`,
+ * the rest from the target checks below — never on macOS's own wording, which we
+ * quote verbatim precisely because it drifts. The refusals are the ones a node
+ * upgrade causes by silently revoking Accessibility: they fail instantly and
+ * identically every time, so making the phone sit through a whole retry budget to
+ * be told a permission is missing is worse than being told at once. The rest are
+ * malformed targets — no session, no branch — which no attempt can turn into one.
+ */
+const TERMINAL_ERRORS = [
+	'not trusted for Accessibility',
+	'blocked the relay from controlling the UI',
+	'no session id to target',
+	'workspace has no branch to focus'
+]
+
+export function retryWontHelp(error: string | undefined): boolean {
+	return error !== undefined && TERMINAL_ERRORS.some(phrase => error.includes(phrase))
 }
 
 /**
@@ -86,7 +145,8 @@ export class SidecarActuator implements Actuator {
 		return sidecarAvailable()
 	}
 
-	async send(target: SendTarget, text: string): Promise<SendResult> {
+	/** `deadline` is ignored — the sidecar is one socket write, with no UI to wait on. */
+	async send(target: SendTarget, text: string, _deadline?: number): Promise<SendResult> {
 		const sessionId = target.sessionId ?? target.workspace.active_session_id
 		if (!sessionId) return { ok: false, strategy: this.name, error: 'no session id to target' }
 		try {
@@ -427,16 +487,35 @@ on focusViaPalette()
 	end tell
 end focusViaPalette
 
+on paneAgrees()
+	-- Nothing in the open pane contradicts the target: a chat pane is there and its
+	-- header assertion passed (which is a no-op when there's no branch to check it
+	-- against). This is what confirms a sidebar press landed.
+	try
+		set strips to my tabGroups()
+		if (count of strips) is 0 then return false
+		my assertWorkspace(item 1 of strips)
+		return true
+	end try
+	return false
+end paneAgrees
+
+on atTargetWorkspace()
+	-- "Are we already there?" — the *strict* form of the question, so it needs a
+	-- branch to have been checked and not merely skipped. Worth asking first because
+	-- the pane header answers in ~0.5s where reading the sidebar's rows to press one
+	-- measured 5-7s, the single largest cost in a send: a phone sends to the same
+	-- workspace over and over, and Conductor stays where it was left. Safe as a
+	-- shortcut because it *is* the assertion the send makes before typing anyway.
+	if (system attribute "RELAY_WS_BRANCH") is "" then return false
+	return my paneAgrees()
+end atTargetWorkspace
+
 on focusWorkspace()
 	if (system attribute "RELAY_WS_QUERY") is "" then return
+	if my atTargetWorkspace() then return
 	if my focusViaSidebar() then
-		try
-			set strips to my tabGroups()
-			if (count of strips) > 0 then
-				my assertWorkspace(item 1 of strips)
-				return
-			end if
-		end try
+		if my paneAgrees() then return
 	end if
 	my focusViaPalette()
 end focusWorkspace
@@ -1082,7 +1161,7 @@ export class AppleScriptActuator implements Actuator {
 	readonly caveat = 'Focuses the target workspace (Cmd+K) and its chat tab before sending.'
 	readonly precise = true
 
-	async send(target: SendTarget, text: string): Promise<SendResult> {
+	async send(target: SendTarget, text: string, deadline = Date.now() + SEND_ATTEMPT_MS): Promise<SendResult> {
 		// Focus the target workspace, select its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
@@ -1113,7 +1192,7 @@ end tell
 			await uiTurn(() =>
 				exec('osascript', ['-e', script], {
 					env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
-					timeout: 20000
+					timeout: runCeiling(deadline)
 				})
 			)
 			return { ok: true, strategy: this.name }
@@ -1180,7 +1259,7 @@ return "ok"`.trim()
 					RELAY_SET_FAST: opts.toggleFast ? '1' : '',
 					RELAY_SET_MODEL: opts.model ?? ''
 				},
-				timeout: 25000
+				timeout: SEND_ATTEMPT_MS
 			})
 		)
 		return { ok: true, strategy: 'applescript' }
@@ -1253,7 +1332,7 @@ return my listModels()`.trim()
 		const { stdout } = await uiTurn(() =>
 			exec('osascript', ['-e', script], {
 				env: { ...process.env, ...targetEnv(target) },
-				timeout: 25000
+				timeout: SEND_ATTEMPT_MS
 			})
 		)
 		const models = stdout
@@ -1325,10 +1404,12 @@ tell application "System Events"
 	keystroke "t" using {command down}
 end tell`.trim()
 	try {
+		// Shares the focus path with a send, so it needs the same ceiling: 15s was under
+		// the cost of activating a cold Conductor and finding the row on its own.
 		await uiTurn(() =>
 			exec('osascript', ['-e', script], {
 				env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
-				timeout: 15000
+				timeout: SEND_ATTEMPT_MS
 			})
 		)
 		return { ok: true, strategy: 'applescript' }

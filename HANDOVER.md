@@ -98,11 +98,14 @@ web/              React PWA (Vite root)
   index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
   src/app.tsx     routes (/ list, /w/:id session) + token gate; mounts ReloadPrompt above the gate
-  src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll)
-  src/lib/        api client, types, format helpers, cn, read marks (unread the phone has seen),
-                  push (permission/subscribe/reconcile)
-  src/store.ts    zustand: token + connection status + read marks + this device's push subscription
-  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer, AgentBar, StatusPicker, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
+  src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
+                  useSendPrompt (applies the staged agent settings, then sends)
+  src/lib/        api client, types, format helpers, cn, composer drafts, staged agent settings,
+                  model-list cache, read marks (unread the phone has seen), push (permission/subscribe/reconcile)
+  src/store.ts    zustand: token + connection status + drafts + staged agent settings + read marks
+                  + this device's push subscription
+  src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer (AgentBar renders
+                  inside its card), StatusPicker, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
                   (ConnectSheet carries the Notifications switch + "send a test")
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)

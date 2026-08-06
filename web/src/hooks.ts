@@ -3,9 +3,10 @@ import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
+import { readModelCache, writeModelCache } from './lib/models.ts'
 import type { PushSupport } from './lib/push.ts'
 import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
-import type { TranscriptEntry } from './lib/types.ts'
+import type { Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
 /**
@@ -340,6 +341,42 @@ export function useLogs(file: string | null, enabled: boolean) {
 	})
 }
 
+/** How long a cached model list is served without asking Conductor again. */
+const MODELS_STALE_MS = 10 * 60 * 1000
+
+/**
+ * Conductor's model list, stale-while-revalidate.
+ *
+ * Reading it live opens the real picker on the Mac (AppleScript, seconds, stolen
+ * focus), so the last list is cached in localStorage per `agent_type` and handed
+ * over the moment the picker opens; a list past `MODELS_STALE_MS` refetches
+ * behind the rendered one and swaps in when it lands. `enabled` is the picker's
+ * open state — a closed picker never touches the desktop.
+ *
+ * A failed refresh deliberately keeps the cached list on screen (React Query
+ * holds the last data): a stale list you can pick from beats an empty one, and
+ * the picker says the refresh failed. Retries are off — each one is another
+ * Conductor activation.
+ */
+export function useModels(session: Session | undefined, workspaceId: string, enabled: boolean) {
+	const agentType = session?.agent_type ?? 'claude'
+	return useQuery({
+		queryKey: ['models', agentType],
+		queryFn: async () => {
+			const r = await client.models((session as Session).id, workspaceId)
+			if (!r.ok || !r.models?.length) throw new Error(r.error ?? 'could not read the model list')
+			writeModelCache(agentType, r.models, Date.now())
+			return r.models
+		},
+		enabled: enabled && !!session,
+		initialData: () => readModelCache(agentType)?.models,
+		initialDataUpdatedAt: () => readModelCache(agentType)?.at,
+		staleTime: MODELS_STALE_MS,
+		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
+
 export interface TranscriptState {
 	entries: TranscriptEntry[]
 	loading: boolean
@@ -403,6 +440,13 @@ export function useTranscript(sessionId: string | null): TranscriptState {
  * inline error with Retry. Reused by the Composer and the Transcript's Retry
  * button — pass the pending's `id` to retry in place. There is no green "Sent"
  * toast: a delivered prompt simply appears in the chat, a failed one shows an error.
+ *
+ * This is also where a staged agent change lands (store ▸ `agentDrafts`): the
+ * model / effort / plan / fast the user picked is pushed into Conductor *first*,
+ * and the prompt only goes if that succeeded — running a prompt on the model the
+ * user just moved away from is the same class of mistake as landing it in the
+ * wrong workspace, so it fails loud with the settings still staged and the text
+ * still in the bubble, one Retry from going again.
  */
 export function useSendPrompt() {
 	const queryClient = useQueryClient()
@@ -410,6 +454,7 @@ export function useSendPrompt() {
 	const failPending = useApp(s => s.failPending)
 	const removePending = useApp(s => s.removePending)
 	const markWorking = useApp(s => s.markWorking)
+	const clearAgentDraft = useApp(s => s.clearAgentDraft)
 
 	return useCallback(
 		async (opts: { id?: string; sessionId: string; workspaceId: string; text: string }): Promise<boolean> => {
@@ -419,6 +464,18 @@ export function useSendPrompt() {
 			const { sessionId, workspaceId } = opts
 			addPending({ id, sessionId, workspaceId, text })
 			try {
+				// Read at send time, not through the closure: the user may have changed the
+				// model between mounting the composer and tapping send.
+				const staged = useApp.getState().agentDrafts[sessionId]
+				if (staged && Object.keys(staged).length) {
+					const applied = await client.setAgent(sessionId, staged, workspaceId)
+					if (!applied.ok) {
+						failPending(id, applied.error || 'Could not change the agent settings')
+						return false
+					}
+					clearAgentDraft(sessionId, staged)
+					queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
+				}
 				const r = await client.sendPrompt(sessionId, text, workspaceId)
 				if (r.ok) {
 					markWorking(sessionId)
@@ -437,7 +494,7 @@ export function useSendPrompt() {
 			}
 			return false
 		},
-		[addPending, failPending, removePending, markWorking, queryClient]
+		[addPending, failPending, removePending, markWorking, clearAgentDraft, queryClient]
 	)
 }
 

@@ -9,7 +9,6 @@ import { shortModel, workspaceLabel } from '../lib/format.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
-import { AgentBar } from './AgentBar.tsx'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
@@ -125,8 +124,8 @@ export function SessionView() {
 				) : null}
 				{/* `pending_prompt` is the relay's undelivered first prompt for this workspace. */}
 				<Transcript sessionId={sessionId} workspaceId={ws.id} working={working} queued={ws.pending_prompt} />
-				{activeSession ? <AgentBar session={activeSession} workspaceId={ws.id} /> : null}
-				<Composer key={ws.id} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
+				{/* The agent controls render inside the composer card (see Composer.tsx). */}
+				<Composer key={ws.id} session={activeSession} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
 			</div>
 
 			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}

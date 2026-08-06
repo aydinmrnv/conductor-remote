@@ -33,6 +33,7 @@ import {
 	listAgentModels,
 	newChat,
 	pickActuator,
+	retryWontHelp,
 	type SendResult,
 	setAgentOptions,
 	setRestartGuard,
@@ -59,22 +60,79 @@ setRestartGuard(() => !reads.listWorkspaces().some(w => w.session_status === 'wo
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
- * Confirm a prompt actually reached the session by watching the transcript for a
- * new user row matching it. The AppleScript actuator reports `ok` on `osascript`
- * exit 0 — which only means the script *ran*, not that Conductor was focused and
- * accepted the keystrokes — so without this a dropped send (asleep/unfocused Mac)
- * looks delivered. Conductor writes the row right after the send presses Enter, so
- * a short poll catches a real send fast and only the failure path waits the full
- * window. A queued prompt still writes a user row, so it counts as delivered.
+ * Has the prompt shown up as a user row yet? The receipt everything below is built
+ * on. The AppleScript actuator reports `ok` on `osascript` exit 0 — which only
+ * means the script *ran*, not that Conductor accepted the keystrokes — so without
+ * this a dropped send (asleep/unfocused Mac) looks delivered. A queued prompt still
+ * writes a user row, so it counts as delivered.
  */
-async function confirmDelivery(sessionId: string, text: string, sinceRowid: number): Promise<boolean> {
+function deliveredSince(sessionId: string, text: string, sinceRowid: number): boolean {
 	const target = text.trim()
-	for (let attempt = 0; attempt < 12; attempt++) {
-		const { entries } = reads.getMessages(sessionId, sinceRowid)
-		if (entries.some(e => e.role === 'user' && e.text.trim() === target)) return true
-		await sleep(350)
+	const { entries } = reads.getMessages(sessionId, sinceRowid)
+	return entries.some(e => e.role === 'user' && e.text.trim() === target)
+}
+
+/**
+ * Watch for that row, ending on a check rather than a sleep, and never past
+ * `budgetDeadline`. Conductor writes the row right after the send presses Enter, so
+ * a real send is confirmed in a tick and only the failure path waits the window out.
+ *
+ * The window is *also* what makes a retry safe — it is deliberately longer than the
+ * row takes to appear, because everything past it is allowed to type into the
+ * composer again — so note which end of the budget gets clipped when the two
+ * compete: a retry only happens with `MIN_ATTEMPT_MS + CONFIRM_WINDOW_MS` left, so
+ * a confirm *followed by another attempt* always gets its full window. Only the
+ * last confirm of all can be cut short, and nothing follows it to duplicate a row.
+ */
+async function confirmDelivery(
+	sessionId: string,
+	text: string,
+	sinceRowid: number,
+	budgetDeadline: number
+): Promise<boolean> {
+	const stopAt = Math.min(Date.now() + CONFIRM_WINDOW_MS, budgetDeadline)
+	for (;;) {
+		if (deliveredSince(sessionId, text, sinceRowid)) return true
+		if (Date.now() >= stopAt) return false
+		await sleep(300)
 	}
-	return false
+}
+
+/** How long we watch the transcript after a run before deciding it didn't land. */
+const CONFIRM_WINDOW_MS = 6_000
+/** Ceiling on a whole send, retries included — no phone should hold a request open longer. */
+const SEND_BUDGET_MS = 55_000
+/** Below this there isn't room for a run that could plausibly succeed, so don't start one. */
+const MIN_ATTEMPT_MS = 12_000
+/**
+ * The least a confirm is worth doing at all. Held back from every run so a send that
+ * lands can be *seen* to have landed — an unconfirmed send is indistinguishable from
+ * a lost one, which is the failure this whole path exists to avoid.
+ */
+const MIN_CONFIRM_MS = 2_000
+/** Leaves the response itself time to get home before the caller's own timer fires. */
+const RESPONSE_MARGIN_MS = 5_000
+/**
+ * Budget for a caller that didn't say how long it would wait — a PWA build from
+ * before `x-client-timeout-ms`, which aborted a send at a flat 25s. Sized so that
+ * such a phone is no worse off than it was: one run with a ceiling like the old one,
+ * and no retry (there was never room for a retry inside 25s).
+ */
+const LEGACY_SEND_BUDGET_MS = 20_000
+
+/**
+ * Never outlast the caller. The relay giving up *after* the phone has is the worst
+ * available outcome: the phone shows a failure while the send goes on to land, and
+ * the user can't tell that from a send that really didn't. Pairing our budget to
+ * the PWA's by hand wouldn't hold — the relay updates itself (autoupdate.ts) while
+ * the app sits in a service-worker cache — so the caller states its own deadline
+ * and we retry inside it.
+ */
+function sendBudget(req: http.IncomingMessage): number {
+	const asked = Number(req.headers['x-client-timeout-ms'])
+	if (!Number.isFinite(asked) || asked <= 0) return LEGACY_SEND_BUDGET_MS
+	// Floor at one confirmable attempt: a caller in a hurry still gets a real try.
+	return Math.max(MIN_ATTEMPT_MS + CONFIRM_WINDOW_MS, Math.min(SEND_BUDGET_MS, asked - RESPONSE_MARGIN_MS))
 }
 
 /**
@@ -109,31 +167,70 @@ async function confirmAgentOptions(ws: Workspace, sessionId: string, opts: Agent
 }
 
 /**
- * Deliver a prompt to one chat and confirm it landed. The single write path: the
- * phone's own sends go through it, and so does the first-prompt queue, so both
- * get the same targeting, the same read-back and the same errors.
+ * Deliver a prompt to one chat and confirm it landed, retrying until the caller's
+ * budget runs out. The single write path: the phone's own sends go through it, and so
+ * does the first-prompt queue, so both get the same targeting, the same read-back,
+ * the same retries and the same errors.
+ *
+ * Retrying here rather than handing the phone a Retry button is the point: the
+ * failures this path hits are overwhelmingly warm-up costs — a cold or busy Conductor
+ * makes the first AppleScript run slow enough to be killed, and the second finds an
+ * activated app and lands — which is exactly why tapping Retry always worked. Two
+ * things make doing it automatically safe rather than a way to send a prompt twice:
+ *  - **The transcript is the receipt.** Every run is followed by a full
+ *    `CONFIRM_WINDOW_MS` of watching for the matching user row, *including* runs that
+ *    reported an error, and the last of those checks is the moment before we type
+ *    again. A run that actually landed — even one killed just after pressing Enter,
+ *    or one whose row appeared after we'd stopped looking — is reported as delivered.
+ *  - **The composer is written, not appended to** (`fillComposer` sets AXValue), so a
+ *    retry replaces a half-finished attempt's text instead of doubling it.
+ *
+ * Bounded by a wall clock rather than an attempt count, because someone is holding
+ * this request open: runs are bounded by the caller's deadline, and we stop rather
+ * than start one the budget could not also confirm. The queue's own 3-sends-over-15-
+ * minutes schedule sits *outside* this and is unaffected — it retries a delivery that
+ * never got off the ground (worktree still setting up), not one Conductor fumbled.
  */
-async function deliverPrompt(ws: Workspace, sessionId: string, text: string): Promise<SendResult> {
+async function deliverPrompt(
+	ws: Workspace,
+	sessionId: string,
+	text: string,
+	budgetMs = SEND_BUDGET_MS
+): Promise<SendResult & { attempts: number }> {
 	const located = locateChat(ws, sessionId)
-	if ('error' in located) return { ok: false, strategy: actuator.name, error: located.error }
-	// Snapshot the transcript cursor so we can confirm the prompt actually lands.
+	if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
+	// Snapshot the cursor once: every check below asks "did *this* prompt arrive since
+	// we started", so a retry can't be fooled by an older identical prompt.
 	const beforeRowid = reads.getMessages(sessionId).cursor
-	const result = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text)
-	if (!result.ok) {
-		console.warn(`[relay] send to ${ws.branch ?? ws.id} failed: ${result.error}`)
-		return result
-	}
-	if (!(await confirmDelivery(sessionId, text, beforeRowid))) {
-		// The phone only ever sees "try again"; the reason a send goes missing lives
-		// on this side, so leave a trail in relay.log rather than nothing at all.
-		console.warn(`[relay] send to ${ws.branch ?? ws.id} drove the UI but never landed in the chat`)
-		return {
-			ok: false,
-			strategy: result.strategy,
-			error: 'Send didn’t land in the chat — Conductor may have been asleep or unfocused. Try again.'
+	const label = ws.branch ?? ws.id
+	const deadline = Date.now() + budgetMs
+	let attempts = 0
+	let last: SendResult = { ok: false, strategy: actuator.name }
+	for (;;) {
+		attempts++
+		// The run gets the deadline, not a duration: `uiTurn` may hold it behind another
+		// write, and only the run knows what was left of the budget when it started. Minus
+		// the confirm, so a caller on a tight budget spends it on the run rather than on
+		// watching — a 25s-era phone gets one full-length attempt, not two too short to finish.
+		last = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, deadline - MIN_CONFIRM_MS)
+		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
+			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
+			return { ok: true, strategy: last.strategy, attempts }
 		}
+		if (retryWontHelp(last.error)) break
+		if (deadline - Date.now() < MIN_ATTEMPT_MS + CONFIRM_WINDOW_MS) break
+		// The phone only ever sees the outcome; why a send goes missing lives on this
+		// side, so leave the trail in relay.log rather than nothing at all.
+		console.warn(
+			`[relay] send to ${label} attempt ${attempts} didn’t land (${last.error ?? 'no user row appeared'}) — retrying`
+		)
 	}
-	return result
+	const tried = attempts > 1 ? ` (tried ${attempts}×)` : ''
+	const error = last.ok
+		? `Send didn’t land in the chat — Conductor may have been asleep or unfocused${tried}. Try again.`
+		: `${last.error}${tried}`
+	console.warn(`[relay] send to ${label} failed after ${attempts} attempt(s): ${error}`)
+	return { ok: false, strategy: last.strategy, attempts, error }
 }
 
 /**
@@ -394,8 +491,9 @@ const server = http.createServer(async (req, res) => {
 			}
 			// Return as soon as the row exists (~2s) — waiting for delivery would block the
 			// request through Conductor's whole setup, measured at 30s+ on a real repo and
-			// past the phone's own 25s budget. The queue delivers on its own schedule and
-			// the phone watches it in /api/state; `send:true` opts API callers into waiting.
+			// past any budget a phone should hold a request open for. The queue delivers on
+			// its own schedule and the phone watches it in /api/state; `send:true` opts API
+			// callers into waiting.
 			// Whatever happens, the prompt is already pre-filled in Conductor's composer.
 			const settled = prompt ? firstPrompts.enqueue(created.id, prompt) : null
 			const failed = settled && body.send === true ? await settled : null
@@ -572,7 +670,9 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const result = await deliverPrompt(ws, sessionId, text)
+			// Retries live inside deliverPrompt, confirmed against the transcript each time,
+			// and inside the deadline this phone told us it would wait.
+			const result = await deliverPrompt(ws, sessionId, text, sendBudget(req))
 			// Whatever the queue was still holding for this workspace has now been said by
 			// hand — including a failed entry the user retried from the chat.
 			if (result.ok) firstPrompts.forget(ws.id)
