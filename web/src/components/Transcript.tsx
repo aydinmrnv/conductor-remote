@@ -341,7 +341,10 @@ function Entry({ e }: { e: TranscriptEntry }) {
 	// assistant
 	return (
 		<div className="flex justify-start">
-			<Bubble className="max-w-[92%] bg-surface">
+			{/* No fill on the agent's side — it's the bulk of the transcript, so the user's
+			    tinted bubbles read as the reply and this reads as the page. Padding drops with
+			    the background or the text would sit inset from everything around it. */}
+			<Bubble className="max-w-[92%] px-0.5">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
 		</div>
@@ -364,7 +367,7 @@ function WorkingIndicator({ since }: { since?: number | null }) {
 	}, [since])
 	return (
 		<div className="fade-in flex items-center justify-start gap-2">
-			<div className="flex items-center gap-1 rounded-2xl bg-surface px-3.5 py-3">
+			<div className="flex items-center gap-1 px-0.5 py-3">
 				<span className="typing-dot" />
 				<span className="typing-dot" />
 				<span className="typing-dot" />
