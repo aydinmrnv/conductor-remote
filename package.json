@@ -42,7 +42,7 @@
 		"dev": "node scripts/dev.ts",
 		"dev:web": "vite",
 		"build": "vite build",
-		"build:node": "tsc -p tsconfig.build.json",
+		"build:node": "tsc -p tsconfig.build.json && cp src/*.applescript dist-node/src/",
 		"preview": "yarn build && yarn start",
 		"gen:icons": "node scripts/gen-icons.ts",
 		"deploy": "yarn build && node bin/cli.js service install",
@@ -50,10 +50,11 @@
 		"typecheck": "tsc -p tsconfig.json",
 		"lint": "biome check .",
 		"fix": "biome check . --fix",
-		"verify": "yarn typecheck && yarn lint",
+		"verify": "yarn typecheck && yarn lint && yarn check:applescript",
 		"release": "semantic-release",
 		"prepack": "yarn build && yarn build:node",
-		"postinstall": "husky || true"
+		"postinstall": "husky || true",
+		"check:applescript": "node scripts/check-applescript.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.8",

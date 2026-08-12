@@ -155,8 +155,12 @@ assistant/system rows and plain text for user prompts; `queue_order` set +
 - **Yarn standalone.** An empty `yarn.lock` marks this repo as its own project
   (there's a `package.json` higher up in `$HOME`). `.yarnrc.yml` sets
   `nodeLinker: node-modules`.
-- **`yarn verify`** = typecheck + lint (Biome). `yarn check` collides with a Yarn
-  Classic builtin, so the script is `verify`.
+- **`yarn verify`** = typecheck + lint (Biome) + `scripts/check-applescript.ts`.
+  `yarn check` collides with a Yarn Classic builtin, so the script is `verify`.
+  The AppleScript step is the repo's only automated test: `osacompile` parses
+  `src/conductor.applescript`, and every `my handler()` call in the script and in
+  the TypeScript that appends to it must resolve to an `on handler(`. The compile
+  half is macOS-only and skips on CI; the resolution half runs everywhere.
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public
   commits.
 - **Releases key off reachable version tags — never rewind `main` after a tagged

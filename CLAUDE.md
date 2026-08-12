@@ -310,19 +310,26 @@ Two asymmetric halves — keep them separate:
 ## Commands
 
 ```bash
-yarn verify   # typecheck (tsc) + lint (Biome) — run before every commit
+yarn verify   # typecheck (tsc) + lint (Biome) + AppleScript check — run before every commit
 yarn fix      # Biome autofix (format + safe lints)
+yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
 yarn build    # Vite → dist/ (the PWA the relay serves)
-yarn build:node # tsc -p tsconfig.build.json → dist-node/ (compiled relay for the npm tarball)
+yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
 yarn dev      # Vite :5173 (HMR) proxying /api → relay :8787
 yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-There are no automated tests; `yarn verify` (typecheck + lint) is the gate.
-Verify a runtime change by curling the relay (see the bind trap below), not by
-unit test.
+The only automated test is `scripts/check-applescript.ts`, which `yarn verify`
+runs: `osacompile` parses `src/conductor.applescript` the way `osascript` will,
+and every `my handler()` call — in the script *and* in the TypeScript that
+appends to it — must resolve to an `on handler(`. AppleScript binds handler calls
+at run time, so those are two different failures and osacompile only sees one.
+The compile half is macOS-only and skips on CI (ubuntu); the resolution half runs
+everywhere, which is what catches a rename in a pull request.
+Nothing else is tested. Verify a runtime change by curling the relay (see the
+bind trap below), not by unit test.
 
 ## Traps (these will bite)
 
@@ -345,6 +352,11 @@ unit test.
   - Anything that resolves a path against the package root must anchor on `packageRoot()`
     (`src/pkg-root.ts`), **not** `import.meta.dirname/..` — the compiled files sit one dir
     deeper (`dist-node/src/…`), so a hard `..` points at `dist-node`, not the real root.
+    A *sibling* asset is the exception and the only one: `writes.ts` joins
+    `import.meta.dirname` to reach `conductor.applescript`, which works at both depths
+    precisely because the file moves with it. **`tsc` emits only `.js`**, so anything
+    non-JS that `src/` ships needs its own copy line in `build:node` — miss it and the
+    tarball is fine at typecheck, fine at lint, and dead on first import.
   - The one experimental bit left, `node:sqlite`, only warns — `bin/cli.js` silences
     just that warning (no re-exec).
 - **The relay binds loopback; the HTTPS URL comes from Tailscale, and `EXPOSE` picks
@@ -390,15 +402,21 @@ unit test.
   now user-visible text, so don't log anything you wouldn't hand to whoever holds the
   token. The file tabs belong to the LaunchAgent, so the response carries `managed` and
   the UI says so when this relay isn't the process writing them.
-- **Editing the AppleScript in `writes.ts`: two silent traps.** (1) Inside a
-  `tell application "System Events"` block, ordinary-looking variable names
-  resolve as **System Events terms** — `tabs` and `groups` become "every tab/group
-  of the process", so a loop over your own list quietly iterates the wrong thing
-  and the handler returns nothing. Keep logic *outside* the tell and reach in via
-  one-line helpers (`tabLabel`, `paneLabels`), or name variables `strip`/`pane`.
-  (2) The script lives in a **TS template literal** — a backtick in an AppleScript
-  comment terminates it and `tsc` reports a nonsense error tens of lines away.
-  Use quotes in those comments.
+- **Editing `src/conductor.applescript`.** Inside a `tell application "System
+  Events"` block, ordinary-looking variable names resolve as **System Events
+  terms** — `tabs` and `groups` become "every tab/group of the process", so a loop
+  over your own list quietly iterates the wrong thing and the handler returns
+  nothing. Keep logic *outside* the tell and reach in via one-line helpers
+  (`tabLabel`, `paneLabels`), or name variables `strip`/`pane`. Nothing else in
+  the toolchain reads this language, so run `yarn verify` after every edit.
+  - **It is a real file, and that is load-bearing in two directions.** `writes.ts`
+    reads it as a sibling of its own module (`import.meta.dirname`, the one place
+    that may — see the `packageRoot()` rule below), so `yarn build:node` has to
+    copy it next to the emitted JS; `tsc` only emits `.js`, and without that `cp`
+    the published tarball boots to an ENOENT. It also used to live in a **TS
+    template literal**, where a backtick in a comment terminated the string and
+    `tsc` blamed a line tens of lines away — that trap is gone, and moving it back
+    would bring it back.
 - **The installed PWA's viewport is not the box iOS lays it out in, and `dvh`
   reports whichever one it currently believes.** Measured in the iOS 26.5
   Simulator (iPhone 17 Pro, 874pt screen, home-screen web app): `innerHeight`,
@@ -434,10 +452,12 @@ unit test.
 - **TS strict**, `verbatimModuleSyntax` (use `import type`), `.ts`/`.tsx` extensions
   in imports are required (`allowImportingTsExtensions`).
 - **Layout:** `src/` = Node relay (server, db, reads, git, transcript, sidecar,
-  writes, config). `web/` = Vite-root React PWA (`web/src/`). `public/` = static
+  writes, config) plus `conductor.applescript`, the UI script `writes.ts` runs.
+  `web/` = Vite-root React PWA (`web/src/`). `public/` = static
   PWA assets at the **repo root** (not under `web/`) so Conductor's repo-icon lookup
   finds them (`vite.config.ts` sets `publicDir: '../public'`); `scripts/` = dev,
-  icon-gen, service installer. `dist/` = build output (gitignored, relay-served).
+  icon-gen, service installer, AppleScript check. `dist/` = build output
+  (gitignored, relay-served).
 - **Utility scripts** run under plain `node` (default type-stripping), stdlib-only —
   keep them strip-clean too (no param-property constructors/enums/namespaces).
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public commits.
