@@ -43,13 +43,32 @@ Two asymmetric halves — keep them separate:
     reports null and the phone just shows the dots with no timer. It rides on the
     2s session poll for free — `idx_session_messages_sent_at(session_id, sent_at)`
     serves it directly.
-- **Creating a workspace is the one write that isn't fragile.** Conductor's
-  documented deep links (conductor.build/docs/reference/deep-links) are
+- **Deep links carry the two writes that aren't fragile — creating a workspace
+  and focusing one.** The *documented* links
+  (conductor.build/docs/reference/deep-links) are
   `conductor://prompt=<enc>[&path=<repo root>]`, `…linear_id=…` and
-  `…async?repo=&plan=<base64>` — **all four create a *new* workspace**, none
-  focuses an existing one, so they can't replace the navigation above. But
-  `createWorkspace` (`POST /api/workspaces`) uses one to start work from the
-  phone with no Accessibility and no keystrokes at all. Two traps: parameters sit
+  `…async?repo=&plan=<base64>`, and **all four create a *new* workspace**. The
+  one that focuses an existing one is undocumented but public — it is what
+  Conductor's own sidebar row menu copies under **"Copy link"** (Cmd+⇧C):
+  **`conductor://workspace?id=<workspace>&session=<chat>`**, both ids exactly the
+  ones the relay already reads. `writes.ts` ▸ `workspaceLink` builds it and
+  `openViaDeepLink` is now the *first* step of every send, because it is not
+  merely faster (~2s against the ~18s the sidebar/palette path measured) — it
+  navigates by **id**, so a collapsed sidebar section stops mattering, and it
+  opens the chat tab explicitly, so a pane left on a file view or a terminal
+  comes back to the composer instead of failing with "couldn't identify the chat
+  tab strip". It stays fail-closed: the URL is fire-and-forget, so what counts as
+  success is the same pane assertion as before, and the sidebar row and palette
+  remain the fallback. **The near misses fail badly, so never hand-write this
+  URL**: `workspace` must be the URL's *host* and the parameters sit behind a
+  real `?`, because `conductor:///workspace/<id>` (id in the path, empty host)
+  falls through to the flat-parameter parser and **creates a new workspace in the
+  first repo** — `conductor://workspace/<id>` is merely ignored. The shareable
+  `https://app.conductor.build/workspace/<id>?session=<chat>` form reaches the
+  same handler, but the desktop build declares no associated domain, so macOS
+  gives it to a browser first; locally, use the scheme.
+  `createWorkspace` (`POST /api/workspaces`) uses the other link to start work
+  from the phone with no Accessibility and no keystrokes at all. Two traps: parameters sit
   *flat* after the scheme (not behind `?`) and must be URL-encoded (which is also
   what stops a prompt containing `&path=` from moving the workspace), and **an
   unmatched or absent `path` silently falls back to the first repo** — so the
@@ -128,16 +147,16 @@ Two asymmetric halves — keep them separate:
        budget alongside the send, so it returns as soon as the relaunch starts
        and tells the phone to send again. "Open it on your Mac" is not advice a
        phone can act on.
-    1. **Workspace** — first ask whether we're *already there* (`atTargetWorkspace`):
-       the pane header answers in ~0.5s where finding the row to press costs ~10s,
-       and a phone sends to the same workspace over and over. It's safe as a
-       shortcut because it *is* step 2, run early — a header that disagrees (or no
-       branch to check it against) just falls through. Otherwise press its sidebar
-       row (an `AXLink` named "&lt;repo&gt; &lt;title&gt; +adds -dels").
-       No keystrokes at all, so nothing can be
-       swallowed by a focused field. Only *rendered* rows exist in the AX tree, so
-       a **collapsed sidebar section is invisible** — and the row title follows
-       Conductor's precedence (manual name → PR title → humanized branch →
+    1. **Workspace** — open its own Conductor link (`openViaDeepLink`, see the
+       deep-link bullet above): one URL carrying the workspace id and the chat id,
+       and the whole ladder below exists only for a Conductor that doesn't answer
+       it. Falling down that ladder: ask whether we're *already there*
+       (`atTargetWorkspace`) — the pane header answers in ~0.5s where finding the
+       row to press costs ~10s — then press its sidebar row (an `AXLink` named
+       "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing
+       can be swallowed by a focused field. Only *rendered* rows exist in the AX
+       tree, so a **collapsed sidebar section is invisible** — and the row title
+       follows Conductor's precedence (manual name → PR title → humanized branch →
        codename), so `writes.ts` tries each candidate and requires a *unique* hit.
        Anything missing or ambiguous falls back to the command palette
        (Cmd+K → **branch name** → Enter); the branch is the palette's unique
@@ -145,11 +164,20 @@ Two asymmetric halves — keep them separate:
     2. **Assert we landed there** — the pane header carries the branch as
        `AXStaticText` (owner prefix stripped) and the repo as an `AXPopUpButton`.
        Mismatch → abort. This is what catches a palette hit on the wrong thing.
-    3. **Chat tab** — the strip is an `AXTabGroup` whose `AXRadioButton`s are the
-       tabs (`AXValue` = selected, `AXPress` = switch, it does *not* close the
-       chat), ordered like `reads.listSessions` (created_at ASC). Addressed by
-       index, label cross-checked, re-read to confirm. Without this every prompt
-       lands in whichever tab was already active. **The terminal panel is an
+    3. **Chat tab** — the link in step 1 already selected it, so this is mostly a
+       confirmation now; it still presses when it has to, and it is the only check
+       that a `session=` Conductor declined (a hidden chat has no tab) doesn't pass
+       silently. The strip is an `AXTabGroup` whose `AXRadioButton`s are the tabs
+       (`AXValue` = selected, `AXPress` = switch, it does *not* close the chat),
+       ordered like `reads.listSessions` (created_at ASC). Addressed by index,
+       label cross-checked, re-read to confirm. **The tabs are not the strip's
+       direct children** — each sits one `AXGroup` deep, named for its own close
+       action ("Close chat &lt;title&gt;"), and beside them as a *direct* child is
+       a "Close file view" radio button that is not a chat at all. Reading only the
+       direct children (`stripRadios` now reads both levels, `chatTabs` keeps the
+       "Close chat" ones) made every strip look like a one-tab strip called "Close
+       file view", which then lost the scoring below to the terminal panel and
+       failed every send with "chat tab 1 not found". **The terminal panel is an
        `AXTabGroup` too** (Setup/Run/Terminal 1) — candidates are scored on tab
        count + label and a tie aborts, so we never type into a terminal.
     4. **Composer** — `AXGroup "composer"` holds an `AXTextArea` whose `AXFocused`

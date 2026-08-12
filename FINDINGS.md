@@ -135,13 +135,27 @@ System Events. It drives the app's **real** send path — no injection, no DB
 poking, works on the hardened build (Accessibility is an OS permission the user
 grants once). Coupling is to the prompt field, not the frontend bundle, so it
 survives UI-bundle updates.
-- **Known gap:** it types into whichever session Conductor currently has
-  focused. It's the safe default because it can't alter the agent (it reuses the
-  session's own model/permission mode) — but for **per-workspace targeting**, use
-  the sidecar path above (`WRITE_STRATEGY=sidecar`), which addresses the session
-  directly. (The `conductor://` scheme is registered — `CFBundleURLSchemes =
-  [conductor]`, `tauri-plugin-deep-link` — but its routes are unmapped and no
-  longer needed for targeting.)
+- **Targeting is id-addressed, not label-addressed.** Conductor 0.71 added a
+  link to a workspace *and one chat inside it* — the sidebar row menu's "Copy
+  link" (Cmd+⇧C) — and 0.80.1 answers it locally:
+  `conductor://workspace?id=<workspace>&session=<chat>`, both ids the ones the
+  relay already reads. The `conductor://` scheme was registered all along
+  (`CFBundleURLSchemes = [conductor]`, `tauri-plugin-deep-link`); what was
+  missing was a route that focuses rather than creates.
+  - The near misses fail *badly*, so build the URL in one place
+    (`writes.ts` ▸ `workspaceLink`): `workspace` must be the **host** and the
+    parameters sit behind a real `?` (unlike the flat create-workspace links).
+    `conductor:///workspace/<id>` — id in the path, empty host — falls through
+    to the flat-parameter parser and **creates a new workspace in the first
+    repo**. `conductor://workspace/<id>` is merely ignored.
+  - The shareable form Conductor copies is
+    `https://app.conductor.build/workspace/<id>?session=<chat>`, and the app
+    parses it too, but the desktop build declares no associated domain, so
+    macOS hands it to a browser first. Locally the scheme form is the one that
+    always lands.
+  - The scheme is per release channel (`conductor-alpha://`, `conductor-beta://`
+    …). Only production is addressable anyway — every AppleScript here says
+    `application "Conductor"` — so it is a constant with an env override.
 
 ### ✓ Alternative: drive Claude Code directly (not wired)
 Because `sessions.id == claude_session_id` and the worktree is a normal repo,

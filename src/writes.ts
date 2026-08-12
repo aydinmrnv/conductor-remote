@@ -80,9 +80,13 @@ export interface Actuator {
  * ordinary sends were being killed mid-run and reported as "Conductor took too long
  * to respond". The cost is Accessibility round trips, not waiting: activating a
  * backgrounded Conductor and reading the pane cost ~10s cold, and finding the
- * sidebar row to press another ~10s (see `atTargetWorkspace`, which is why a warm
- * send is now ~2s). A ceiling costs nothing when a send is fast — only a doomed one
- * waits it out, and the caller's own deadline is what bounds that.
+ * sidebar row to press another ~10s.
+ *
+ * `openViaDeepLink` took the row scan out of the common path — a whole send now
+ * measures ~4s, and focusing alone ~2s against the ~18s the same focus costs when
+ * the link is unavailable — so this budget is really the *fallback's*, kept at the
+ * size that fallback still needs. A ceiling costs nothing when a send is fast; only
+ * a doomed one waits it out, and the caller's own deadline is what bounds that.
  */
 export const SEND_ATTEMPT_MS = 28_000
 
@@ -161,9 +165,11 @@ export class SidecarActuator implements Actuator {
 /**
  * AppleScript handlers that pin down *which chat* the prompt goes to.
  *
- * The palette (Cmd+K) only gets us to the right workspace — a workspace holds
- * several chats, and Conductor keeps typing in whichever tab is already active.
- * So a send addressed to a non-active chat would land in the wrong agent.
+ * `openViaDeepLink` normally selects it already, by id — these handlers are what
+ * *confirm* that, and what still does the work for the fallback focus paths,
+ * which only get us to the right workspace. A workspace holds several chats and
+ * Conductor keeps typing in whichever tab is already active, so a send addressed
+ * to a non-active chat would land in the wrong agent.
  *
  * Conductor's webview exposes the whole tree through macOS Accessibility. The
  * chat strip is an AXTabGroup whose AXRadioButtons are the tabs (`AXValue`
@@ -171,7 +177,14 @@ export class SidecarActuator implements Actuator {
  * chat). The strip's order matches `reads.listSessions` (created_at ASC), so
  * the caller addresses a tab by 1-based index and we cross-check the label.
  *
- * Two traps this has to survive:
+ * Three traps this has to survive:
+ *  - **The tabs are not the strip's direct children.** Each sits one AXGroup
+ *    deep and is named for its own close action ("Close chat <title>"), while a
+ *    "Close file view" radio button — not a chat — *is* a direct child. Reading
+ *    the direct children and stopping there made every chat strip look like a
+ *    one-tab strip called "Close file view", which then lost the scoring below to
+ *    the terminal panel and failed every send with "chat tab 1 not found". So
+ *    `stripRadios` reads both levels and `chatTabs` keeps the "Close chat" ones.
  *  - **The terminal panel is an AXTabGroup too** (radio buttons named Setup /
  *    Run / Terminal 1), a sibling of the chat strip in the same pane. Picking
  *    "the first tab group" would sometimes press a terminal tab, so we *score*
@@ -514,8 +527,44 @@ on atTargetWorkspace()
 	return my paneAgrees()
 end atTargetWorkspace
 
+on openViaDeepLink()
+	-- Conductor's *own* workspace link, the one its sidebar row menu copies under
+	-- "Copy link" (Cmd+Shift+C): one URL carrying the workspace id and the chat id,
+	-- addressed the way the relay already reads them rather than by any label a
+	-- release can rename. It replaces the entire focus dance below - no sidebar
+	-- scan, no palette keystrokes, no title precedence to reproduce - and measures
+	-- ~0.6s against the 5-10s the row press costs on a 30-workspace sidebar.
+	--
+	-- Two things it fixes outright rather than merely speeding up. It navigates by
+	-- *id*, so a collapsed sidebar section (which hides the row from Accessibility
+	-- entirely) stops mattering; and it opens the chat tab explicitly, so a pane
+	-- left on a file view or a terminal - where the chat strip does not exist in
+	-- the AX tree at all, and every send failed with "couldn't identify the chat
+	-- tab strip" - comes back to the composer on its own.
+	--
+	-- Still fail-closed: the URL is fire-and-forget, so what counts as success is
+	-- the same pane assertion every other path here has to pass. A Conductor
+	-- without the route (before 0.71) ignores it silently, and a scheme macOS
+	-- can't resolve fails the "open" outright - both fall through to the sidebar.
+	set linkURL to system attribute "RELAY_WS_LINK"
+	if linkURL is "" then return false
+	try
+		do shell script "open " & quoted form of linkURL
+	on error
+		return false
+	end try
+	-- Bounded on purpose: this poll is also the cost of *not* having the route, and
+	-- the fallback below still has to run inside the same budget afterwards.
+	repeat with attempt from 1 to 10
+		delay 0.15
+		if my paneAgrees() then return true
+	end repeat
+	return false
+end openViaDeepLink
+
 on focusWorkspace()
 	if (system attribute "RELAY_WS_QUERY") is "" then return
+	if my openViaDeepLink() then return
 	if my atTargetWorkspace() then return
 	if my focusViaSidebar() then
 		if my paneAgrees() then return
@@ -551,18 +600,46 @@ on tabGroups()
 	return {}
 end tabGroups
 
-on chatTabs(tg)
+on stripRadios(tg)
+	-- Every radio button in a tab strip, whether it is a direct child or sits one
+	-- group deep, in tree order. Both shapes are live at once: the terminal strip's
+	-- tabs are direct children, while a chat tab is wrapped in its own AXGroup with
+	-- the file-view toggle beside it as a plain child. Reading only the direct ones
+	-- (and stopping as soon as any turned up) is what made a chat strip look like a
+	-- one-tab strip called "Close file view".
 	tell application "System Events" to tell process "Conductor"
-		set direct to (UI elements of tg whose role is "AXRadioButton")
-		if (count of direct) > 0 then return direct
-		set nested to {}
-		repeat with g in (UI elements of tg)
-			repeat with r in (UI elements of g whose role is "AXRadioButton")
-				set end of nested to contents of r
-			end repeat
+		set acc to {}
+		repeat with k in (UI elements of tg)
+			set node to contents of k
+			if (role of node) is "AXRadioButton" then
+				set end of acc to node
+			else
+				try
+					repeat with r in (UI elements of node whose role is "AXRadioButton")
+						set end of acc to contents of r
+					end repeat
+				end try
+			end if
 		end repeat
-		return nested
+		return acc
 	end tell
+end stripRadios
+
+on chatTabs(tg)
+	-- Of those, a chat tab is the one whose accessible name is its own close action,
+	-- "Close chat <title>". The strip's other radio button is "Close file view",
+	-- which is not a chat and must not shift the indices this file addresses tabs
+	-- by — off by one is how a prompt lands in the wrong conversation. Falls back to
+	-- every radio button when none carries the prefix, so a renamed label costs the
+	-- filter rather than emptying the strip.
+	set radios to my stripRadios(tg)
+	set chats to {}
+	repeat with entry in radios
+		set node to contents of entry
+		if (my axName(node)) starts with "Close chat" then set end of chats to node
+	end repeat
+	if (count of chats) > 0 then return chats
+	return radios
 end chatTabs
 
 on tabLabel(t)
@@ -1085,6 +1162,47 @@ on setWorkspaceStatus()
 	delay 0.6
 end setWorkspaceStatus`
 
+/**
+ * The URL scheme Conductor registers, which is per *release channel*: the
+ * production build answers `conductor://`, the pre-release ones
+ * `conductor-alpha://`, `conductor-beta://`, `conductor-dev://` and friends.
+ * Everything else in this file addresses `application "Conductor"` by name, so
+ * production is the only channel the write path works against anyway — the
+ * override exists so a channel build needs a variable rather than a patch.
+ */
+const CONDUCTOR_SCHEME = process.env.RELAY_CONDUCTOR_SCHEME || 'conductor'
+
+/**
+ * Conductor's own link to a workspace, and optionally to one chat inside it —
+ * exactly what its sidebar row menu copies under "Copy link" (Cmd+Shift+C).
+ *
+ * `conductor://workspace?id=<workspace>&session=<chat>` is the shape that works,
+ * and the near misses all fail *badly*, so this is the one place that builds it:
+ * the parameters sit behind a real `?` (unlike the create-workspace links, which
+ * are flat after the scheme), the workspace id is `id` rather than `workspace`,
+ * and `workspace` must be the URL's **host** — `conductor:///workspace/<id>`,
+ * with the id in the path, falls through to the flat-parameter parser and
+ * **creates a new workspace in the first repo**. A path-shaped link with the
+ * right host (`conductor://workspace/<id>`) is merely ignored.
+ *
+ * `session` is optional and names a chat by `sessions.id`, the same id the relay
+ * already serves; omitted, Conductor opens whichever tab that workspace had.
+ * A hidden chat (`sessions.is_hidden`) has no tab, and Conductor keeps the
+ * workspace's current one rather than reporting anything, so the caller's own
+ * tab assertion is still what catches it.
+ *
+ * The https form Conductor copies for sharing —
+ * `https://app.conductor.build/workspace/<id>?session=<chat>` — reaches the same
+ * handler, but only once macOS has decided to hand it to the app; the desktop
+ * build declares no associated domain, so a browser gets it first. Locally the
+ * scheme form is the one that always lands.
+ */
+function workspaceLink(workspaceId: string, sessionId: string | null): string {
+	const params = new URLSearchParams({ id: workspaceId })
+	if (sessionId) params.set('session', sessionId)
+	return `${CONDUCTOR_SCHEME}://workspace?${params.toString()}`
+}
+
 /** Conductor's command palette matches workspaces by branch — its unique key. A
  * looser query (directory name) can match a command like unarchive, so prefer
  * branch and only fall back when it's absent. */
@@ -1144,6 +1262,7 @@ function targetEnv(target: SendTarget): Record<string, string> {
 		RELAY_WS_BRANCH: target.workspace.branch ?? '',
 		RELAY_WS_REPO: target.workspace.repo_name ?? '',
 		RELAY_WS_QUERY: focusQuery(target.workspace),
+		RELAY_WS_LINK: workspaceLink(target.workspace.id, target.sessionId),
 		RELAY_WS_TITLES: sidebarTitles(target.workspace).join('\n')
 	}
 }
@@ -1165,19 +1284,21 @@ function osaError(err: unknown): string {
  * permission mode the session already has (zero risk of altering the agent),
  * which is why it's the default.
  *
- * Precise targeting comes from focusing the intended workspace first through
- * Conductor's command palette (Cmd+K → branch → Enter) and then selecting the
- * target chat's tab (Accessibility, see SELECT_CHAT_TAB_HANDLERS), so the prompt
- * lands in the right session regardless of what was focused — no private IPC and
- * nothing to rebreak on a Conductor update (unlike the sidecar).
+ * Precise targeting comes from opening Conductor's own workspace link first
+ * (`conductor://workspace?id=…&session=…`, see `workspaceLink`) and then
+ * confirming the pane and the chat tab through Accessibility (see
+ * SELECT_CHAT_TAB_HANDLERS), so the prompt lands in the right session regardless
+ * of what was focused. The link is public and id-addressed; the AX reads only
+ * check it, and pressing the sidebar row or the command palette remains the
+ * fallback for a Conductor that doesn't answer it.
  */
 export class AppleScriptActuator implements Actuator {
 	readonly name = 'applescript'
-	readonly caveat = 'Focuses the target workspace (Cmd+K) and its chat tab before sending.'
+	readonly caveat = "Opens the target workspace's own Conductor link, then confirms the chat tab before sending."
 	readonly precise = true
 
 	async send(target: SendTarget, text: string, deadline = Date.now() + SEND_ATTEMPT_MS): Promise<SendResult> {
-		// Focus the target workspace, select its chat tab, fill the composer, send.
+		// Open the target workspace's own link, confirm its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
 		const script = `
@@ -1396,7 +1517,7 @@ export async function createWorkspace(prompt: string, repoPath: string | null): 
 	try {
 		// Serialized with the AX writes: creating a workspace pulls Conductor forward and
 		// switches which one is showing, which is precisely what a concurrent send assumes.
-		await uiTurn(() => exec('open', [`conductor://${query}`], { timeout: 15000 }))
+		await uiTurn(() => exec('open', [`${CONDUCTOR_SCHEME}://${query}`], { timeout: 15000 }))
 		return { ok: true, strategy: 'deeplink' }
 	} catch (err) {
 		return { ok: false, strategy: 'deeplink', error: osaError(err) }
@@ -1405,8 +1526,8 @@ export async function createWorkspace(prompt: string, repoPath: string | null): 
 
 /**
  * Open a new chat in the target workspace — Conductor's "New chat, same files"
- * (Cmd+T). Focuses the workspace first (command palette → branch), then Cmd+T; the
- * caller detects the freshly-created session id from the DB.
+ * (Cmd+T). Focuses the workspace first (its own link, see `workspaceLink`), then
+ * Cmd+T; the caller detects the freshly-created session id from the DB.
  */
 export async function newChat(workspace: Workspace): Promise<SendResult> {
 	if (!focusQuery(workspace)) return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
