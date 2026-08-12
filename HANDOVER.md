@@ -16,15 +16,18 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
   entries, diff vs target branch (incl. untracked), token auth (401 without),
   static PWA + SPA deep-link fallback, manifest + service worker + icons.
 - **Writes — two strategies behind the `Actuator` interface:**
-  - `applescript` (**default**): drives Conductor's real UI send, targeting the
-    workspace (sidebar `AXLink`, Cmd+K palette as fallback) *and* its chat tab
-    (`AXTabGroup`), then writing the composer's `AXTextArea` directly. The same
-    path can change the chat's model / effort / plan / fast
-    (`POST /api/sessions/:id/agent`); values are read from the DB.
-  - **deep link** (workspace creation only): `POST /api/workspaces` fires
-    `conductor://prompt=…&path=…` — no Accessibility, no keystrokes. All four
-    documented deep-link routes *create* a workspace; none focuses an existing
-    one, so they can't replace Cmd+K/sidebar navigation.
+  - `applescript` (**default**): opens the target's own Conductor link
+    (`conductor://workspace?id=…&session=…`, the one its row menu copies under
+    "Copy link"), then confirms the pane and the chat tab through Accessibility
+    and writes the composer's `AXTextArea` directly. Pressing the sidebar
+    `AXLink` and the Cmd+K palette remain the fallback. The same path can change
+    the chat's model / effort / plan / fast (`POST /api/sessions/:id/agent`);
+    values are read from the DB.
+  - **deep links** carry two of the writes now: `POST /api/workspaces` fires
+    `conductor://prompt=…&path=…` to *create* a workspace, and the send path
+    fires `conductor://workspace?id=…&session=…` to *focus* one — no
+    Accessibility, no keystrokes for either. Focus by link measured ~2s against
+    ~18s for the sidebar/palette path it replaced.
   - `sidecar` (**opt-in**, `WRITE_STRATEGY=sidecar`): precise per-session send
     over Conductor's dispatch socket. Socket + local auth + JSON-RPC protocol
     **validated with safe read RPCs**; a real `query` send is implemented but not
