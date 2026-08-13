@@ -27,6 +27,22 @@ jobs:
       # and `prepack` runs the same build at publish time.
       - run: yarn build
 
+  # The compile half of check:applescript needs osacompile, which only exists on
+  # macOS — on ubuntu it skips, so a stray quote in src/conductor.applescript
+  # would ship and surface for the first time as a failed send on someone's
+  # phone. This job is what parses the script the way osascript will. It's kept
+  # lean on purpose: the check script is stdlib-only and runs under plain node
+  # (default type-stripping), so there is no corepack, no yarn install — a
+  # checkout and node 24 are the whole cost of the macOS runner.
+  check-applescript:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-applescript.ts
+
   # Conventional Commits gate. The local husky hook is best-effort (can be
   # bypassed with --no-verify); this backstops it so semantic-release always
   # sees analyzable commits on main. Repo uses merge commits, so every PR commit
@@ -47,7 +63,9 @@ jobs:
       - run: yarn commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
 
   release:
-    needs: check
+    # check-applescript gates the release too: the tarball ships the .applescript
+    # verbatim, so publishing one that doesn't compile is the worst outcome here.
+    needs: [check, check-applescript]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
