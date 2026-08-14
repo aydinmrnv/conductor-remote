@@ -130,13 +130,15 @@ export function SessionView() {
 						creating={creatingChat}
 					/>
 				) : null}
-				{/* `pending_prompt` is the relay's undelivered first prompt for this workspace. */}
+				{/* The relay's undelivered prompt for this chat: one parked for the lock screen
+				    wins (it names its session; oldest first, since delivery is FIFO), else the
+				    workspace's first prompt still waiting on setup. */}
 				<Transcript
 					sessionId={sessionId}
 					workspaceId={ws.id}
 					working={working}
 					workingSince={workingSince}
-					queued={ws.pending_prompt}
+					queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 				/>
 				{/* The agent controls render inside the composer card (see Composer.tsx). */}
 				<Composer key={ws.id} session={activeSession} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />

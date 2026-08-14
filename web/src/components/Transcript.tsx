@@ -35,9 +35,10 @@ export function Transcript({
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
 
-	// The relay owns the entry, so dropping it is a request, not a local edit.
-	const dismiss = async (id: string) => {
-		await client.dismissPrompt(id).catch(() => undefined)
+	// The relay owns the entry, so dropping it is a request, not a local edit. A
+	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
+	const dismiss = async (q: PendingPrompt) => {
+		await (q.sessionId ? client.dismissParked(q.sessionId) : client.dismissPrompt(q.workspaceId)).catch(() => undefined)
 		queryClient.invalidateQueries({ queryKey: ['state'] })
 	}
 
@@ -133,7 +134,7 @@ export function Transcript({
 							<QueuedEntry
 								queued={showQueued}
 								onRetry={sessionId ? () => sendPrompt({ sessionId, workspaceId, text: showQueued.text }) : undefined}
-								onDismiss={() => dismiss(workspaceId)}
+								onDismiss={() => dismiss(showQueued)}
 							/>
 						) : null}
 						{working ? <WorkingIndicator since={workingSince} /> : null}
@@ -208,13 +209,13 @@ function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
 }
 
 /**
- * The workspace's first prompt, still with the relay. Not a `PendingMessage`: it
- * belongs to the workspace rather than to a session — usually there isn't one yet,
- * which is the whole reason it's waiting — and it outlives this app being open.
+ * A prompt still with the relay: the workspace's first prompt waiting on setup, or
+ * one parked for the lock screen (`reason` says which). Not a `PendingMessage` —
+ * it outlives this app being open, and delivery belongs to the relay.
  *
  * `failed` is the relay saying it gave up, so the text is offered back rather than
  * lost: Retry sends it as an ordinary prompt (which also clears the entry), Dismiss
- * drops it. It's still pre-filled in Conductor's composer on the Mac either way.
+ * drops it. A first prompt is still pre-filled in Conductor's composer either way.
  */
 function QueuedEntry({
 	queued,
@@ -247,7 +248,7 @@ function QueuedEntry({
 			) : (
 				<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
 					<Loader2 size={11} className="animate-spin" />
-					Sends when the workspace is ready
+					{queued.reason ?? 'Sends when the workspace is ready'}
 				</span>
 			)}
 		</div>

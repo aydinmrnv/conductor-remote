@@ -57,19 +57,27 @@ export interface Workspace {
 	pr_url?: string | null
 	/** A first prompt the relay hasn't delivered yet — rendered in this workspace's chat. */
 	pending_prompt?: PendingPrompt | null
+	/** Prompts parked for the lock screen (src/parked.ts), each naming its chat. */
+	parked_prompts?: PendingPrompt[]
 }
 
 /**
- * The prompt a workspace was created with, still undelivered (mirrors `FirstPrompt`
- * in src/firstprompt.ts). The relay owns delivery; this is the phone's view of it.
+ * A prompt the relay is holding: a workspace's first prompt waiting on setup
+ * (mirrors `FirstPrompt` in src/firstprompt.ts) or one parked for the lock screen
+ * (mirrors `ParkedPrompt` in src/parked.ts — those carry `sessionId` and `reason`).
+ * The relay owns delivery; this is the phone's view of it.
  */
 export interface PendingPrompt {
 	workspaceId: string
+	/** Present on a lock-parked prompt — it targets one chat, not the workspace. */
+	sessionId?: string
 	text: string
 	/** `failed` → the relay gave up and `error` says why; the text is still recoverable. */
 	status: 'waiting' | 'failed'
 	attempts: number
 	createdAt: number
+	/** What it waits for, in words ("Sends when the Mac is unlocked"). First prompts omit it. */
+	reason?: string
 	error?: string
 }
 
@@ -216,6 +224,10 @@ export interface SendResult {
 	error?: string
 	/** Runs the relay needed to land the prompt (it retries a failed send itself). */
 	attempts?: number
+	/** The Mac is locked: the relay parked the prompt and delivers it on unlock. */
+	parked?: boolean
+	/** The parked entry, when `parked` — the same shape `/api/state` will carry. */
+	queued?: PendingPrompt
 }
 
 export interface NewChatResult {

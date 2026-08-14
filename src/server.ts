@@ -20,7 +20,8 @@ import {
 	tailLogFile
 } from './logbuf.ts'
 import { mergePr } from './merge.ts'
-import { notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
+import { notifyAll, notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
+import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SessionRow, type Workspace } from './reads.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
@@ -31,10 +32,12 @@ import {
 	describeActuator,
 	EFFORT_LABELS,
 	listAgentModels,
+	lockBlocked,
 	newChat,
 	pickActuator,
 	retryWontHelp,
 	type SendResult,
+	screenLocked,
 	setAgentOptions,
 	setRestartGuard,
 	setWorkspaceStatus,
@@ -218,6 +221,10 @@ async function deliverPrompt(
 			return { ok: true, strategy: last.strategy, attempts }
 		}
 		if (retryWontHelp(last.error)) break
+		// A locked screen isn't worth the rest of the budget either — but for the
+		// opposite reason: the parked-prompt queue (src/parked.ts) waits it out far
+		// past any deadline a phone could hold open, so hand it over at once.
+		if (lockBlocked(last.error)) break
 		if (deadline - Date.now() < MIN_ATTEMPT_MS + CONFIRM_WINDOW_MS) break
 		// The phone only ever sees the outcome; why a send goes missing lives on this
 		// side, so leave the trail in relay.log rather than nothing at all.
@@ -255,7 +262,76 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 		const ws = reads.getWorkspace(workspaceId)
 		if (!ws) return { ok: false, error: 'the workspace is gone' }
 		const result = await deliverPrompt(ws, sessionId, text)
-		return { ok: result.ok, error: result.error }
+		return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
+	},
+	// A locked Mac holds first prompts whole — no attempts spent, no aging — instead
+	// of burning all three sends into a lock screen nobody is there to see.
+	gate: async () => (await screenLocked()) !== true
+})
+
+/**
+ * Apply staged agent settings to a chat — the shared half of `POST …/agent` and
+ * of a send that carries a patch. The `fast` translation lives here because the
+ * UI button only *toggles*: the DB says whether the press is needed at all.
+ */
+async function applyAgentPatch(
+	ws: Workspace,
+	sessionId: string,
+	patch: ParkedAgentPatch
+): Promise<{ ok: boolean; error?: string }> {
+	const located = locateChat(ws, sessionId)
+	if ('error' in located) return { ok: false, error: located.error }
+	const opts: AgentOptions = {
+		effort: patch.effort,
+		plan: patch.plan,
+		model: patch.model,
+		toggleFast: patch.fast === undefined ? false : patch.fast !== Boolean(located.session?.fast_mode)
+	}
+	const result = await setAgentOptions({ workspace: ws, sessionId, tab: located.tab }, opts)
+	if (!result.ok) return { ok: false, error: result.error }
+	if (!(await confirmAgentOptions(ws, sessionId, opts))) {
+		return { ok: false, error: 'Conductor didn’t record the change — it may have been asleep. Try again.' }
+	}
+	return { ok: true }
+}
+
+/** What the phone is told when its prompt is parked instead of failed. */
+const PARKED_ERROR = 'The Mac is locked — the relay parked the prompt and will send it when the Mac is unlocked.'
+
+/**
+ * Prompts that hit the lock screen, owned by this process until the Mac unlocks
+ * (see parked.ts for why the phone can't wait this out itself).
+ */
+const parkedPrompts = new ParkedPromptQueue(path.join(stateDir(), 'parked-prompts.json'), {
+	locked: screenLocked,
+	deliver: async entry => {
+		const ws = reads.getWorkspace(entry.workspaceId)
+		if (!ws) return { ok: false, error: 'the workspace is gone' }
+		// Settings first, prompt only if they stuck — the same order and the same
+		// fail-closed rule as the phone's own send (running the prompt on the model
+		// the user moved away from is the mistake this exists to prevent). A re-run
+		// after a failed prompt re-applies harmlessly: every control is read before
+		// it is pressed, so an already-correct value presses nothing.
+		if (entry.agent) {
+			const applied = await applyAgentPatch(ws, entry.sessionId, entry.agent)
+			if (!applied.ok) return { ok: false, error: applied.error, blocked: lockBlocked(applied.error) }
+		}
+		const result = await deliverPrompt(ws, entry.sessionId, entry.text)
+		return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
+	},
+	notify: (entry: ParkedPrompt, error?: string) => {
+		const ws = reads.getWorkspace(entry.workspaceId)
+		const title = ws?.workspace_name ?? ws?.pr_title ?? ws?.branch ?? 'Conductor'
+		const preview = entry.text.length > 140 ? `${entry.text.slice(0, 140).trimEnd()}…` : entry.text
+		void notifyAll({
+			title,
+			body: error ? `Parked prompt failed: ${error}` : `Sent after unlock: ${preview}`,
+			// Per chat, so a second parked prompt replaces the first's notification.
+			tag: `parked-${entry.sessionId}`,
+			url: `/w/${entry.workspaceId}`,
+			kind: error ? 'error' : 'done',
+			ts: Date.now()
+		})
 	}
 })
 
@@ -369,7 +445,14 @@ const server = http.createServer(async (req, res) => {
 			attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
 			// An undelivered first prompt rides along with its workspace: the phone renders it
 			// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
-			for (const ws of workspaces) ws.pending_prompt = firstPrompts.get(ws.id)
+			// Prompts parked for the lock screen ride the same way, one list per workspace,
+			// each entry naming its chat (src/parked.ts).
+			const parked = parkedPrompts.list()
+			for (const ws of workspaces) {
+				ws.pending_prompt = firstPrompts.get(ws.id)
+				const mine = parked.filter(p => p.workspaceId === ws.id)
+				if (mine.length) ws.parked_prompts = mine
+			}
 			return json(req, res, 200, {
 				workspaces,
 				actuator: await describeActuator(actuator),
@@ -637,46 +720,68 @@ const server = http.createServer(async (req, res) => {
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const located = locateChat(ws, sessionId)
-			if ('error' in located) return json(req, res, 409, { error: located.error })
-			// Fast mode exposes no readable state in the UI, so the DB decides whether
-			// the button actually needs pressing — pressing blindly would toggle it off.
-			const opts: AgentOptions = {
-				effort: body.effort,
-				plan: body.plan,
-				model: body.model,
-				toggleFast: body.fast === undefined ? false : body.fast !== Boolean(located.session?.fast_mode)
-			}
-			const result = await setAgentOptions({ workspace: ws, sessionId, tab: located.tab }, opts)
-			if (!result.ok) return json(req, res, 502, result)
-			if (!(await confirmAgentOptions(ws, sessionId, opts))) {
-				return json(req, res, 502, {
-					ok: false,
-					strategy: result.strategy,
-					error: 'Conductor didn’t record the change — it may have been asleep. Try again.'
-				})
-			}
+			const applied = await applyAgentPatch(ws, sessionId, body)
+			if (!applied.ok) return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
 			return json(req, res, 200, { ok: true, session: reads.listSessions(ws.id).find(s => s.id === sessionId) })
 		}
 
-		// POST /api/sessions/:id/prompt  { text }
+		// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged
+		// settings patch, applied before the prompt so the two can't come apart (and so
+		// both park together when the Mac turns out to be locked).
 		m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
 		if (req.method === 'POST' && m) {
 			const sessionId = decodeURIComponent(m[1])
-			const body = JSON.parse((await readBody(req)) || '{}') as { text?: string; workspaceId?: string }
+			const body = JSON.parse((await readBody(req)) || '{}') as {
+				text?: string
+				workspaceId?: string
+				agent?: ParkedAgentPatch
+			}
 			const text = (body.text ?? '').trim()
 			if (!text) return json(req, res, 400, { error: 'empty prompt' })
 			const ws = body.workspaceId
 				? reads.getWorkspace(body.workspaceId)
 				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
 			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			// One deadline for the whole request: settings eat into the send's budget
+			// rather than extending it past what the phone said it would wait.
+			const deadline = Date.now() + sendBudget(req)
+			const agent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
+			if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
+				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
+			}
+			if (agent) {
+				const applied = await applyAgentPatch(ws, sessionId, agent)
+				if (!applied.ok) {
+					if (lockBlocked(applied.error)) {
+						const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
+						return json(req, res, 202, {
+							ok: false,
+							parked: true,
+							queued,
+							strategy: actuator.name,
+							error: PARKED_ERROR
+						})
+					}
+					return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
+				}
+			}
 			// Retries live inside deliverPrompt, confirmed against the transcript each time,
 			// and inside the deadline this phone told us it would wait.
-			const result = await deliverPrompt(ws, sessionId, text, sendBudget(req))
-			// Whatever the queue was still holding for this workspace has now been said by
-			// hand — including a failed entry the user retried from the chat.
-			if (result.ok) firstPrompts.forget(ws.id)
-			return json(req, res, result.ok ? 200 : 502, result)
+			const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
+			if (result.ok) {
+				// Whatever a queue was still holding has now been said by hand — the first
+				// prompt (including a failed entry retried from the chat), and any parked
+				// copy of this exact text, which delivering again would double.
+				firstPrompts.forget(ws.id)
+				parkedPrompts.forgetDelivered(sessionId, text)
+				return json(req, res, 200, result)
+			}
+			if (lockBlocked(result.error)) {
+				// Settings (if any) already stuck, so the entry parks without them.
+				const queued = parkedPrompts.park(ws.id, sessionId, text)
+				return json(req, res, 202, { ok: false, parked: true, queued, strategy: result.strategy, error: PARKED_ERROR })
+			}
+			return json(req, res, 502, result)
 		}
 
 		// DELETE /api/workspaces/:id/prompt — dismiss an undelivered first prompt
@@ -684,6 +789,14 @@ const server = http.createServer(async (req, res) => {
 		if (req.method === 'DELETE' && m) {
 			const workspaceId = decodeURIComponent(m[1])
 			if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
+			return json(req, res, 200, { ok: true })
+		}
+
+		// DELETE /api/sessions/:id/prompt — dismiss whatever is parked for this chat
+		m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+		if (req.method === 'DELETE' && m) {
+			const sessionId = decodeURIComponent(m[1])
+			if (!parkedPrompts.forgetSession(sessionId)) return json(req, res, 404, { error: 'no parked prompt' })
 			return json(req, res, 200, { ok: true })
 		}
 
@@ -718,6 +831,8 @@ server.listen(cfg.port, cfg.host, () => {
 	// Pick up any first prompt the previous process was still holding — an auto-update
 	// restart lands mid-setup often enough that this is the normal path, not a rare one.
 	firstPrompts.start()
+	// Same for prompts parked behind the lock screen — a lock outlives relay restarts.
+	parkedPrompts.start()
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a

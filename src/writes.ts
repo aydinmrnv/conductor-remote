@@ -132,6 +132,44 @@ export function retryWontHelp(error: string | undefined): boolean {
 }
 
 /**
+ * A send that failed because the Mac's screen is locked. Deliberately *not* in
+ * `TERMINAL_ERRORS`: it isn't terminal (an unlock fixes it) but it also isn't a
+ * warm-up cost a retry loop should burn budget on — the caller parks the prompt
+ * instead (src/parked.ts) and the queue delivers it when the lock lifts. Matched
+ * on the phrase every lock refusal in conductor.applescript starts with; the
+ * words are ours, so they can't drift under us the way macOS's can.
+ */
+export function lockBlocked(error: string | undefined): boolean {
+	return (error ?? '').includes('The Mac is locked')
+}
+
+/**
+ * Node's own read of the lock screen — the same CGSessionCopyCurrentDictionary
+ * probe `screenLocked()` in conductor.applescript makes, minus the AppleScript
+ * wrapper, so the parked-prompt queue can poll it without spinning up a whole
+ * UI script (and without needing Accessibility at all). `null` means the probe
+ * itself failed — callers should treat that as "try the send and let it tell
+ * you", not as either lock state.
+ */
+export async function screenLocked(): Promise<boolean | null> {
+	// Keep in lockstep with `screenLocked()` in conductor.applescript, traps and
+	// all: $.CFBridgingRelease segfaults under JXA, and without the bindFunction
+	// rebind deepUnwrap reads the CF dictionary as undefined — a silent "unlocked"
+	// on a locked Mac.
+	const jxa =
+		"ObjC.import('CoreGraphics'); ObjC.bindFunction('CGSessionCopyCurrentDictionary', ['id', []]); const d = ObjC.deepUnwrap($.CGSessionCopyCurrentDictionary()) || {}; d.CGSSessionScreenIsLocked ? 'locked' : 'unlocked'"
+	try {
+		const { stdout } = await exec('osascript', ['-l', 'JavaScript', '-e', jxa], { timeout: 5_000 })
+		const out = stdout.trim()
+		if (out === 'locked') return true
+		if (out === 'unlocked') return false
+		return null
+	} catch {
+		return null
+	}
+}
+
+/**
  * The sidecar IPC path — the precise, per-session write. Delivers straight to
  * `sessionId` over Conductor's own dispatch socket (see sidecar.ts), so it needs
  * no window focus and the app UI reflects the turn correctly.
