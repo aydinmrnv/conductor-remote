@@ -161,7 +161,14 @@ on serverWindowCount()
 	-- name and layer are readable without the Screen Recording grant (only window
 	-- *titles* are gated). Layer 0 keeps it to real windows. -1 = the probe itself
 	-- failed, which callers must treat as "no opinion", never as "no window".
-	set jxa to "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap($.CFBridgingRelease($.CGWindowListCopyWindowInfo(0, 0))) || []; w.filter(x => x.kCGWindowOwnerName === 'Conductor' && x.kCGWindowLayer === 0).length"
+	-- The bindFunction is the load-bearing part, twice over: as shipped this read
+	-- "$.CFBridgingRelease(...)", which is an *inline*, not a symbol, and calling it
+	-- through JXA segfaults the osascript child (measured: exit 139) — so this probe
+	-- returned -1 on every call and the veto it feeds never once fired. And without
+	-- the rebind, JXA types the CF return as a bare pointer that deepUnwrap answers
+	-- with undefined — same wrong verdict, silently. Rebinding the function to
+	-- return 'id' makes the array real (verified live: 12 windows, behind a lock).
+	set jxa to "ObjC.import('CoreGraphics'); ObjC.bindFunction('CGWindowListCopyWindowInfo', ['id', ['unsigned int', 'unsigned int']]); const w = ObjC.deepUnwrap($.CGWindowListCopyWindowInfo(0, 0)) || []; w.filter(x => x.kCGWindowOwnerName === 'Conductor' && x.kCGWindowLayer === 0).length"
 	try
 		return (do shell script "osascript -l JavaScript -e " & quoted form of jxa) as integer
 	on error
@@ -177,7 +184,12 @@ on screenLocked()
 	-- come from a phone precisely when nobody is at the Mac, so "is the lock up"
 	-- is the difference between a state a restart can fix and one it provably
 	-- makes worse (see the restart gate in activateConductor).
-	set jxa to "ObjC.import('CoreGraphics'); const d = ObjC.deepUnwrap($.CFBridgingRelease($.CGSessionCopyCurrentDictionary())) || {}; d.CGSSessionScreenIsLocked ? 'locked' : 'unlocked'"
+	-- Same two traps as serverWindowCount: $.CFBridgingRelease segfaults under JXA,
+	-- and without the rebind deepUnwrap reads the CF dictionary as undefined — which
+	-- the "|| {}" then turned into a confident "unlocked" on a locked Mac. The fixed
+	-- probe was verified against a genuinely locked screen (CGSSessionScreenIsLocked
+	-- true, every session key present).
+	set jxa to "ObjC.import('CoreGraphics'); ObjC.bindFunction('CGSessionCopyCurrentDictionary', ['id', []]); const d = ObjC.deepUnwrap($.CGSessionCopyCurrentDictionary()) || {}; d.CGSSessionScreenIsLocked ? 'locked' : 'unlocked'"
 	try
 		return do shell script "osascript -l JavaScript -e " & quoted form of jxa
 	on error
@@ -297,6 +309,21 @@ on activateConductor()
 	set firstProbe to my windowProbe()
 	set refusal to my refusalReason(firstProbe)
 	if refusal is not "" then error refusal
+	-- The lock ahead of everything else: the lock screen hides the whole session
+	-- from Accessibility, so a locked Mac reads "no window" from every probe below
+	-- and the ladder spends the patience budget, the Dock click and the evidence
+	-- sweeps discovering what one read already knew — measured live (2026-08-14),
+	-- the attempt died at the node-side ceiling as "took too long" and the phone
+	-- never heard the word "locked". Asking here also stops "activate" from
+	-- launching Conductor behind the lock screen, which is where the windowless
+	-- launches that wedged it came from. A probe that already shows a window
+	-- proves the session is unlocked (AX can't see into a locked one), so the
+	-- happy path pays nothing. The error stays retryable on purpose: the caller's
+	-- retry loop polls this cheaply until its deadline, so an unlock mid-budget
+	-- lands the send by itself — that is the observed recovery, not a theory.
+	if (item 1 of firstProbe) < 1 and my screenLocked() is "locked" then
+		error "The Mac is locked - the lock screen hides Conductor from the relay, so a send can't reach it. Unlock the Mac and send again." & my windowEvidence()
+	end if
 	try
 		tell application "Conductor" to activate
 	on error errText

@@ -49,8 +49,23 @@ export interface DeliveryDeps {
 	 * which is normal for a beat after creation, so it is not a reason to give up.
 	 */
 	inspect: (workspaceId: string) => { ready: boolean; sessionId: string | null; alreadySent: boolean } | null
-	/** Drive the actual UI send, read-back included. */
-	send: (workspaceId: string, sessionId: string, text: string) => Promise<{ ok: boolean; error?: string }>
+	/**
+	 * Drive the actual UI send, read-back included. `blocked` = the send was shut
+	 * out by something delivery can't fix and waiting can (the lock screen) — the
+	 * attempt doesn't count and the queue just keeps waiting.
+	 */
+	send: (
+		workspaceId: string,
+		sessionId: string,
+		text: string
+	) => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
+	/**
+	 * Is a send even worth starting? `false` = hold everything, spend nothing —
+	 * neither attempts nor the age budget. The server wires this to the lock-screen
+	 * probe: a Mac locked for a weekend used to burn all three attempts in its
+	 * first minute and greet the unlock with a `failed` entry.
+	 */
+	gate?: () => Promise<boolean>
 }
 
 /** How often the loop re-reads the DB while waiting for a worktree. */
@@ -148,13 +163,20 @@ export class FirstPromptQueue {
 	}
 
 	private async step(entry: FirstPrompt): Promise<void> {
-		if (Date.now() - entry.createdAt > MAX_AGE_MS) {
-			return this.fail(entry, 'the workspace never finished setting up')
-		}
+		// A closed gate (locked Mac) freezes the entry whole: no attempt, and no aging
+		// either — the age cap judges the worktree's setup, and setup doesn't need the
+		// screen, but failing a deliverable prompt because nobody was home to unlock
+		// is exactly the "gave up while you were out" this queue exists to prevent.
+		if (this.deps.gate && !(await this.deps.gate())) return
 		const target = this.deps.inspect(entry.workspaceId)
 		// No row yet is normal right after creation, and a workspace that really is
-		// gone falls out through the age cap above rather than being guessed at here.
-		if (!target?.ready || !target.sessionId) return
+		// gone falls out through the age cap below rather than being guessed at here.
+		if (!target?.ready || !target.sessionId) {
+			if (Date.now() - entry.createdAt > MAX_AGE_MS) {
+				return this.fail(entry, 'the workspace never finished setting up')
+			}
+			return
+		}
 		// It already went — the user sent it from the Mac, where the deep link left it
 		// pre-filled in the composer. Sending again would double it.
 		if (target.alreadySent) return this.delivered(entry)
@@ -163,6 +185,12 @@ export class FirstPromptQueue {
 		this.save()
 		const result = await this.deps.send(entry.workspaceId, target.sessionId, entry.text)
 		if (result.ok) return this.delivered(entry)
+		if (result.blocked) {
+			// The gate closed between the check above and the send: hand the attempt back.
+			entry.attempts -= 1
+			this.save()
+			return
+		}
 		const error = result.error ?? 'the send didn’t land'
 		console.warn(`[relay] first prompt for ${entry.workspaceId} failed (attempt ${entry.attempts}): ${error}`)
 		if (entry.attempts >= MAX_ATTEMPTS) return this.fail(entry, error)

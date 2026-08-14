@@ -442,11 +442,17 @@ export function useTranscript(sessionId: string | null): TranscriptState {
  * toast: a delivered prompt simply appears in the chat, a failed one shows an error.
  *
  * This is also where a staged agent change lands (store ▸ `agentDrafts`): the
- * model / effort / plan / fast the user picked is pushed into Conductor *first*,
- * and the prompt only goes if that succeeded — running a prompt on the model the
+ * patch rides in the send request itself and the relay applies it *before* the
+ * prompt, which only goes if that succeeded — running a prompt on the model the
  * user just moved away from is the same class of mistake as landing it in the
  * wrong workspace, so it fails loud with the settings still staged and the text
- * still in the bubble, one Retry from going again.
+ * still in the bubble, one Retry from going again. One request, not two, so a
+ * locked Mac parks the patch and the prompt together.
+ *
+ * `parked` is the relay saying the Mac is locked and it has taken the prompt
+ * (src/parked.ts): treated like a send that landed — composer clears, drafts
+ * clear (the parked entry carries them) — except nothing is `working`; the
+ * queued bubble from `/api/state` shows what is still owed.
  */
 export function useSendPrompt() {
 	const queryClient = useQueryClient()
@@ -467,24 +473,21 @@ export function useSendPrompt() {
 				// Read at send time, not through the closure: the user may have changed the
 				// model between mounting the composer and tapping send.
 				const staged = useApp.getState().agentDrafts[sessionId]
-				if (staged && Object.keys(staged).length) {
-					const applied = await client.setAgent(sessionId, staged, workspaceId)
-					if (!applied.ok) {
-						failPending(id, applied.error || 'Could not change the agent settings')
-						return false
+				const agent = staged && Object.keys(staged).length ? staged : undefined
+				const r = await client.sendPrompt(sessionId, text, workspaceId, agent)
+				if (r.ok || r.parked) {
+					if (agent) {
+						// Applied (ok) or owned by the parked entry now — either way no longer staged.
+						clearAgentDraft(sessionId, agent)
+						queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
 					}
-					clearAgentDraft(sessionId, staged)
-					queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
-				}
-				const r = await client.sendPrompt(sessionId, text, workspaceId)
-				if (r.ok) {
-					markWorking(sessionId)
-					queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
+					if (r.ok) markWorking(sessionId)
 					// A send by hand supersedes any first prompt the relay was still holding, and
 					// the relay drops that entry — so re-read the list the queued bubble comes from.
+					// A parked send is the reverse: the re-read is what *shows* its queued bubble.
 					queryClient.invalidateQueries({ queryKey: ['state'] })
-					// The confirmed row surfaces on the next poll and hides this bubble;
-					// purge it after a beat so a text-match miss can't leave a duplicate.
+					// The confirmed row (or the parked entry) surfaces on the next poll and hides
+					// this bubble; purge it after a beat so a text-match miss can't leave a duplicate.
 					setTimeout(() => removePending(id), 4000)
 					return true
 				}

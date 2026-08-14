@@ -148,11 +148,16 @@ export const client = {
 	messages: (sessionId: string, after: number) =>
 		api<MessagesResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${after}`),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`),
-	/** The relay retries a failed send itself (and confirms each try against the transcript), hence the long budget. */
-	sendPrompt: (sessionId: string, text: string, workspaceId: string) =>
+	/**
+	 * The relay retries a failed send itself (and confirms each try against the
+	 * transcript), hence the long budget. `agent` is the staged settings patch,
+	 * riding in the same request so the relay applies it first and the prompt only
+	 * goes if it stuck — and so a locked Mac parks the two together.
+	 */
+	sendPrompt: (sessionId: string, text: string, workspaceId: string, agent?: AgentPatch) =>
 		api<SendResult>(
 			`/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
-			{ method: 'POST', body: JSON.stringify({ text, workspaceId }) },
+			{ method: 'POST', body: JSON.stringify({ text, workspaceId, agent }) },
 			SEND_TIMEOUT_MS
 		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
@@ -167,6 +172,9 @@ export const client = {
 	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
 	dismissPrompt: (workspaceId: string) =>
 		api<{ ok: boolean }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/prompt`, { method: 'DELETE' }),
+	/** Drop whatever the relay parked for this chat behind the lock screen. */
+	dismissParked: (sessionId: string) =>
+		api<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, { method: 'DELETE' }),
 	/**
 	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
 	 * soon as the row exists — the worktree may still be setting up, so the caller

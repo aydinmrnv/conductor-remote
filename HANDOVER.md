@@ -94,6 +94,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
   firstprompt.ts  persisted queue that delivers a new workspace's first prompt once it's ready
+  parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt
   notify.ts       status-transition watcher + subscription store (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted

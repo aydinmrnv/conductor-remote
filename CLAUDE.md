@@ -91,18 +91,44 @@ Two asymmetric halves — keep them separate:
   detects a prompt sent by hand from the Mac); **persistence** to
   `…/conductor-remote/first-prompts.json`, because `autoupdate` deliberately
   `exit()`s to reload and launchd restarts us mid-setup; and **giving up in
-  public** — after 3 sends or 15 minutes the entry flips to `failed` *and stays*,
-  riding along on `/api/state` as `workspace.pending_prompt` so the chat can show
-  the text with the reason and a Retry (`DELETE …/workspaces/:id/prompt`
-  dismisses it). A waiting prompt shows the same way, because 30s of empty pane
-  reads as "swallowed" and gets retyped — which is the same prompt sent twice.
+  public** — after 3 sends, or 15 minutes of a workspace that never turned ready
+  (both counted only while the Mac is unlocked — the queue holds still behind
+  the same lock probe the parked queue polls, via its `gate`), the entry flips
+  to `failed` *and stays*, riding along on `/api/state` as
+  `workspace.pending_prompt` so the chat can show the text with the reason and a
+  Retry (`DELETE …/workspaces/:id/prompt` dismisses it). A waiting prompt shows
+  the same way, because 30s of empty pane reads as "swallowed" and gets retyped
+  — which is the same prompt sent twice.
+- **A locked Mac parks the send instead of failing it** (`src/parked.ts` ▸
+  `ParkedPromptQueue`). The lock screen hides the whole session from
+  Accessibility, so while it is up no AppleScript write can land — and it is up
+  precisely when the phone is the only thing talking. The phone's own retry
+  budget (~a minute) is the wrong tool for a wait that routinely lasts hours, so
+  the pieces hand off: `activateConductor` names the lock in ~2s (the fast path
+  above), `deliverPrompt` stops retrying on that error (`writes.ts` ▸
+  `lockBlocked`), and the send route parks the prompt — with any staged agent
+  settings riding in the same request, so the two park and later apply
+  *together* — in a persisted queue (`…/conductor-remote/parked-prompts.json`)
+  and answers the phone `202 {parked:true}` in seconds. The queue polls
+  `screenLocked()` (the node-side twin in `writes.ts` — stdlib JXA, no
+  Accessibility grant) every 5s and delivers FIFO per chat on unlock, so two
+  prompts parked into one conversation arrive in the order they were sent, and
+  a push notification reports landed-or-failed either way — nobody is watching,
+  that is the premise. The same three properties as the first-prompt queue:
+  one owner (a manual send of the same text clears the parked copy —
+  `forgetDelivered` — which is what keeps the chat's Retry from doubling it),
+  persistence across the relay's self-restarts, and giving up in public — time
+  spent locked costs nothing, three real failures *while unlocked* flip the
+  entry to `failed` and it stays, visible the whole way as
+  `workspace.parked_prompts` (the same queued bubble as a first prompt, its
+  `reason` naming the lock) and dismissible via `DELETE …/sessions/:id/prompt`.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
   step's fail-closed assertion *cannot* catch, since each script's reads are true
   when it makes them. It was unreachable while every write was one person tapping
-  one button; the first-prompt queue, which sends on its own schedule, is what made
-  it reachable.
+  one button; the first-prompt and parked-prompt queues, which send on their own
+  schedule, are what made it reachable.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's
@@ -162,7 +188,18 @@ Two asymmetric halves — keep them separate:
        live incident every relaunch fired behind the lock screen came up
        windowless and the last came up wedged (deep links answered, every AX
        read hung), so behind a lock the restart lever is not a lever — the
-       error says to unlock instead. Only then does `restartConductor` quit and
+       error says to unlock instead. **And the lock is asked *first*, not last**:
+       `activateConductor` checks `screenLocked()` right after the permission
+       probe whenever that probe shows no window, because a locked Mac otherwise
+       walks the whole ladder — patience budget, Dock click, evidence sweeps —
+       and the attempt dies at the node-side ceiling as "took too long" before
+       the lock branches below are ever reached (measured live 2026-08-14: the
+       phone was told a timeout, never "locked"). The fast path errors in ~2s,
+       stays *retryable* (not in `TERMINAL_ERRORS`) so `deliverPrompt`'s loop
+       keeps polling it until the caller's deadline, and an unlock mid-budget
+       lands the send with no retap — which is exactly how the live send
+       recovered. It also runs before `activate`, so the relay never *launches*
+       Conductor behind the lock screen. Only then does `restartConductor` quit and
        relaunch — **the only remaining lever**, and the one step here that can
        destroy work, so it is gated on `RELAY_ALLOW_RESTART`, which `server.ts`
        sets from a live DB read (`no workspace is 'working'`) — writes.ts must
@@ -440,6 +477,18 @@ bind trap below), not by unit test.
     template literal**, where a backtick in a comment terminated the string and
     `tsc` blamed a line tens of lines away — that trap is gone, and moving it back
     would bring it back.
+  - **JXA shell-outs that return CF objects need two guards, and the compile
+    check sees neither** (the JXA lives inside a string, so `osacompile` parses
+    right past it — only running the probe tells you). `$.CFBridgingRelease` is
+    an *inline*, not an exported symbol: calling it through `$` segfaults the
+    osascript child (exit 139), which is how PR #85's window-server veto and
+    lock probe shipped dead — every call read as "no opinion". And the
+    CF-returning function itself must be rebound with
+    `ObjC.bindFunction(name, ['id', […]])`, or JXA types its return as a bare
+    pointer, `ObjC.deepUnwrap` answers `undefined`, and the `|| {}` fallback
+    turns a locked Mac into a confident "unlocked" — the silent variant of the
+    same wrong verdict. Both live probes (`serverWindowCount`, `screenLocked`,
+    plus the node-side twin in `writes.ts`) carry the working pattern.
 - **The installed PWA's viewport is not the box iOS lays it out in, and `dvh`
   reports whichever one it currently believes.** Measured in the iOS 26.5
   Simulator (iPhone 17 Pro, 874pt screen, home-screen web app): `innerHeight`,

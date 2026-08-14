@@ -4,6 +4,7 @@ import path from 'node:path'
 import type { ConductorDb } from './db.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
+import type { ParkedPrompt } from './parked.ts'
 import { parseMessage, type TranscriptEntry } from './transcript.ts'
 
 export interface WorkspaceRow {
@@ -108,6 +109,8 @@ export interface Workspace extends WorkspaceRow {
 	pr_url?: string | null
 	/** A first prompt the relay hasn't delivered yet; set by src/server.ts from src/firstprompt.ts. */
 	pending_prompt?: FirstPrompt | null
+	/** Prompts parked for the lock screen, each naming its chat; set by src/server.ts from src/parked.ts. */
+	parked_prompts?: ParkedPrompt[]
 }
 
 const worktreeCache = new Map<string, string | null>()
