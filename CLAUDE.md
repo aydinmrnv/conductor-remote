@@ -386,8 +386,11 @@ runs: `osacompile` parses `src/conductor.applescript` the way `osascript` will,
 and every `my handler()` call — in the script *and* in the TypeScript that
 appends to it — must resolve to an `on handler(`. AppleScript binds handler calls
 at run time, so those are two different failures and osacompile only sees one.
-The compile half is macOS-only and skips on CI (ubuntu); the resolution half runs
-everywhere, which is what catches a rename in a pull request.
+The compile half is macOS-only, so CI runs it on its own lean `macos-latest` job
+(`check-applescript` — no yarn install, the script is stdlib-only, and it gates
+the release since the tarball ships the .applescript verbatim); the ubuntu job
+skips it, and the resolution half runs everywhere, which is what catches a
+rename in a pull request.
 Nothing else is tested. Verify a runtime change by curling the relay (see the
 bind trap below), not by unit test.
 
