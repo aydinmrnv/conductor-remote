@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Loader2 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -34,6 +34,11 @@ export function Transcript({
 	const queryClient = useQueryClient()
 	const scroller = useRef<HTMLDivElement>(null)
 	const atBottom = useRef(true)
+
+	// Grouping is pure of `entries`, and `entries` only changes when a row actually
+	// lands — so this holds the row list (and each group's slice) at the same identity
+	// across the polls above, which is what lets the memoised rows below bail out.
+	const rows = useMemo(() => groupSteps(entries), [entries])
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
@@ -113,7 +118,7 @@ export function Transcript({
 					<Empty>No messages yet.</Empty>
 				) : (
 					<div className="flex min-w-0 flex-col gap-2.5">
-						{groupSteps(entries).map(row =>
+						{rows.map(row =>
 							row.kind === 'steps' ? (
 								<StepGroup key={row.key} entries={row.entries} />
 							) : (
@@ -153,6 +158,10 @@ type Row =
 
 const rowKey = (e: TranscriptEntry) => `${e.rowid}-${e.id}`
 
+/** Element-wise identity, for the memoised rows below — a row list is rebuilt, its rows aren't. */
+const sameEntries = (a: { entries: TranscriptEntry[] }, b: { entries: TranscriptEntry[] }) =>
+	a.entries.length === b.entries.length && a.entries.every((e, i) => e === b.entries[i])
+
 /**
  * Fold each run of the agent's own work (thinking + tool calls) between two
  * spoken messages into one collapsible group — a turn is mostly plumbing, and on
@@ -184,8 +193,12 @@ function groupSteps(entries: TranscriptEntry[]): Row[] {
  * step's label — which keeps updating while the agent works — so the group reads
  * as live activity without being opened, and any tool failure inside is counted
  * on the header rather than hidden behind it.
+ *
+ * Memoised on the rows themselves rather than on the array: a new row rebuilds every
+ * group's slice, so the default shallow compare would re-render the whole backlog
+ * each time the live group grows by one step.
  */
-function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
+const StepGroup = memo(function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
 	const failed = entries.filter(e => e.error).length
 	const last = entries[entries.length - 1]
 	const lastLabel = last.role === 'thinking' ? 'Thinking' : last.text
@@ -206,7 +219,7 @@ function StepGroup({ entries }: { entries: TranscriptEntry[] }) {
 			</div>
 		</details>
 	)
-}
+}, sameEntries)
 
 /**
  * A prompt still with the relay: the workspace's first prompt waiting on setup, or
@@ -289,7 +302,8 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 	)
 }
 
-function Entry({ e }: { e: TranscriptEntry }) {
+/** One transcript row. Memoised on the entry, which the poll appends to rather than rebuilds. */
+const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 	if (e.role === 'user') {
 		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
 		// the attributes are the row it draws in the sheet. Every user-side bubble carries
@@ -350,7 +364,7 @@ function Entry({ e }: { e: TranscriptEntry }) {
 			</Bubble>
 		</div>
 	)
-}
+})
 
 /**
  * The classic three-dot "typing" bubble, shown under the last message while the agent
