@@ -516,6 +516,22 @@ bind trap below), not by unit test.
   default window position; **one click per shell call** — batched clicks get eaten
   by sheet animations), and read state back with `simctl io booted screenshot`.
   Tapping the installed icon *resumes*; to load new HTML, re-add the icon.
+- **Everything on screen is polled, so a transcript row must never re-render for
+  free.** Three timers drive the chat — the transcript at 1s, sessions at 2s,
+  `/api/state` at 2.5s — and any one of them changing a field re-renders
+  `SessionView` and every row under it. A row renders `Markdown`, which is a full
+  remark/rehype parse, so an unmemoised transcript re-parses every message it has
+  ever shown, several times a minute. Measured on the 548-message chat at 6× CPU
+  throttle: 267–401ms of blocked main thread per poll, worst frame 408ms, against
+  0 long tasks and a 26ms worst frame once `Markdown`, `Entry` and `StepGroup` are
+  `memo`'d. That block is what the spinners were stuttering on — CSS animation is
+  the visible symptom, React is the cause. Two things hold the bail-outs up:
+  `groupSteps` runs behind `useMemo` (its rows are rebuilt on every render
+  otherwise, and a fresh array beats any shallow compare), and `StepGroup`
+  compares its slice **element-wise** (`sameEntries`), or the live group growing by
+  one step re-renders the whole backlog. Re-measure with `PerformanceObserver` on
+  `longtask` under `Emulation.setCPUThrottlingRate` rather than on a Mac at full
+  speed, where the whole thing hides inside one dropped frame.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."
