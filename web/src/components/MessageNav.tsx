@@ -38,6 +38,10 @@ const IDLE_MS = 2500
 const HEADROOM = 12
 /** Below this there's nothing to navigate — one prompt is already on screen. */
 const MIN_MARKS = 2
+/** A prompt this close to the top of the view is the one you're reading. */
+const AT_TOP = HEADROOM + 8
+/** Slack on "we're at the end": subpixel heights and iOS rubber-band never land on it exactly. */
+const END_SLACK = 2
 /** The glide: every jump ends with about this much of a screen travelling under you. */
 const APPROACH_VIEWPORTS = 1.1
 /** Duration bounds. A hop shouldn't be instant; a long jump shouldn't be a wait. */
@@ -59,6 +63,18 @@ type Mark = {
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+
+/**
+ * The line a prompt has to sit above to count as the one you're reading.
+ *
+ * Just under the top of the view, until the scroll runs out. The last prompts of a chat
+ * can never *reach* the top — there's no content left below to push them up — so the plain
+ * rule pins the counter one short of the end (`12/13` with the 13th on screen) and leaves
+ * the down arrow lit over a jump that can't move anything. At the end of the range the
+ * line drops to the bottom of the view instead, so whatever is on screen counts.
+ */
+const readAnchor = (el: HTMLElement) =>
+	el.scrollHeight - el.clientHeight - el.scrollTop <= END_SLACK ? el.scrollTop + el.clientHeight : el.scrollTop + AT_TOP
 
 const sameMarks = (a: Mark[], b: Mark[]) =>
 	a.length === b.length && a.every((m, i) => m.top === b[i].top && m.preview === b[i].preview)
@@ -131,7 +147,7 @@ function glideTo(el: HTMLElement, to: number, onArrive: () => void): () => void 
 
 export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | null> }) {
 	const [marks, setMarks] = useState<Mark[]>([])
-	const [scrollTop, setScrollTop] = useState(0)
+	const [anchor, setAnchor] = useState(0)
 	const [awake, setAwake] = useState(false)
 	const [open, setOpen] = useState(false)
 
@@ -170,7 +186,7 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 		}))
 		marksRef.current = sameMarks(marksRef.current, next) ? marksRef.current : next
 		setMarks(marksRef.current)
-		setScrollTop(el.scrollTop)
+		setAnchor(readAnchor(el))
 	}, [scroller])
 
 	const schedule = useCallback(() => {
@@ -246,10 +262,10 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 
 	if (marks.length < MIN_MARKS) return null
 
-	// Which prompt you're reading: the last one at or above the top of the view. Above
-	// the first one there's no current, so `next` is the first rather than the second.
+	// Which prompt you're reading: the last one above the anchor line. Above the first one
+	// there's no current, so `next` is the first rather than the second.
 	let current = -1
-	for (let i = 0; i < marks.length; i++) if (marks[i].top <= scrollTop + HEADROOM + 8) current = i
+	for (let i = 0; i < marks.length; i++) if (marks[i].top <= anchor) current = i
 	const prev = current > 0 ? current - 1 : null
 	const next = current + 1 < marks.length ? current + 1 : null
 	const show = awake || open
