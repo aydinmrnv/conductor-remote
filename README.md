@@ -310,8 +310,13 @@ assertion. On battery the Mac isn't idle-sleeping — it's cycling through
 **standby maintenance sleep** (a periodic dark-wake → back-to-sleep loop) that
 lives at the root `pmset` layer no assertion can touch. Running those tools with
 `sudo` changes nothing: the assertion is identical at any privilege, and there is
-no assertion for the standby layer. (Note: lid *closed* on Apple Silicon forces
-sleep regardless — keep the lid open, or attach an external display **and** power.)
+no assertion for the standby layer. Closing the lid is the same story one level
+down: it sleeps an Apple Silicon Mac immediately and no assertion stops that
+either, so a keep-awake app plus a shut lid is still a sleeping Mac. The root
+`disablesleep` flag *does* hold it awake lid-closed, which is the lever `nosleep`
+pulls below (in use on an M5 Pro). Awake is not the same as drivable, though: the
+lock screen still blocks every UI write, so a lid-closed Mac serves reads and
+notifications while sends park until you unlock (#87).
 
 **Fix — `conductor-remote nosleep`.** It blocks sleep at the root `pmset` layer (the
 one no assertion reaches) for a bounded window and **auto-reverts** on exit, Ctrl-C, or
@@ -324,11 +329,52 @@ conductor-remote nosleep 2h     # also 90m, 30s, bare seconds; no arg = until Ct
 The confirmation carries the wall-clock **expiry**, measured from when your password lands
 rather than when you typed the command — `✓ Sleep disabled until 21:45 (2h, incl. lid closed).`
 
-It prompts for `sudo` once and runs in the foreground (the background LaunchAgent has no
-terminal to prompt on, so it can't self-arm). Since sending from the phone already means
-manually turning on your hotspot, flipping this on for the session is the same kind of
-deliberate, revertable switch — no boot daemon, no permanent change. Simplest of all: keep
-the Mac on **AC power**, where it never maintenance-sleeps.
+Out of the box it prompts for `sudo` and runs in the foreground. Since sending from the
+phone already means manually turning on your hotspot, flipping this on for the session is
+the same kind of deliberate, revertable switch — no boot daemon, no permanent change.
+Simplest of all: keep the Mac on **AC power**, where it never maintenance-sleeps.
+
+**Stop it asking — `conductor-remote nosleep setup`.** One-time, one password:
+
+```bash
+conductor-remote nosleep setup              # install
+conductor-remote nosleep status             # what's installed, does it work, is sleep blocked now
+conductor-remote nosleep setup --uninstall  # remove both files
+```
+
+It installs a root-owned helper at `/usr/local/libexec/conductor-remote-nosleep` and a
+sudoers drop-in naming exactly that one command `NOPASSWD`. After it, `nosleep` needs no
+password — which is also what would let the **relay** arm it, since the LaunchAgent has no
+terminal to prompt on and so can never self-arm without this.
+
+It is deliberately narrow, because a rule like this is the classic way a machine gets a
+root hole. The helper lives in a directory only root can write (`/usr/local/bin` is
+group-writable by `admin` on a stock Mac, so anything there would be trivially replaceable);
+it is **copied out** of the package rather than referenced inside it, so the self-updater
+can't smuggle new root-executed code in behind you (a stale copy is reported, never
+silently refreshed); and the rule carries no argument wildcard — the helper validates its
+own input. The drop-in is checked with `visudo -cf` as a draft and the assembled set is
+re-checked after install, with the drop-in pulled back out if anything is wrong, since a
+bad `/etc/sudoers.d` entry can cost you `sudo` altogether.
+
+**From the phone.** Once the rule is installed, the Connect sheet grows a **Mac** section:
+tap 1h / 4h / 8h to hold the Mac awake, or "Let it sleep" to end the window early
+(`GET`/`POST`/`DELETE /api/nosleep`, capped at 12h). The armed window is spawned
+*detached*, because the relay restarts itself on every self-update and a plain child would
+die with it and quietly restore sleep at the worst moment; the relay finds it again after a
+restart by reading `/var/run/conductor-remote-nosleep.pid`. Only one window may be armed —
+arming takes over from any other, including one you left running in a terminal. That is not
+politeness: two windows would each capture the *other's* already-flipped values and
+"restore" those on the way out, leaving a Mac that can never sleep again.
+
+The same section carries a **fallback network**: pick a Wi-Fi network the Mac already knows
+(your phone's hotspot), and if the Mac loses its link entirely the funnel watchdog joins it
+and re-registers Funnel, whose ingress a change of public endpoint invalidates anyway. It
+stores **SSIDs only** — macOS holds the credentials, and passing a password to
+`networksetup` would *write* one into the keychain. Off by default, behind a 5-minute
+cooldown, and gated on `route -n get default` finding nothing: the associated SSID is not a
+usable signal, since macOS hides it behind Location Services (this Mac reports "not
+associated" while a default route is live on the same interface).
 
 **Check / undo:**
 

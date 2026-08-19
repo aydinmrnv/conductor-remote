@@ -7,12 +7,15 @@ import type {
 	MessagesResponse,
 	ModelsResult,
 	NewChatResult,
+	NoSleepResult,
 	PushConfig,
 	PushSubscribeResult,
 	PushTestResult,
+	RelaySettings,
 	ReposResponse,
 	SendResult,
 	SessionsResponse,
+	SettingsResponse,
 	StateResponse,
 	StatusResult,
 	WorkspaceDiff
@@ -230,5 +233,18 @@ export const client = {
 			`/api/workspaces/${encodeURIComponent(workspaceId)}/status`,
 			{ method: 'POST', body: JSON.stringify({ status }) },
 			ACTION_TIMEOUT_MS
-		)
+		),
+
+	/** Relay preferences, plus the Wi-Fi networks the Mac already knows and the awake state. */
+	settings: () => api<SettingsResponse>('/api/settings'),
+	patchSettings: (patch: Partial<RelaySettings>) =>
+		api<{ settings: RelaySettings }>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+	/**
+	 * Hold the Mac awake with the lid shut for `seconds`. The relay waits for the helper
+	 * to confirm it actually applied before answering, and a takeover waits for the
+	 * previous window to restore first, so this is slow by design — hence the action budget.
+	 */
+	armNoSleep: (seconds: number) =>
+		api<NoSleepResult>('/api/nosleep', { method: 'POST', body: JSON.stringify({ seconds }) }, ACTION_TIMEOUT_MS),
+	disarmNoSleep: () => api<NoSleepResult>('/api/nosleep', { method: 'DELETE' }, ACTION_TIMEOUT_MS)
 }

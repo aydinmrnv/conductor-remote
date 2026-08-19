@@ -1,8 +1,10 @@
-import { Bell, Check, Copy, LogOut, X } from 'lucide-react'
-import { useState } from 'react'
+import { Bell, Check, Copy, LogOut, Sun, Wifi, X } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePush } from '../hooks.ts'
+import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import type { SettingsResponse } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { QRCode } from './QRCode.tsx'
 
@@ -92,6 +94,7 @@ export function ConnectSheet({
 					{copied ? 'Copied' : 'Copy link'}
 				</button>
 				<NotificationsRow />
+				<MacRow />
 				<div className="flex w-full items-center justify-between text-xs text-faint">
 					<span className="font-mono">
 						{version ? `relay v${version}` : 'relay v?'}
@@ -181,5 +184,222 @@ function NotificationsRow() {
 				</button>
 			) : null}
 		</div>
+	)
+}
+
+const AWAKE_CHOICES: { label: string; seconds: number }[] = [
+	{ label: '1h', seconds: 3600 },
+	{ label: '4h', seconds: 4 * 3600 },
+	{ label: '8h', seconds: 8 * 3600 }
+]
+
+/** "until 21:45", weekday-prefixed when the window crosses midnight — same rule the CLI prints. */
+function untilLabel(until: number | null): string {
+	if (!until) return 'until you turn it off'
+	const d = new Date(until)
+	const sameDay = d.toDateString() === new Date().toDateString()
+	const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+	return sameDay ? `until ${time}` : `until ${d.toLocaleDateString([], { weekday: 'short' })} ${time}`
+}
+
+/**
+ * The two things about the *Mac* a phone can usefully change: keep it awake with the lid
+ * shut, and name a network to fall back to when it loses the one it's on.
+ *
+ * Both are opt-in on the Mac side and say so rather than appearing broken. Keeping the Mac
+ * awake needs `nosleep setup` (a scoped sudoers rule — a daemon has no TTY to answer a
+ * password prompt), and with none installed the relay reports `available: false`, which is
+ * what the copy explains instead of a dead button.
+ *
+ * The honest caveat is in the copy too: awake is not drivable. A locked screen blocks every
+ * UI write, so this buys reads, notifications, and sends that park until you unlock.
+ */
+function MacRow() {
+	const [data, setData] = useState<SettingsResponse | null>(null)
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+
+	const load = useCallback(async () => {
+		try {
+			setData(await client.settings())
+			setError(null)
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		}
+	}, [])
+
+	useEffect(() => {
+		void load()
+	}, [load])
+
+	const act = async (fn: () => Promise<unknown>) => {
+		setBusy(true)
+		setError(null)
+		try {
+			await fn()
+			await load()
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	const nosleep = data?.nosleep
+	const known = data?.wifi.known ?? []
+	const fallback = data?.settings.fallbackSsids[0] ?? ''
+
+	return (
+		<div className="flex w-full flex-col gap-2.5 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+			<div className="flex items-center justify-between gap-3">
+				<div className="flex min-w-0 items-center gap-2 text-sm">
+					<Sun size={16} className={cn('shrink-0', nosleep?.armed ? 'text-accent' : 'text-muted')} />
+					<span>Keep the Mac awake</span>
+				</div>
+				{nosleep?.armed ? (
+					<button
+						type="button"
+						disabled={busy}
+						onClick={() => void act(() => client.disarmNoSleep())}
+						className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-50"
+					>
+						Let it sleep
+					</button>
+				) : (
+					<div className="flex shrink-0 gap-1">
+						{AWAKE_CHOICES.map(c => (
+							<button
+								key={c.seconds}
+								type="button"
+								disabled={busy || !nosleep?.available}
+								onClick={() => void act(() => client.armNoSleep(c.seconds))}
+								className="rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-40"
+							>
+								{c.label}
+							</button>
+						))}
+					</div>
+				)}
+			</div>
+			<p className="text-xs text-muted">
+				{!data
+					? 'Checking…'
+					: !nosleep?.available
+						? 'Run `conductor-remote nosleep setup` on the Mac once to enable this.'
+						: nosleep.armed
+							? `Awake ${untilLabel(nosleep.until)}, lid closed. Sends still park until you unlock.`
+							: 'Stops the Mac sleeping when you shut the lid. Reads and notifications keep working; sends park until you unlock.'}
+			</p>
+
+			<div className="border-t border-border pt-2.5">
+				<div className="flex items-center justify-between gap-3">
+					<div className="flex min-w-0 items-center gap-2 text-sm">
+						<Wifi size={16} className={cn('shrink-0', data?.settings.autoRejoin ? 'text-accent' : 'text-muted')} />
+						<span>Fallback network</span>
+					</div>
+					{fallback ? (
+						<button
+							type="button"
+							disabled={busy}
+							onClick={() => void act(() => client.patchSettings({ fallbackSsids: [], autoRejoin: false }))}
+							className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-50"
+						>
+							Turn off
+						</button>
+					) : null}
+				</div>
+
+				{fallback ? (
+					<p className="mt-1 text-xs text-muted">
+						If the Mac loses its connection it joins <span className="text-fg">{fallback}</span> and re-registers.
+					</p>
+				) : (
+					<NetworkPicker
+						known={known}
+						hotspots={data?.wifi.likelyHotspots ?? []}
+						busy={busy}
+						onPick={ssid => void act(() => client.patchSettings({ fallbackSsids: [ssid], autoRejoin: true }))}
+					/>
+				)}
+
+				{/* The one hotspot fact macOS will actually tell us, and it decides whether any of
+				    this can help the case it exists for. On Never the Mac won't reach for the phone
+				    on its own, and no relay code substitutes for that. */}
+				{data?.wifi.autoJoinHotspot === 'Never' ? (
+					<p className="mt-1 text-xs text-faint">
+						Auto-join Hotspot is off on this Mac (System Settings ▸ Wi-Fi). Your hotspot has to be on and broadcasting
+						before the Mac can join it.
+					</p>
+				) : null}
+			</div>
+
+			{error ? <p className="text-xs text-del">{error}</p> : null}
+		</div>
+	)
+}
+
+/**
+ * Choosing one network out of everything this Mac has ever joined — 135 of them on the
+ * machine this was built against, which is why a bare `<select>` was the wrong control.
+ *
+ * Likely hotspots float to the top, because the one you want is nearly always your phone.
+ * That guess comes from the SSID text alone (`looksLikeHotspot` in src/wifi.ts) and is
+ * labelled "likely" rather than asserted: macOS knows for certain over Continuity, which is
+ * private, and the public alternatives are all blocked — the per-network store is root-only,
+ * and a live scan redacts every SSID without Location Services. So the guess is allowed to
+ * reorder this list and nothing else.
+ */
+function NetworkPicker({
+	known,
+	hotspots,
+	busy,
+	onPick
+}: {
+	known: string[]
+	hotspots: string[]
+	busy: boolean
+	onPick: (ssid: string) => void
+}) {
+	const [query, setQuery] = useState('')
+
+	if (known.length === 0) return <p className="mt-1 text-xs text-muted">No saved Wi-Fi networks to offer.</p>
+
+	const hot = new Set(hotspots)
+	const q = query.trim().toLowerCase()
+	const matches = known
+		.filter(s => !q || s.toLowerCase().includes(q))
+		// Stable within each group: `known` is already in macOS's own preference order.
+		.sort((a, b) => Number(hot.has(b)) - Number(hot.has(a)))
+		.slice(0, 8)
+
+	return (
+		<>
+			<p className="mt-1 text-xs text-muted">
+				Turn your hotspot on before you leave, and the Mac can move to it if the office Wi-Fi drops.
+			</p>
+			<input
+				type="search"
+				value={query}
+				disabled={busy}
+				onChange={e => setQuery(e.target.value)}
+				placeholder={`Search ${known.length} saved networks`}
+				className="mt-2 w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-xs disabled:opacity-40"
+			/>
+			<div className="mt-1.5 flex flex-col gap-1">
+				{matches.map(ssid => (
+					<button
+						key={ssid}
+						type="button"
+						disabled={busy}
+						onClick={() => onPick(ssid)}
+						className="flex items-center justify-between gap-2 rounded-lg border border-border px-2.5 py-1.5 text-left text-xs active:bg-surface disabled:opacity-50"
+					>
+						<span className="truncate">{ssid}</span>
+						{hot.has(ssid) ? <span className="shrink-0 text-faint">likely hotspot</span> : null}
+					</button>
+				))}
+				{matches.length === 0 ? <p className="text-xs text-faint">Nothing matches “{query}”.</p> : null}
+			</div>
+		</>
 	)
 }

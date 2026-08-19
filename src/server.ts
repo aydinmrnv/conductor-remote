@@ -20,11 +20,14 @@ import {
 	tailLogFile
 } from './logbuf.ts'
 import { mergePr } from './merge.ts'
+import { armNoSleep, disarmNoSleep, MAX_SECONDS as NOSLEEP_MAX_SECONDS, nosleepState } from './nosleep.ts'
 import { notifyAll, notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SessionRow, type Workspace } from './reads.ts'
+import { readSettings, writeSettings } from './settings.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
+import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import {
 	type AgentOptions,
 	type ChatTab,
@@ -464,6 +467,70 @@ const server = http.createServer(async (req, res) => {
 		// GET /api/repos — repos a new workspace can be created in
 		if (req.method === 'GET' && pathname === '/api/repos') {
 			return json(req, res, 200, { repos: reads.listRepos() })
+		}
+
+		// GET /api/settings — relay preferences plus what the phone needs to edit them:
+		// the SSIDs this Mac already holds credentials for, so the picker offers a choice
+		// instead of asking someone to type a network name from memory on a phone keyboard.
+		// `ssid` is best-effort and often null (macOS gates it behind Location Services).
+		if (req.method === 'GET' && pathname === '/api/settings') {
+			// Four subprocesses, all concurrent: this is the one route that shells out more
+			// than once, and serialising them would put the phone's polls behind the sum.
+			const [known, current, autoJoinHotspot, nosleep] = await Promise.all([
+				preferredNetworks(),
+				currentSsid(),
+				// macOS's own Auto-join Hotspot setting. On "Never" the Mac won't reach for
+				// your phone unprompted, which no amount of relay code can substitute for.
+				autoJoinHotspotMode(),
+				nosleepState()
+			])
+			return json(req, res, 200, {
+				settings: readSettings(),
+				wifi: {
+					current,
+					known,
+					// A guess from the name, never a fact — see wifi.ts. It only sorts the picker.
+					likelyHotspots: known.filter(looksLikeHotspot),
+					autoJoinHotspot
+				},
+				nosleep: { ...nosleep, maxSeconds: NOSLEEP_MAX_SECONDS }
+			})
+		}
+
+		// PATCH /api/settings { fallbackSsids?, autoRejoin? } — merge and persist.
+		if (req.method === 'PATCH' && pathname === '/api/settings') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { fallbackSsids?: unknown; autoRejoin?: unknown }
+			const patch: Parameters<typeof writeSettings>[0] = {}
+			if (Array.isArray(body.fallbackSsids)) patch.fallbackSsids = body.fallbackSsids as string[]
+			if (typeof body.autoRejoin === 'boolean') patch.autoRejoin = body.autoRejoin
+			if (Object.keys(patch).length === 0) return json(req, res, 400, { error: 'nothing to change' })
+			return json(req, res, 200, { settings: writeSettings(patch) })
+		}
+
+		// GET /api/nosleep — is the Mac being held awake, and can this relay do it at all
+		if (req.method === 'GET' && pathname === '/api/nosleep') {
+			return json(req, res, 200, { ...(await nosleepState()), maxSeconds: NOSLEEP_MAX_SECONDS })
+		}
+
+		// POST /api/nosleep { seconds } — hold this Mac awake, lid closed, for a bounded window.
+		// Only works once `conductor-remote nosleep setup` has installed the scoped sudoers
+		// rule; without it there is no way for a TTY-less daemon to reach root, and the
+		// response says so rather than failing vaguely.
+		if (req.method === 'POST' && pathname === '/api/nosleep') {
+			const body = JSON.parse((await readBody(req)) || '{}') as { seconds?: number }
+			const seconds = Number(body.seconds)
+			// Whole seconds, not just "> 0": the helper reads 0 as "until killed", and 0.4
+			// truncates to 0 — an unbounded window from a request that looked bounded.
+			if (!Number.isInteger(seconds) || seconds < 1)
+				return json(req, res, 400, { error: 'need a whole number of seconds >= 1' })
+			const result = await armNoSleep(seconds)
+			return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
+		}
+
+		// DELETE /api/nosleep — let it sleep again now, rather than at the window's end
+		if (req.method === 'DELETE' && pathname === '/api/nosleep') {
+			const result = await disarmNoSleep()
+			return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
 		}
 
 		// GET /api/logs?file=&limit= — the relay's own log, so a phone can diagnose a failed send

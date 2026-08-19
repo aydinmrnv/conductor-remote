@@ -62,7 +62,10 @@ function usage() {
 			'      install | uninstall | restart | status',
 			'  conductor-remote logs [-n N] [--no-follow]  tail the running relay’s logs (follows by default)',
 			'  conductor-remote nosleep [duration]      keep this Mac awake (incl. lid-closed) until',
-			'                                           Ctrl-C or the duration (e.g. 1h, 90m); needs sudo',
+			'                                           Ctrl-C or the duration (e.g. 1h, 90m)',
+			'      nosleep setup [--uninstall]          one-time install so it stops asking for a',
+			'                                           password (root helper + scoped sudoers rule)',
+			'      nosleep status                       what is installed, and is sleep blocked now',
 			'  conductor-remote --version               print the installed version',
 			'',
 			'Install flags (each also settable via the env var in [brackets]):',
@@ -92,7 +95,8 @@ switch (cmd) {
 		await import(resolveEntry('../dist-node/scripts/service.js', '../scripts/service.ts'))
 		break
 	case 'nosleep':
-		// nosleep.ts reads its optional duration from argv[2]; re-shape argv so `nosleep 1h` → `1h`.
+		// nosleep.ts reads its duration or subcommand from argv[2]; re-shape argv so
+		// `nosleep 1h` → `1h` and `nosleep setup --uninstall` → `setup --uninstall`.
 		process.argv = [process.argv[0], process.argv[1], ...rest]
 		await import(resolveEntry('../dist-node/scripts/nosleep.js', '../scripts/nosleep.ts'))
 		break

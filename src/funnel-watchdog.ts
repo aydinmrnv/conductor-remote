@@ -28,7 +28,9 @@ import { Resolver } from 'node:dns/promises'
 import https from 'node:https'
 import net from 'node:net'
 import { promisify } from 'node:util'
+import { readSettings } from './settings.ts'
 import { magicDnsName, readExposeMode, relayPort, tailscaleBin } from './tailscale.ts'
+import { hasDefaultRoute, joinNetwork, preferredNetworks } from './wifi.ts'
 
 const execFileP = promisify(execFile)
 
@@ -130,8 +132,88 @@ async function reRegisterFunnel(bin: string, port: string): Promise<void> {
 	await execFileP(bin, ['funnel', '--bg', '--yes', port], { timeout: 20_000 })
 }
 
+/**
+ * Move to a fallback network and, if that worked, re-register Funnel — a new network means
+ * a new public endpoint, which is the exact condition that leaves the old ingress stale.
+ * Resets the fail count so the next tick judges the new link on its own merits.
+ */
+async function rejoinAndReRegister(bin: string, port: string): Promise<void> {
+	if (!(await tryRejoin())) return
+	try {
+		await reRegisterFunnel(bin, port)
+		lastHealAt = Date.now()
+		fails = 0
+		dnsFails = 0
+		log('re-registered funnel on the new network')
+	} catch (err) {
+		log(`funnel re-register after rejoin failed: ${err instanceof Error ? err.message.trim() : String(err)}`)
+	}
+}
+
+/**
+ * Two counters, because they answer different questions and only one of them may spend a
+ * funnel reset. `fails` counts probes that reached DNS and still failed — the evidence a
+ * re-registration needs, and the reason the threshold is 3 rather than 1, since a reset
+ * briefly drops every client. `dnsFails` counts ticks where the name wouldn't resolve at
+ * all, which proves nothing about the funnel and only ever feeds the rejoin branch.
+ * Sharing one counter let two unresolvable ticks plus a single failed probe buy a reset.
+ */
 let fails = 0
+let dnsFails = 0
 let lastHealAt = 0
+let lastRejoinAt = 0
+
+const REJOIN_COOLDOWN_MS = 5 * 60 * 1000 // a network switch is disruptive; never churn on one
+const REJOIN_SETTLE_MS = 12 * 1000 // DHCP + tailscaled noticing the new endpoint
+
+/**
+ * Last resort when the probe is down: this Mac has no link at all, so move it onto a
+ * configured fallback (your phone's hotspot) and re-register Funnel, whose ingress a
+ * change of public endpoint invalidates anyway.
+ *
+ * The guards matter more than the action. Switching Wi-Fi networks can take a working
+ * Mac off a working network, so this borrows the shape of `serverWindowCount()`'s veto in
+ * writes.ts: **a probe that can't answer must prevent the action, never cause it.**
+ *  - Opt-in only (`autoRejoin`), and only with somewhere to go.
+ *  - Only when `hasDefaultRoute()` is definitively false. That probe needs no permission
+ *    grant, unlike reading the SSID, which macOS refuses without Location Services and
+ *    which therefore can never gate anything here.
+ *  - Only into a network macOS already holds credentials for, so no password is stored
+ *    or passed; an SSID that isn't in the preferred list is named in the log, not tried.
+ *  - Behind a cooldown, so a Mac that is simply off the air doesn't cycle its Wi-Fi.
+ *
+ * Returns true if a join reported success, meaning the caller should re-register rather
+ * than treat this tick as an ordinary failure.
+ */
+async function tryRejoin(): Promise<boolean> {
+	const { autoRejoin, fallbackSsids } = readSettings()
+	if (!autoRejoin || fallbackSsids.length === 0) return false
+	if (Date.now() - lastRejoinAt < REJOIN_COOLDOWN_MS) return false
+	if (await hasDefaultRoute()) return false // link is up; whatever is broken, it isn't this
+
+	const known = new Set(await preferredNetworks())
+	const candidates = fallbackSsids.filter(s => known.has(s))
+	const skipped = fallbackSsids.filter(s => !known.has(s))
+	if (skipped.length) log(`fallback SSID(s) this Mac has no saved credentials for, skipping: ${skipped.join(', ')}`)
+	if (candidates.length === 0) return false
+
+	lastRejoinAt = Date.now()
+	for (const ssid of candidates) {
+		log(`no default route — joining fallback network "${ssid}"`)
+		const joined = await joinNetwork(ssid)
+		if (!joined.ok) {
+			log(`join "${ssid}" failed: ${joined.error}`)
+			continue
+		}
+		await new Promise(r => setTimeout(r, REJOIN_SETTLE_MS))
+		if (await hasDefaultRoute()) {
+			log(`joined "${ssid}" and the link is up`)
+			return true
+		}
+		log(`joined "${ssid}" but no default route appeared after ${REJOIN_SETTLE_MS / 1000}s`)
+	}
+	return false
+}
 
 function schedule(fn: () => void, delayMs: number): void {
 	setTimeout(fn, delayMs).unref()
@@ -141,9 +223,15 @@ async function tick(host: string, bin: string, port: string, intervalMs: number)
 	const again = (delay: number) => schedule(() => void tick(host, bin, port, intervalMs), delay)
 	const ips = await ingressIps(host)
 	if (ips.length === 0) {
-		// Can't resolve the ingress at all (DNS down / offline) — can't confirm a fault, so never heal.
+		// Can't resolve the ingress at all — can't confirm a *funnel* fault, so never heal.
+		// But a dead link looks exactly like this, and that is fixable: tryRejoin decides for
+		// itself, starting from whether there is genuinely no route off this Mac. Counted
+		// apart from `fails`, which is the evidence a funnel reset spends.
+		dnsFails++
+		if (dnsFails >= FAIL_THRESHOLD) await rejoinAndReRegister(bin, port)
 		return again(intervalMs)
 	}
+	dnsFails = 0
 	const ip = ips[0]
 
 	let healthy = false
@@ -168,6 +256,8 @@ async function tick(host: string, bin: string, port: string, intervalMs: number)
 	const reachable = await tcpOpen(ip, 443, TCP_TIMEOUT_MS)
 	if (!reachable) {
 		log(`ingress ${ip} unreachable after ${fails} probes — looks offline, not re-registering`)
+		// "Offline" is the one funnel-reset can't fix and a rejoin sometimes can.
+		await rejoinAndReRegister(bin, port)
 		return again(intervalMs)
 	}
 	if (Date.now() - lastHealAt < HEAL_COOLDOWN_MS) return again(intervalMs)

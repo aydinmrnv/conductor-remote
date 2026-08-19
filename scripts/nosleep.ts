@@ -1,30 +1,37 @@
-// `conductor-remote nosleep [duration]` — keep this Mac fully awake, including with
-// the lid closed, so the relay stays reachable and AppleScript sends can reach
-// Conductor while you're away from the desk.
+// `conductor-remote nosleep [duration | setup | status]` — keep this Mac fully
+// awake, including with the lid closed, so the relay stays reachable and
+// AppleScript sends can reach Conductor while you're away from the desk.
 //
 // The lever is `pmset -a disablesleep 1` (root): unlike a `caffeinate` idle
 // assertion — which does NOT prevent lid-close/clamshell sleep on battery — this
-// keeps the system genuinely awake with the lid shut. It needs sudo, so this is a
-// FOREGROUND command (sudo prompts for your password on this terminal); the
-// background LaunchAgent has no TTY and can't do it. The whole awake window runs
-// inside one root shell whose EXIT/INT/TERM trap restores `disablesleep 0`, so
-// Ctrl-C, a timeout, or a crash can't leave the Mac unable to sleep.
+// keeps the system genuinely awake with the lid shut. Root is why the command is
+// normally FOREGROUND: sudo prompts on this terminal, and the background
+// LaunchAgent has no TTY to prompt on. `nosleep setup` (nosleep-setup.ts) is what
+// lifts that, and the only reason it exists. The whole awake window runs inside one
+// root shell whose EXIT trap restores the captured values, so Ctrl-C, a timeout, or
+// a crash can't leave the Mac unable to sleep.
 //
-// Caveat: keeping the system awake lid-closed is necessary but may not be
-// sufficient for AppleScript *delivery* — a closed lid with no display can leave
-// the window server non-drivable (fix: a virtual/dummy display), and a locked
-// screen blocks `activate`. If a send still doesn't land with nosleep on, that's
-// the graphics surface, not power. Strip-clean (plain-node type-stripping),
-// stdlib-only — see CLAUDE.md.
+// Caveat: awake is necessary but not sufficient for AppleScript *delivery*. A
+// locked screen blocks `activate` outright (#85/#87), so a lid-closed Mac serves
+// reads and notifications while every send parks in `src/parked.ts` until the
+// next unlock — that is the designed path, not a failure. Whether a closed lid
+// with no display *also* leaves the window server undrivable is untested here,
+// and untestable while the lock wall stands in front of it. Strip-clean
+// (plain-node type-stripping), stdlib-only — see CLAUDE.md.
 
 import { spawn } from 'node:child_process'
+import { HELPER_PATH, helperFile, helperReady, installedHelper, NOSLEEP_BODY } from '../src/nosleep-helper.ts'
+import { setup, status } from './nosleep-setup.ts'
 
 /** Parse `90m` / `2h` / `30s` / bare seconds into seconds; null = run until Ctrl-C. */
 function parseDuration(raw: string | undefined): number | null {
 	if (!raw) return null
 	const m = raw.match(/^(\d+)(s|m|h)?$/)
 	if (!m) {
-		console.error(`nosleep: bad duration "${raw}" — use e.g. 90m, 2h, 30s, or a number of seconds`)
+		console.error(
+			`nosleep: bad duration "${raw}" — use e.g. 90m, 2h, 30s, or a number of seconds.\n` +
+				'Subcommands: `nosleep setup [--uninstall]`, `nosleep status`.'
+		)
 		process.exit(1)
 	}
 	const n = Number(m[1])
@@ -32,60 +39,56 @@ function parseDuration(raw: string | undefined): number | null {
 	return unit === 'h' ? n * 3600 : unit === 'm' ? n * 60 : n
 }
 
-function main(): void {
+async function main(): Promise<void> {
 	if (process.platform !== 'darwin') {
 		console.error('nosleep: macOS only (uses pmset).')
 		process.exit(1)
 	}
 
+	// Subcommands sit in the same slot as the duration, which they can never collide
+	// with: a duration is digits with an optional s/m/h, so anything alphabetic here
+	// is either a subcommand or a typo parseDuration rejects by name.
 	const arg = process.argv[2]
-	const seconds = parseDuration(arg)
+	if (arg === 'setup') {
+		await setup(process.argv[3])
+		return
+	}
+	if (arg === 'status') {
+		await status()
+		return
+	}
 
-	// Do everything as a single root shell: capture the CURRENT power settings, flip them
-	// to keep the Mac awake, and ALWAYS restore *those captured values* on exit via the
-	// trap — never assume defaults, or we'd clobber a value you (or a config profile) had
-	// deliberately set. One sudo prompt covers the whole window; the trap fires even on
-	// Ctrl-C / kill. `disablesleep` is global (reported as `SleepDisabled` by `pmset -g`);
-	// `standby`/`powernap` are per-source, so read them from the Battery Power block.
-	const sleepStep = seconds !== null ? `sleep ${seconds}` : 'while :; do sleep 86400; done'
-	const battValue = (key: string) =>
-		`pmset -g custom | awk '/^Battery Power:/{b=1;next} /^AC Power:/{b=0} b&&$1=="${key}"{print $2;exit}'`
-	// Confirm *inside* the root shell, after pmset applies: this line prints only once the
-	// password was accepted and the setting actually took — without it, entering your
-	// password drops into a silent `sleep` with no signal that anything happened. It also
-	// carries the wall-clock **expiry**, computed here rather than before the spawn, because
-	// the clock that matters starts when the password lands, not when the command was typed.
-	// `arg` is regex-validated (digits + s/m/h), so it's safe to interpolate. `clock` prints an
-	// epoch as HH:MM, weekday-prefixed when it lands on another day (a long window is otherwise
-	// ambiguous — "until 15:45" reads as today).
-	const clock = `clock() { if [ "$(date -r "$1" '+%j')" = "$(date '+%j')" ]; then date -r "$1" '+%H:%M'; else date -r "$1" '+%a %H:%M'; fi; }`
-	const armed =
-		seconds !== null
-			? `echo "✓ Sleep disabled until $(clock $(( $(date +%s) + ${seconds} ))) (${arg}, incl. lid closed). Ctrl-C to restore."`
-			: `echo "✓ Sleep disabled at $(date '+%H:%M') (incl. lid closed) — until you press Ctrl-C."`
-	const script = [
-		`sb=$(${battValue('standby')})`,
-		`pn=$(${battValue('powernap')})`,
-		"ds=$(pmset -g | awk '/SleepDisabled/{print $2;exit}')",
-		// Arm the restore-to-captured before changing anything, so even a failed set reverts.
-		`trap "pmset -b standby \${sb:-1} powernap \${pn:-1}; pmset -a disablesleep \${ds:-0}" EXIT INT TERM`,
-		'pmset -b standby 0 powernap 0',
-		'pmset -a disablesleep 1',
-		clock,
-		"echo ''",
-		armed,
-		sleepStep
-	].join('\n')
+	const seconds = parseDuration(arg)
+	// The shared body reads its window from an argument (0 = until killed) rather than
+	// having one interpolated in, because the installed helper is a fixed file the
+	// sudoers rule names — see nosleep-helper.ts. `label` is only echoed back, and the
+	// script re-validates it, so the two paths print the same confirmation.
+	const args = [String(seconds ?? 0), arg ?? '']
 
 	console.info('conductor-remote nosleep — keeping this Mac awake (incl. lid-closed system sleep).')
 	console.info(seconds !== null ? `Duration: ${arg} — Ctrl-C to stop early.` : 'Runs until you press Ctrl-C.')
-	// Be honest: this handles sleep only. It does NOT enable sending with the lid shut
-	// on its own — that also needs the screen lock off (System Settings ▸ Lock Screen;
-	// yours is set to lock immediately) and possibly a virtual display.
-	console.info('Note: sleep only — lid-closed *sending* also needs the screen lock off.')
-	console.info('sudo will ask for your password…\n')
+	// Be honest about the half this doesn't buy: awake is not drivable. A locked screen
+	// blocks every UI write (#85/#87), so a lid-closed Mac serves reads and notifications
+	// while sends park until the next unlock — by design, not by failure.
+	console.info('Note: sleep only — lid-closed *sending* still parks until you unlock.')
 
-	const child = spawn('sudo', ['sh', '-c', script], { stdio: 'inherit' })
+	// Prefer the root-owned helper `nosleep setup` installs: same script, no prompt, and
+	// it is the only path a TTY-less caller (the LaunchAgent, and so the phone) can take.
+	// Fall back to piping the body through `sudo sh -c`, which is the un-installed
+	// experience and asks for a password.
+	const viaHelper = await helperReady()
+	if (viaHelper && installedHelper() !== helperFile()) {
+		console.warn(`⚠ ${HELPER_PATH} is from an older version — re-run \`nosleep setup\` to refresh it.`)
+	}
+	if (!viaHelper) {
+		console.info('Tip: `conductor-remote nosleep setup` installs this once so it stops asking.')
+		console.info('sudo will ask for your password…')
+	}
+	console.info('')
+
+	const child = viaHelper
+		? spawn('sudo', ['-n', HELPER_PATH, ...args], { stdio: 'inherit' })
+		: spawn('sudo', ['sh', '-c', NOSLEEP_BODY, 'nosleep', ...args], { stdio: 'inherit' })
 
 	// Forward Ctrl-C / termination so the root shell's trap restores sleep before we go.
 	const forward = (sig: NodeJS.Signals) => () => child.kill(sig)
@@ -100,4 +103,7 @@ function main(): void {
 	})
 }
 
-main()
+main().catch((err: unknown) => {
+	console.error(`nosleep: ${err instanceof Error ? err.message : String(err)}`)
+	process.exit(1)
+})

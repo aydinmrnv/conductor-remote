@@ -365,14 +365,70 @@ Two asymmetric halves — keep them separate:
   via `workbox.importScripts`) and **must always show a notification** — iOS drops
   the subscription for a silent push.
 
+- **Keeping the Mac awake is the one write that needs *root*** — a fourth shape,
+  touching neither the DB nor Conductor's UI. `pmset disablesleep` is the only lever
+  that survives a closed lid (no power assertion reaches it, so Amphetamine and
+  `caffeinate -i` are the wrong layer), it needs root, and **the LaunchAgent has no
+  TTY to answer a sudo prompt** — which is the whole reason `nosleep setup`
+  (`scripts/nosleep-setup.ts`) exists. It installs a root-owned helper plus a sudoers
+  drop-in naming exactly that one path, and `src/nosleep.ts` drives it. Four traps,
+  each of which turns the rule into passwordless root for everything if missed: the
+  helper must live where **only root can write** — and that means *every ancestor*,
+  not just the leaf, since renaming a parent replaces the path the rule names, so
+  install checks the whole chain and refuses rather than half-securing the machine
+  (`/usr/local/bin` is group-writable by `admin` on a Homebrew Mac, which is what
+  disqualified it, and on Intel `/usr/local` itself is); it must be **copied out of the
+  package**, never referenced inside it, or the self-updater hands root to every
+  future published version (drift is *reported*, never silently refreshed); the rule
+  carries **no argument wildcard**, so the helper validates its own input; and the
+  drop-in is `visudo -cf`'d as a draft *and* the assembled set re-checked after,
+  because a bad `/etc/sudoers.d` entry costs you `sudo` altogether. Two more that
+  aren't about security: **`sudo -l` cannot detect NOPASSWD** for anyone holding
+  blanket `(ALL) ALL` (measured — an unlisted `pmset` lists just as clean), so
+  `helperReady()` runs the real path under `sudo -n -k` against a `--check` argument
+  that exits before touching pmset; and **only one window may be armed**, because two
+  would each capture the other's already-flipped values and "restore" those, leaving
+  a Mac that can never sleep again — so arming *takes over*, waiting for the
+  incumbent's restore before it captures. **That wait is bounded, so it fails
+  closed**: 5s, then the arm is refused (exit 75). Capturing anyway is not a
+  degraded outcome, it *is* the permanent failure, and it is reachable — an
+  incumbent stuck in `pmset`, or a record whose pid was recycled, never answers the
+  signal. Which is also why the pidfile carries the process's **start time** as a
+  third field: a pid is not an identity, a SIGKILLed window leaves its record
+  behind, and the helper runs as root, so matching on the number alone would let
+  `--stop` SIGTERM whatever inherited it. The armed window is spawned **detached**
+  (`autoupdate` exits to reload, and a plain child would die with it and quietly
+  restore sleep), found again after a restart via `/var/run/…nosleep.pid`, and its
+  liveness read through **EPERM, not success** — it runs as root, so `kill(pid,0)`
+  from the relay is refused, and that refusal is the proof it's alive. What none of
+  this buys is *delivery*: the lock screen still blocks every UI write, so a
+  lid-closed Mac serves reads and notifications while sends park (`src/parked.ts`).
+- **The Mac's own Wi-Fi is readable only in the parts that don't matter.** The
+  funnel watchdog can move this Mac onto a phone hotspot when its link dies
+  (`src/wifi.ts`, opt-in via `src/settings.ts`), and the guards are the design: it
+  fires only on `route -n get default` finding nothing, because **the associated SSID
+  is not a usable signal** — macOS gates it behind Location Services and answers "not
+  associated" while a default route is live on the same interface. Same reason
+  `system_profiler SPAirPortDataType` is useless for naming: it scans, then redacts
+  every SSID. **Hotspots cannot be detected**; macOS knows over Continuity/BLE, which
+  is private, and the per-network store (`com.apple.wifi.known-networks.plist`) is
+  `-rw------- root` — `looksLikeHotspot` is a name guess that only ever *sorts* a
+  list. The one real fact available is world-readable: `AutoHotspotMode` in
+  `com.apple.airport.preferences.plist` (System Settings ▸ Wi-Fi ▸ Auto-join
+  Hotspot), and on `Never` the Mac will not reach for your phone unprompted no matter
+  what this relay does. Settings hold **SSIDs only** — passing a password to
+  `networksetup` *writes* it into the keychain, so the relay only joins networks
+  macOS already knows, and nothing secret reaches a file `/api/logs` might echo.
+
 `sessions.id == claude_session_id` — Conductor is a GUI over Claude Code sessions.
 
 ## Commands
 
 ```bash
-yarn verify   # typecheck (tsc) + lint (Biome) + AppleScript check — run before every commit
+yarn verify   # typecheck (tsc) + lint (Biome) + AppleScript check + nosleep check — before every commit
 yarn fix      # Biome autofix (format + safe lints)
 yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
+yarn check:nosleep     # run NOSLEEP_BODY against a stub pmset in a temp dir (no root, no real pmset)
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
@@ -381,16 +437,29 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-The only automated test is `scripts/check-applescript.ts`, which `yarn verify`
-runs: `osacompile` parses `src/conductor.applescript` the way `osascript` will,
-and every `my handler()` call — in the script *and* in the TypeScript that
-appends to it — must resolve to an `on handler(`. AppleScript binds handler calls
-at run time, so those are two different failures and osacompile only sees one.
-The compile half is macOS-only, so CI runs it on its own lean `macos-latest` job
-(`check-applescript` — no yarn install, the script is stdlib-only, and it gates
-the release since the tarball ships the .applescript verbatim); the ubuntu job
-skips it, and the resolution half runs everywhere, which is what catches a
-rename in a pull request.
+Two automated tests, and they share one reason to exist: **each guards a language
+nothing else in the toolchain reads.** Both live in a string or a sibling file, so
+`tsc` sees text and Biome sees text, and a mistake surfaces for the first time on
+someone's phone or someone's Mac.
+
+- `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
+  the way `osascript` will, and every `my handler()` call, in the script *and* in
+  the TypeScript that appends to it, must resolve to an `on handler(`. AppleScript
+  binds handler calls at run time, so those are two different failures and
+  osacompile only sees one. The compile half is macOS-only, so CI runs it on its
+  own lean `macos-latest` job (`check-applescript` — no yarn install, the script is
+  stdlib-only, and it gates the release since the tarball ships the .applescript
+  verbatim); the ubuntu job skips it, and the resolution half runs everywhere,
+  which is what catches a rename in a pull request.
+- `scripts/check-nosleep.ts` — runs `NOSLEEP_BODY` against a **stub `pmset`** in a
+  temp directory, pidfile and all, so it needs no root and never touches this
+  machine's power settings. It asserts the property that costs something: the
+  captured values always go back. A window that restores the *wrong* values leaves
+  `disablesleep 1` with nothing armed, which reads as "working" everywhere and has
+  no fix on the phone. Covers the ordinary window, a clean takeover, a takeover the
+  incumbent refuses (must exit 75, must not capture), and a recycled pid (must not
+  be signalled). Portable, so the ubuntu job runs it too.
+
 Nothing else is tested. Verify a runtime change by curling the relay (see the
 bind trap below), not by unit test.
 
