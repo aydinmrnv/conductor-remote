@@ -19,12 +19,32 @@ import { useApp } from './store.ts'
  * translate the drawer live, committing open/closed on release. Only active
  * below `md`, where the drawer is a floating overlay; the static desktop rail
  * is left alone.
+ *
+ * The drag paints an inline `transform`, which outranks the class that opens and
+ * closes the drawer — so a touch sequence that never reports its end strands the
+ * drawer wherever the finger left it, deaf to the close button and the scrim, and
+ * only a relaunch clears it. iOS ends touches silently more often than it should:
+ * the system claiming the swipe for its own edge gesture, a call arriving, the PWA
+ * being backgrounded mid-drag. Two guards, because the stranding shows up twice —
+ * the drawer stuck on screen, and a stale `tracking` flag dragging it back out of
+ * the next scroll: `abort` ends an orphaned gesture on the next touch or on the app
+ * going away, and the committed state gets the last word (see the effect below).
  */
 export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const open = useApp(s => s.sidebarOpen)
 	const openRef = useRef(open)
 	openRef.current = open
+
+	// Whatever the app believes is what's on screen: every committed open/close drops
+	// the drag's overrides, so a tap can always undo a gesture that stranded them.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runs for the committed state, which the body doesn't read
+	useEffect(() => {
+		const node = drawerRef.current
+		if (!node) return
+		node.style.transition = ''
+		node.style.transform = ''
+	}, [open, drawerRef])
 
 	useEffect(() => {
 		const EDGE = 28 // px from the left where an opening swipe may begin
@@ -55,7 +75,16 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 			node.style.transform = ''
 		}
 
+		// End a gesture that never reported its own end, and hand the drawer back to its
+		// class. A no-op unless one is stranded, so it costs nothing on the normal path.
+		const abort = () => {
+			if (!tracking) return
+			tracking = false
+			release()
+		}
+
 		const onStart = (e: TouchEvent) => {
+			abort()
 			if (desktop.matches || e.touches.length !== 1) return
 			const t = e.touches[0]
 			if (openRef.current) {
@@ -101,11 +130,15 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 		window.addEventListener('touchmove', onMove, { passive: false })
 		window.addEventListener('touchend', onEnd)
 		window.addEventListener('touchcancel', onEnd)
+		// Backgrounding is the one silent ending we get told about — iOS suspends the PWA
+		// with the finger still down and delivers nothing on resume.
+		document.addEventListener('visibilitychange', abort)
 		return () => {
 			window.removeEventListener('touchstart', onStart)
 			window.removeEventListener('touchmove', onMove)
 			window.removeEventListener('touchend', onEnd)
 			window.removeEventListener('touchcancel', onEnd)
+			document.removeEventListener('visibilitychange', abort)
 		}
 	}, [drawerRef, setSidebarOpen])
 }

@@ -585,6 +585,21 @@ bind trap below), not by unit test.
   default window position; **one click per shell call** — batched clicks get eaten
   by sheet animations), and read state back with `simctl io booted screenshot`.
   Tapping the installed icon *resumes*; to load new HTML, re-add the icon.
+- **A touch iOS never ends leaves the drawer's drag holding the whole app.** The
+  edge-swipe handler (`hooks.ts` ▸ `useEdgeSwipeDrawer`) paints an inline `transform`
+  and keeps `tracking`/`horizontal`, both cleared on `touchend`/`touchcancel` — and
+  iOS sends neither when the system claims the swipe or suspends the PWA mid-drag.
+  The stale flags then make **every later `touchmove`, anywhere on the page**, skip
+  the direction test, call `preventDefault()` and repaint the drawer: scrolling dies
+  and taps never become clicks, so Close does nothing and only a relaunch clears it.
+  (The drawer itself doesn't move much — Tailwind v4 compiles `-translate-x-full` to
+  the *`translate`* property, so an inline `transform` composes with it instead of
+  replacing it. The wedged input is the symptom, not a stuck panel.) So a new
+  `touchstart` — and `visibilitychange`, the one silent ending we're told about —
+  ends an orphaned gesture, and every committed open/close drops the inline
+  overrides, which is what lets a tap undo a gesture that stranded them. Reproduce
+  in any browser: fire `touchstart` + two `touchmove`s with no `touchend`, then check
+  that the next plain vertical swipe comes back `defaultPrevented`.
 - **Everything on screen is polled, so a transcript row must never re-render for
   free.** Three timers drive the chat — the transcript at 1s, sessions at 2s,
   `/api/state` at 2.5s — and any one of them changing a field re-renders
