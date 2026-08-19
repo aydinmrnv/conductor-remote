@@ -47,7 +47,9 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 	}, [open, drawerRef])
 
 	useEffect(() => {
-		const EDGE = 28 // px from the left where an opening swipe may begin
+		// 44px, Apple's minimum touch target — 28 was under it, and a thumb reaching
+		// across the phone lands short of the glass often enough to feel broken.
+		const EDGE = 44 // px from the left where an opening swipe may begin
 		const COMMIT = 0.4 // fraction of the drawer that must show to snap open
 		const desktop = window.matchMedia('(min-width: 768px)')
 		const drawer = () => drawerRef.current
@@ -75,6 +77,17 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 			node.style.transform = ''
 		}
 
+		// A wider edge reaches over things that scroll sideways themselves — a code
+		// block, a diff, the tab strip — and those start at the left of the pane, so
+		// the zone now overlaps them. One already pushed off its left end is being
+		// read, not swiped from: leave it alone rather than yank the drawer out.
+		const overScrolledContent = (target: EventTarget | null) => {
+			for (let el = target as HTMLElement | null; el; el = el.parentElement) {
+				if (el.scrollLeft > 0) return true
+			}
+			return false
+		}
+
 		// End a gesture that never reported its own end, and hand the drawer back to its
 		// class. A no-op unless one is stranded, so it costs nothing on the normal path.
 		const abort = () => {
@@ -90,7 +103,7 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 			if (openRef.current) {
 				const right = drawer()?.getBoundingClientRect().right ?? 0
 				if (t.clientX > right) return // drag must start over the drawer to close it
-			} else if (t.clientX > EDGE) return // …or at the very edge to open it
+			} else if (t.clientX > EDGE || overScrolledContent(e.target)) return // …or at the edge to open it
 			tracking = true
 			horizontal = false
 			bailed = false
