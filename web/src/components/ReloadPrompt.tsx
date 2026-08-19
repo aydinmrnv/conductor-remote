@@ -15,6 +15,15 @@ const UPDATE_RETRY_WINDOW = 10_000
 const UPDATE_ATTEMPT_KEY = 'pwa-update-attempted-at'
 // Grace period for the SKIP_WAITING → reload handshake before we force a hard reset.
 const APPLY_FALLBACK = 2500
+// "Later" is a snooze, not a dismissal. Tapping it leaves the new worker parked in
+// `waiting`, and nothing re-raises the banner for a worker already in that state:
+// workbox fires `waiting` when one *reaches* it (or was already there when `register()`
+// ran), while the 60s `reg.update()` poll below refetches a byte-identical `sw.js` and so
+// spawns no new install. An iOS home-screen app *resumes* rather than reloading its
+// document, so `register()` doesn't run again either — which is how one tap of Later used
+// to strand the phone on an old bundle for days. Hence the re-arm.
+const SNOOZE_MS = 30 * 60_000
+const SNOOZE_KEY = 'pwa-update-snoozed-until'
 
 /**
  * Last-resort apply: tear the service worker + all caches down and hard-reload with a
@@ -45,7 +54,8 @@ async function hardReset(): Promise<void> {
  *  1. a 60s `registration.update()` poll — forces the browser to look for a new SW;
  *  2. an *immediate* update check the moment `/api/state` reports a relay version newer
  *     than this bundle (`__APP_VERSION__`) — recovery in one state-poll, not up to 60s;
- *  3. a one-tap banner to apply the waiting worker (skipWaiting + reload).
+ *  3. a one-tap banner to apply the waiting worker (skipWaiting + reload), whose Later
+ *     button only snoozes it (see SNOOZE_MS).
  * `public/self-heal.js` is the deeper fallback for when the bundle can't even boot.
  */
 export function ReloadPrompt() {
@@ -83,12 +93,46 @@ export function ReloadPrompt() {
 		if (!needRefresh) return
 		const attemptedAt = Number(sessionStorage.getItem(UPDATE_ATTEMPT_KEY))
 		sessionStorage.removeItem(UPDATE_ATTEMPT_KEY)
-		if (attemptedAt && Date.now() - attemptedAt < UPDATE_RETRY_WINDOW) setNeedRefresh(false)
+		if (attemptedAt && Date.now() - attemptedAt < UPDATE_RETRY_WINDOW) {
+			setNeedRefresh(false)
+			return
+		}
+		// A reload inside the snooze window re-fires workbox's `waiting` (this time with
+		// `wasWaitingBeforeRegister`), so honour the snooze here too or Later means nothing
+		// to anyone who pulls to refresh.
+		const snoozedUntil = Number(sessionStorage.getItem(SNOOZE_KEY))
+		if (snoozedUntil && Date.now() < snoozedUntil) setNeedRefresh(false)
+	}, [needRefresh, setNeedRefresh])
+
+	// Bring the banner back when the snooze runs out, as long as the worker is still waiting.
+	useEffect(() => {
+		if (needRefresh) return
+		const check = () => {
+			const until = Number(sessionStorage.getItem(SNOOZE_KEY))
+			if (!until || Date.now() < until) return
+			if (!registration.current?.waiting) return
+			sessionStorage.removeItem(SNOOZE_KEY)
+			setNeedRefresh(true)
+		}
+		// Timers are throttled to a crawl in a backgrounded PWA, so coming back to the
+		// foreground checks as well — that is when the snooze usually turns out to be over.
+		const timer = window.setInterval(check, POLL_INTERVAL)
+		document.addEventListener('visibilitychange', check)
+		return () => {
+			window.clearInterval(timer)
+			document.removeEventListener('visibilitychange', check)
+		}
 	}, [needRefresh, setNeedRefresh])
 
 	if (!needRefresh) return null
 
+	const snooze = () => {
+		sessionStorage.setItem(SNOOZE_KEY, String(Date.now() + SNOOZE_MS))
+		setNeedRefresh(false)
+	}
+
 	const apply = () => {
+		sessionStorage.removeItem(SNOOZE_KEY)
 		sessionStorage.setItem(UPDATE_ATTEMPT_KEY, String(Date.now()))
 		const reload = () => {
 			if (reloading.current) return
@@ -122,11 +166,7 @@ export function ReloadPrompt() {
 		<div className="pb-safe fade-in fixed inset-x-0 bottom-0 z-[60] mx-auto flex max-w-sm items-center gap-3 rounded-t-2xl border border-border-soft bg-surface px-4 py-3 shadow-xl">
 			<RefreshCw size={15} className="shrink-0 text-accent" />
 			<span className="flex-1 text-sm">New version ready</span>
-			<button
-				type="button"
-				onClick={() => setNeedRefresh(false)}
-				className="rounded-lg px-2 py-1 text-xs text-muted active:bg-surface-2"
-			>
+			<button type="button" onClick={snooze} className="rounded-lg px-2 py-1 text-xs text-muted active:bg-surface-2">
 				Later
 			</button>
 			<button
