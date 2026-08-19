@@ -71,7 +71,16 @@ export async function hasDefaultRoute(): Promise<boolean> {
 	}
 }
 
-/** Networks macOS already holds credentials for, in its own preference order. */
+/**
+ * Networks macOS already holds credentials for, in its own preference order.
+ *
+ * **The order is a signal and the picker leans on it.** macOS keeps this roughly
+ * most-recently-joined first, so the head of the list is what the Wi-Fi menu draws —
+ * measured here: the associated network, then the phone hotspot, then the office APs.
+ * That matters because the short menu list itself is unreachable (a live scan redacts
+ * every name without Location Services, the hotspot arrives over private Continuity),
+ * so ranking by this order is the closest the phone can get. Preserve it — don't sort.
+ */
 export async function preferredNetworks(): Promise<string[]> {
 	const dev = await wifiDevice()
 	if (!dev) return []

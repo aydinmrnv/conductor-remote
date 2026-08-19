@@ -45,6 +45,13 @@ export function ConnectSheet({
 	// `transform` for its slide animation — and a transform makes that element the containing block
 	// for `fixed` descendants, so an in-place sheet is pinned inside the 320px drawer instead of the
 	// screen (on md+ too, where the rail keeps `md:translate-x-0`). See LogsSheet, same reason.
+	//
+	// The height cap and the inner scroller are load-bearing, not polish. This sheet is anchored to
+	// the *bottom* and has grown a QR plus three rows of Mac controls, so on a phone it outgrew the
+	// screen — and an uncapped bottom sheet grows upward, off the top edge. That takes the header
+	// with it, so Close and Disconnect land above the viewport while the sheet covers the backdrop
+	// that would otherwise dismiss it: the app becomes unreachable with no gesture left. The
+	// document can't rescue it either — `html,body{overflow:hidden}` (see index.css), by design.
 	return createPortal(
 		<>
 			<div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} aria-hidden />
@@ -52,9 +59,9 @@ export function ConnectSheet({
 				role="dialog"
 				aria-modal="true"
 				aria-label="Connect a device"
-				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-w-sm flex-col items-center gap-4 rounded-t-3xl border border-border-soft bg-surface p-5 shadow-xl md:inset-0 md:m-auto md:h-fit md:rounded-3xl"
+				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[85dvh] max-w-sm flex-col items-center gap-4 rounded-t-3xl border border-border-soft bg-surface p-5 shadow-xl md:inset-0 md:m-auto md:h-fit md:rounded-3xl"
 			>
-				<div className="flex w-full items-center justify-between">
+				<div className="flex w-full shrink-0 items-center justify-between">
 					<h2 className="text-base font-semibold">Connect a device</h2>
 					<div className="flex shrink-0 items-center gap-1">
 						{/* Tinted, not muted like Close beside it: this drops the token and sends you back to the
@@ -79,32 +86,34 @@ export function ConnectSheet({
 						</button>
 					</div>
 				</div>
-				<p className="text-center text-sm text-muted">
-					Scan on another phone, or re-add this to your home screen. The link carries your access token.
-				</p>
-				<div className="rounded-2xl bg-white p-3">
-					<QRCode text={url} size={216} />
-				</div>
-				<button
-					type="button"
-					onClick={copy}
-					className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-sm active:bg-surface"
-				>
-					{copied ? <Check size={16} /> : <Copy size={16} />}
-					{copied ? 'Copied' : 'Copy link'}
-				</button>
-				<NotificationsRow />
-				<MacRow />
-				<div className="flex w-full items-center justify-between text-xs text-faint">
-					<span className="font-mono">
-						{version ? `relay v${version}` : 'relay v?'}
-						{' · '}
-						<span className={stale ? 'text-working' : undefined}>app v{__APP_VERSION__}</span>
-						{stale ? ' · update pending' : ''}
-					</span>
-					<button type="button" onClick={onLogs} className="shrink-0 text-muted underline-offset-2 hover:underline">
-						Logs
+				<div className="flex w-full min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain">
+					<p className="text-center text-sm text-muted">
+						Scan on another phone, or re-add this to your home screen. The link carries your access token.
+					</p>
+					<div className="shrink-0 rounded-2xl bg-white p-3">
+						<QRCode text={url} size={216} />
+					</div>
+					<button
+						type="button"
+						onClick={copy}
+						className="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-sm active:bg-surface"
+					>
+						{copied ? <Check size={16} /> : <Copy size={16} />}
+						{copied ? 'Copied' : 'Copy link'}
 					</button>
+					<NotificationsRow />
+					<MacRow />
+					<div className="flex w-full items-center justify-between text-xs text-faint">
+						<span className="font-mono">
+							{version ? `relay v${version}` : 'relay v?'}
+							{' · '}
+							<span className={stale ? 'text-working' : undefined}>app v{__APP_VERSION__}</span>
+							{stale ? ' · update pending' : ''}
+						</span>
+						<button type="button" onClick={onLogs} className="shrink-0 text-muted underline-offset-2 hover:underline">
+							Logs
+						</button>
+					</div>
 				</div>
 			</div>
 		</>,
@@ -142,7 +151,7 @@ function NotificationsRow() {
 							: 'Get a ping when an agent finishes its turn or hits an error.'
 
 	return (
-		<div className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+		<div className="w-full shrink-0 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex min-w-0 items-center gap-2 text-sm">
 					<Bell size={16} className={cn('shrink-0', push.enabled ? 'text-accent' : 'text-muted')} />
@@ -250,7 +259,7 @@ function MacRow() {
 	const fallback = data?.settings.fallbackSsids[0] ?? ''
 
 	return (
-		<div className="flex w-full flex-col gap-2.5 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+		<div className="flex w-full shrink-0 flex-col gap-2.5 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex min-w-0 items-center gap-2 text-sm">
 					<Sun size={16} className={cn('shrink-0', nosleep?.armed ? 'text-accent' : 'text-muted')} />
@@ -342,12 +351,23 @@ function MacRow() {
  * Choosing one network out of everything this Mac has ever joined — 135 of them on the
  * machine this was built against, which is why a bare `<select>` was the wrong control.
  *
- * Likely hotspots float to the top, because the one you want is nearly always your phone.
- * That guess comes from the SSID text alone (`looksLikeHotspot` in src/wifi.ts) and is
- * labelled "likely" rather than asserted: macOS knows for certain over Continuity, which is
- * private, and the public alternatives are all blocked — the per-network store is root-only,
- * and a live scan redacts every SSID without Location Services. So the guess is allowed to
- * reorder this list and nothing else.
+ * **The short list the macOS Wi-Fi menu draws cannot be had.** That menu is a live scan
+ * plus a Personal Hotspot learned over Continuity, and both are shut: `system_profiler
+ * SPAirPortDataType` does scan and reports every neighbour's channel, security and signal,
+ * but prints `<redacted>` for the name without Location Services — it can count them, never
+ * name them — the hotspot arrives over private BLE and touches no file, and the store that
+ * would at least date each network (`com.apple.wifi.known-networks.plist`, `LastAssociatedAt`)
+ * is `-rw------- root`. The world-readable airport prefs keep a `PreferredOrder` array, and
+ * on this Mac it is empty. So the saved list is the only list, and it arrives whole.
+ *
+ * What rescues it is that the list is not arbitrary: `known` comes in macOS's own preference
+ * order, which tracks how recently each network was joined, so its head *is* what the menu
+ * shows — here `vafler` (associated) then `Han Høyes iPhone` (the hotspot), in that order.
+ * Hence only the first hotspot guess is promoted. Sorting every guess to the front instead
+ * filled all eight visible slots with iPhones — six of them other people's, ranked 25th to
+ * 130th — and buried the office Wi-Fi sitting at rank 3. The guess reads the SSID text alone
+ * (`looksLikeHotspot` in src/wifi.ts), so it stays labelled "likely" and stays cheap: it may
+ * lift one row, and decide nothing.
  */
 function NetworkPicker({
 	known,
@@ -366,11 +386,9 @@ function NetworkPicker({
 
 	const hot = new Set(hotspots)
 	const q = query.trim().toLowerCase()
-	const matches = known
-		.filter(s => !q || s.toLowerCase().includes(q))
-		// Stable within each group: `known` is already in macOS's own preference order.
-		.sort((a, b) => Number(hot.has(b)) - Number(hot.has(a)))
-		.slice(0, 8)
+	const found = known.filter(s => !q || s.toLowerCase().includes(q))
+	const phone = found.find(s => hot.has(s))
+	const matches = (phone ? [phone, ...found.filter(s => s !== phone)] : found).slice(0, 6)
 
 	return (
 		<>
@@ -400,6 +418,12 @@ function NetworkPicker({
 				))}
 				{matches.length === 0 ? <p className="text-xs text-faint">Nothing matches “{query}”.</p> : null}
 			</div>
+			{/* Says what the six are, so a short list off a 135-network Mac doesn't read as arbitrary. */}
+			{!q && known.length > matches.length ? (
+				<p className="mt-1 text-xs text-faint">
+					Most recently joined. Search to reach the other {known.length - matches.length}.
+				</p>
+			) : null}
 		</>
 	)
 }
