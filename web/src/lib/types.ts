@@ -311,3 +311,43 @@ export interface StatusResult {
 	workspace?: Workspace
 	error?: string
 }
+
+/** Relay preferences the phone can edit (GET/PATCH /api/settings). SSIDs only — never a password. */
+export interface RelaySettings {
+	/** Networks the funnel watchdog may fall back to, in order, if the Mac loses its link. */
+	fallbackSsids: string[]
+	autoRejoin: boolean
+}
+
+/**
+ * Whether the Mac is being held awake lid-closed. `available` is false until
+ * `conductor-remote nosleep setup` has installed the scoped sudoers rule on the Mac —
+ * without it a TTY-less daemon has no route to root, so every action here is refused.
+ */
+export interface NoSleepState {
+	available: boolean
+	armed: boolean
+	/** Epoch ms the window ends, or null for "until stopped". */
+	until: number | null
+	pid: number | null
+}
+
+export interface NoSleepResult {
+	ok: boolean
+	error?: string
+	state: NoSleepState
+}
+
+export interface SettingsResponse {
+	settings: RelaySettings
+	wifi: {
+		/** Often null: macOS gates the associated SSID behind Location Services. */
+		current: string | null
+		known: string[]
+		/** Guessed from the name only — macOS's real hotspot knowledge is private. Sorts the picker. */
+		likelyHotspots: string[]
+		/** macOS's Auto-join Hotspot setting: `Never` | `Ask` | `Automatic`, or null if unreadable. */
+		autoJoinHotspot: string | null
+	}
+	nosleep: NoSleepState & { maxSeconds: number }
+}

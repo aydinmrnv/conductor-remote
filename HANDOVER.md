@@ -98,6 +98,16 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   notify.ts       status-transition watcher + subscription store (~/…/conductor-remote/push.json, 0600)
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted
+  tailscale.ts    magicdns name, expose posture (funnel|serve), tailscale binary, relay port
+  funnel-watchdog.ts  end-to-end probe of the PUBLIC ingress; re-registers a stale funnel, and
+                  can move the Mac to a fallback network when it has no route at all
+  settings.ts     relay preferences the phone edits (fallback SSIDs, autoRejoin) → stateDir()/settings.json
+  wifi.ts         networksetup reads + the one narrow write (join a network macOS already knows).
+                  All async: it is slowest exactly when the link is wedged, and the relay is one thread
+  nosleep-helper.ts  the root half in one place: the shared POSIX-sh body, the helper file it is
+                  installed as, the sudoers drop-in, and helperReady() (runs the real path under sudo -n -k)
+  nosleep.ts      arming lid-closed wakefulness from the phone: detached spawn, pidfile discovery
+                  across relay restarts, liveness read through EPERM
 web/              React PWA (Vite root)
   index.html      loads /self-heal.js synchronously (before the module bundle) so it can catch a dead shell
   src/main.tsx    root: QueryClient + Router (SW registered in ReloadPrompt, not here)
@@ -110,11 +120,16 @@ web/              React PWA (Vite root)
                   + this device's push subscription
   src/components/ Header, WorkspaceList, SessionView, Transcript, DiffView, Composer (AgentBar renders
                   inside its card), StatusPicker, NewWorkspaceSheet, LogsSheet, ReloadPrompt, ui
-                  (ConnectSheet carries the Notifications switch + "send a test")
+                  (ConnectSheet carries the Notifications switch + "send a test", and the Mac section:
+                  keep-awake windows + the fallback-network picker)
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
   push-sw.js      push / notificationclick handlers, pulled into the generated SW by workbox.importScripts
-scripts/dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status) + qr.ts (dep-free QR of the phone URL, printed by service.ts)
+scripts/         dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
+                 + qr.ts (dep-free QR of the phone URL, printed by service.ts)
+                 + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
+                 + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)
+                 + check-applescript.ts and check-nosleep.ts (the two automated tests, run by `yarn verify`)
 dist/             built PWA (gitignored) — what the relay serves
 dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```
