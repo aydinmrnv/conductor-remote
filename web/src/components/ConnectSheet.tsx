@@ -10,7 +10,8 @@ import { QRCode } from './QRCode.tsx'
 
 /**
  * Connection sheet — shows a QR + copyable link for THIS device's token URL so you can re-scan it onto
- * another phone or re-add it to the home screen, and disconnect (clears the stored token → TokenGate).
+ * another phone or re-add it to the home screen, and disconnect (clears the stored token → TokenGate,
+ * behind a confirm — see `confirming`).
  * The gate itself is tokenless and can't draw this, so the QR lives here. Reached from the sidebar header.
  * Also the app's diagnostics corner: it carries the relay/app versions, and the way into the relay's logs.
  */
@@ -26,6 +27,10 @@ export function ConnectSheet({
 	const token = useApp(s => s.token)
 	const setToken = useApp(s => s.setToken)
 	const [copied, setCopied] = useState(false)
+	// Disconnect is two taps, and the second one is nowhere near the first. Dropping the token sends you
+	// to a gate this sheet can't draw, so the only way back is the URL — off a Mac that may not be in the
+	// room. It sat one 32px tap from Close, in a sheet whose reason to exist is a QR you look at.
+	const [confirming, setConfirming] = useState(false)
 	const url = token ? `${location.origin}/#token=${token}` : location.origin
 	// Relay is ahead of the build this app booted → a service-worker update is pending
 	// (ReloadPrompt will surface it). Flag it here so the versions explain a stale UI.
@@ -66,13 +71,18 @@ export function ConnectSheet({
 					<div className="flex shrink-0 items-center gap-1">
 						{/* Tinted, not muted like Close beside it: this drops the token and sends you back to the
 						    gate, and getting back in needs the URL from the Mac. The colour is the only thing
-						    separating it from ordinary chrome at a glance. */}
+						    separating it from ordinary chrome at a glance — and it only *arms* the confirm below,
+						    which is where the token actually goes. */}
 						<button
 							type="button"
-							onClick={() => setToken(null)}
+							onClick={() => setConfirming(c => !c)}
 							aria-label="Disconnect"
+							aria-expanded={confirming}
 							title="Disconnect"
-							className="flex size-8 items-center justify-center rounded-full text-del/80 active:bg-surface-2"
+							className={cn(
+								'flex size-8 items-center justify-center rounded-full active:bg-surface-2',
+								confirming ? 'bg-del/15 text-del' : 'text-del/80'
+							)}
 						>
 							<LogOut size={17} />
 						</button>
@@ -86,6 +96,34 @@ export function ConnectSheet({
 						</button>
 					</div>
 				</div>
+				{/* Outside the scroller on purpose: the sheet is capped at 85dvh and already scrolls, so a
+				    confirm placed inside it could open below the fold — and an unanswered destructive
+				    prompt you can't see is worse than the mis-tap it exists to catch. */}
+				{confirming ? (
+					<div className="fade-in w-full shrink-0 rounded-xl border border-del/40 bg-del/10 px-3 py-2.5 text-left">
+						<p className="text-sm font-medium">Disconnect this device?</p>
+						<p className="mt-1 text-xs text-muted">
+							This forgets your access token. To get back in you’ll need the link or QR from the Mac running the relay —
+							this screen can’t show it to you again.
+						</p>
+						<div className="mt-2.5 flex gap-2">
+							<button
+								type="button"
+								onClick={() => setConfirming(false)}
+								className="flex-1 rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm active:bg-surface"
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								onClick={() => setToken(null)}
+								className="flex-1 rounded-lg bg-del px-3 py-2 text-sm font-semibold text-black active:opacity-80"
+							>
+								Disconnect
+							</button>
+						</div>
+					</div>
+				) : null}
 				<div className="flex w-full min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain">
 					<p className="text-center text-sm text-muted">
 						Scan on another phone, or re-add this to your home screen. The link carries your access token.
