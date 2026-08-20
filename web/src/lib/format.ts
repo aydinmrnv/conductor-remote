@@ -105,6 +105,50 @@ export function workspaceStatusLabel(status: string): string {
 	return labels[status] ?? status
 }
 
+/**
+ * The Recent view's day buckets, newest first. There is no status here on purpose:
+ * grouping by status sorts finished work to the top, which buries the workspace you
+ * were just in — the one a phone is nearly always reaching for.
+ */
+export const RECENT_BUCKETS = ['today', 'yesterday', 'week', 'month', 'older'] as const
+export type RecentBucket = (typeof RECENT_BUCKETS)[number]
+
+export function recentBucketLabel(bucket: RecentBucket): string {
+	const labels: Record<RecentBucket, string> = {
+		today: 'Today',
+		yesterday: 'Yesterday',
+		week: 'Past week',
+		month: 'Past month',
+		older: 'Older'
+	}
+	return labels[bucket]
+}
+
+function startOfDay(at: Date): number {
+	const day = new Date(at)
+	day.setHours(0, 0, 0, 0)
+	return day.getTime()
+}
+
+/**
+ * Which bucket a timestamp falls in, by whole calendar days on *this device* — the
+ * card's `relativeTime` reads the same column, and both should agree with the clock
+ * in the status bar. Days apart rather than hours elapsed, or a workspace touched at
+ * 23:50 would still say "Today" at 00:10; `Math.round` absorbs the 23- and 25-hour
+ * days DST makes. A stamp ahead of this clock (the relay's Mac and the phone need
+ * not agree) lands in `today` rather than somewhere past it.
+ */
+export function recentBucket(iso: string, now: Date = new Date()): RecentBucket {
+	const at = new Date(iso)
+	if (!Number.isFinite(at.getTime())) return 'older'
+	const days = Math.round((startOfDay(now) - startOfDay(at)) / 86_400_000)
+	if (days <= 0) return 'today'
+	if (days === 1) return 'yesterday'
+	if (days < 7) return 'week'
+	if (days < 30) return 'month'
+	return 'older'
+}
+
 /** One palette for every status dot, so the header control and the sidebar groups agree. */
 export const STATUS_COLORS: Record<string, string> = {
 	done: 'var(--color-done)',

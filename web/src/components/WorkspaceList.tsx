@@ -5,6 +5,9 @@ import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	isSettingUp,
+	RECENT_BUCKETS,
+	recentBucket,
+	recentBucketLabel,
 	relativeTime,
 	STATUS_COLORS,
 	STATUS_ORDER,
@@ -40,11 +43,17 @@ interface Group {
 	items: Workspace[]
 }
 
+function bucketKey(w: Workspace, groupBy: GroupBy): string {
+	if (groupBy === 'status') return workspaceStatus(w)
+	if (groupBy === 'recent') return recentBucket(w.updated_at)
+	return w.repo_name ?? ''
+}
+
 function groupWorkspaces(list: Workspace[], groupBy: GroupBy): Group[] {
 	if (groupBy === 'none') return [{ key: 'all', label: '', items: list }]
 	const buckets = new Map<string, Workspace[]>()
 	for (const w of list) {
-		const key = groupBy === 'status' ? workspaceStatus(w) : (w.repo_name ?? '')
+		const key = bucketKey(w, groupBy)
 		const bucket = buckets.get(key)
 		if (bucket) bucket.push(w)
 		else buckets.set(key, [w])
@@ -55,6 +64,12 @@ function groupWorkspaces(list: Workspace[], groupBy: GroupBy): Group[] {
 			.filter(s => buckets.has(s))
 			.map(s => ({ key: `status:${s}`, label: workspaceStatusLabel(s), status: s, items: buckets.get(s) ?? [] }))
 	}
+	if (groupBy === 'recent')
+		return RECENT_BUCKETS.filter(b => buckets.has(b)).map(b => ({
+			key: `recent:${b}`,
+			label: recentBucketLabel(b),
+			items: buckets.get(b) ?? []
+		}))
 	return [...buckets.keys()]
 		.sort((a, b) => a.localeCompare(b))
 		.map(r => ({ key: `repo:${r}`, label: r || 'No repo', items: buckets.get(r) ?? [] }))
@@ -234,6 +249,7 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						onChange={v => setView({ groupBy: v as GroupBy })}
 						options={[
 							['status', 'Status'],
+							['recent', 'Recent'],
 							['repo', 'Repo'],
 							['none', 'None']
 						]}

@@ -5,8 +5,12 @@ import { loadDrafts, writeDraft } from './lib/draft.ts'
 import { loadReadMarks, type ReadMarks, writeReadMarks } from './lib/read.ts'
 import type { AgentPatch, UpdateStatus } from './lib/types.ts'
 
-/** Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by popover. */
-export type GroupBy = 'status' | 'repo' | 'none'
+/**
+ * Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by
+ * popover, plus `recent`, which the desktop has no equivalent of: day buckets
+ * (Today / Yesterday / …) for reaching the chat you left a minute ago.
+ */
+export type GroupBy = 'status' | 'repo' | 'recent' | 'none'
 export type SortBy = 'updated' | 'created' | 'name'
 export interface ViewPrefs {
 	groupBy: GroupBy
