@@ -230,6 +230,16 @@ export interface SendResult {
 	queued?: PendingPrompt
 }
 
+/** Result of POST /api/sessions/:id/stop — Conductor's "Cancel agent" for one chat. */
+export interface StopResult {
+	ok: boolean
+	/** The turn had already ended before the tap landed; nothing was pressed. */
+	alreadyIdle?: boolean
+	/** The chat as the relay re-read it once Conductor recorded the stop. */
+	session?: Session
+	error?: string
+}
+
 export interface NewChatResult {
 	ok: boolean
 	/** Id of the freshly-created session, if the relay detected it in time. */

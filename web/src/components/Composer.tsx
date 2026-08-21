@@ -1,6 +1,8 @@
-import { ArrowUp, Info, WifiOff } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { ArrowUp, Info, Square, WifiOff } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useSendPrompt } from '../hooks.ts'
+import { client } from '../lib/api.ts'
 import type { ActuatorInfo, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
@@ -16,23 +18,35 @@ import { AgentBar } from './AgentBar.tsx'
  * 8px = the textarea's own text inset, so labels and prompt line up on the same
  * rule). They used to be a separate strip above it, which read as a second
  * toolbar and lined up with nothing.
+ *
+ * Stop sits beside Send rather than replacing it, which is what the desktop
+ * composer does and is not merely a style choice: Conductor lets you type into a
+ * running turn (steering), so a working chat with a draft in the box shows both
+ * buttons — stop left, send right — and one with an empty box shows only stop.
  */
 export function Composer({
 	session,
 	sessionId,
 	workspaceId,
+	working,
 	actuator
 }: {
 	/** The chat the controls act on; absent while the workspace has no session yet. */
 	session?: Session
 	sessionId: string | null
 	workspaceId: string
+	/** Is this chat mid-answer? Conductor's status, or our own optimistic hint (see SessionView). */
+	working: boolean
 	actuator?: ActuatorInfo
 }) {
 	const text = useApp(s => s.drafts[workspaceId] ?? '')
 	const setDraft = useApp(s => s.setDraft)
 	const online = useApp(s => s.online)
+	const clearWorking = useApp(s => s.clearWorking)
 	const sendPrompt = useSendPrompt()
+	const queryClient = useQueryClient()
+	const [stopping, setStopping] = useState(false)
+	const [stopError, setStopError] = useState<string | null>(null)
 	const ref = useRef<HTMLTextAreaElement>(null)
 
 	const autosize = () => {
@@ -55,8 +69,36 @@ export function Composer({
 		setDraft(workspaceId, '')
 	}
 
+	/**
+	 * No optimism: the relay drives Conductor's own Cancel agent and only answers
+	 * once `sessions.status` has left `working`, so the button stays busy for the
+	 * few seconds that takes rather than clearing a spinner the desktop hasn't
+	 * stopped. `alreadyIdle` comes back when the turn ended between the render and
+	 * the tap, which is a success — the chat is stopped either way.
+	 */
+	const stop = async () => {
+		if (!sessionId || stopping || !online) return
+		setStopping(true)
+		setStopError(null)
+		try {
+			const r = await client.stop(sessionId, workspaceId)
+			if (r.ok) {
+				clearWorking(sessionId)
+				await queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] })
+				queryClient.invalidateQueries({ queryKey: ['state'] })
+			} else {
+				setStopError(r.error || 'Stop failed')
+			}
+		} catch (e) {
+			setStopError(e instanceof Error ? e.message : 'Stop failed')
+		} finally {
+			setStopping(false)
+		}
+	}
+
 	const disabled = !sessionId
 	const precise = actuator?.precise && actuator.available
+	const canStop = working && !!sessionId
 
 	return (
 		<div className="pb-safe border-t border-border-soft bg-bg px-3 pt-2">
@@ -73,6 +115,15 @@ export function Composer({
 					</div>
 				)
 			)}
+			{stopError ? (
+				<button
+					type="button"
+					onClick={() => setStopError(null)}
+					className="mb-2 block w-full rounded-lg border border-del/40 bg-del/10 px-3 py-1.5 text-left text-xs text-del"
+				>
+					{stopError}
+				</button>
+			) : null}
 			{/* `has-[textarea:focus]`, not `focus-within`: the controls inside the card take
 			    focus too, and lighting the whole card up on a Plan tap reads as a typo. */}
 			<div className="rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60">
@@ -95,15 +146,35 @@ export function Composer({
 				/>
 				<div className="mt-1 flex items-end gap-2">
 					{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
-					<button
-						type="button"
-						onClick={send}
-						disabled={disabled || !text.trim() || !online}
-						aria-label="Send"
-						className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
-					>
-						<ArrowUp size={19} />
-					</button>
+					{canStop ? (
+						<button
+							type="button"
+							onClick={stop}
+							disabled={stopping || !online}
+							aria-label="Stop the agent"
+							className="flex size-9 shrink-0 items-center justify-center rounded-full border border-border text-text transition active:scale-90 disabled:text-faint"
+						>
+							{stopping ? (
+								<span className="size-4 animate-spin rounded-full border-2 border-border border-t-text" />
+							) : (
+								<Square size={15} fill="currentColor" />
+							)}
+						</button>
+					) : null}
+					{/* Send hides while a working chat has nothing to steer with — the same
+					    empty-box rule the desktop composer uses, so the two never disagree
+					    about what a tap in that corner does. */}
+					{canStop && !text.trim() ? null : (
+						<button
+							type="button"
+							onClick={send}
+							disabled={disabled || !text.trim() || !online}
+							aria-label="Send"
+							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
+						>
+							<ArrowUp size={19} />
+						</button>
+					)}
 				</div>
 			</div>
 		</div>

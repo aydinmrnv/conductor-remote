@@ -107,6 +107,17 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 	// Bookkeeping frames: hooks, init, token accounting, end-of-turn results.
 	if (parsed.type === 'system' || parsed.type === 'result') return []
 
+	// How a stopped turn ends: `{"type":"error","content":"aborted by user"}`, and it
+	// carries no `message.content`, so without this it fell through to the raw-JSON
+	// dump below. That was tolerable while stopping needed a Mac; the phone can do it
+	// now (`POST /api/sessions/:id/stop`), so it is the last line of every stopped
+	// chat. The SDK's own wording is kept rather than reworded — "aborted by user" is
+	// already plain, and inventing a phrase here would drift from what the desktop shows.
+	if (parsed.type === 'error') {
+		const said = str((parsed as { content?: unknown }).content)
+		if (said) return [{ ...base, id: row.id, role: 'system', text: clip(said, 200) }]
+	}
+
 	const blocks = parsed.message?.content
 	if (!Array.isArray(blocks)) {
 		if (parsed.type === 'user' || parsed.type === 'assistant') return []

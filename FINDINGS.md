@@ -156,6 +156,21 @@ survives UI-bundle updates.
   - The scheme is per release channel (`conductor-alpha://`, `conductor-beta://`
     …). Only production is addressable anyway — every AppleScript here says
     `application "Conductor"` — so it is a constant with an env override.
+- **Stopping a turn is a keystroke, because the button is anonymous.** Conductor
+  binds **`⌘⇧⌫` to "Cancel agent"** — from its own Keyboard shortcuts dialog
+  (`⌘/`, section "Chat"), which is also where `⌘L` (focus chat input), `↵` /
+  `⌫` (approve / deny a tool request) and `⌘⇧↵` (approve plan) are listed. That
+  dialog is the place to re-derive any of these; the menu bar carries none of
+  them. The composer's stop button was rejected as the lever after reading its
+  whole AX record: `AXTitle`, `AXDescription`, `AXHelp`, `AXIdentifier` and
+  `AXCustomContent` are all empty, leaving only `AXDOMClassList`. Worse, the
+  slot is not stable — measured on Conductor 0.80.1, right end of the composer:
+  idle + empty box = one button (send, `ml-1 bg-foreground/50
+  cursor-not-allowed`); idle + text = one button (send, `ml-1 bg-foreground`);
+  **working + empty box = one button (stop, `border-border`, no `ml-1`);
+  working + text = two buttons, stop at the left and send at the right**. So
+  "press the rightmost composer button" sends the draft into the running agent
+  in precisely the state a stop is wanted.
 
 ### ✓ Alternative: drive Claude Code directly (not wired)
 Because `sessions.id == claude_session_id` and the worktree is a normal repo,

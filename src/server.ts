@@ -50,6 +50,7 @@ import {
 	setAgentOptions,
 	setRestartGuard,
 	setWorkspaceStatus,
+	stopTurn,
 	WORKSPACE_STATUS_LABELS
 } from './writes.ts'
 
@@ -796,6 +797,50 @@ const server = http.createServer(async (req, res) => {
 			const applied = await applyAgentPatch(ws, sessionId, body)
 			if (!applied.ok) return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
 			return json(req, res, 200, { ok: true, session: reads.listSessions(ws.id).find(s => s.id === sessionId) })
+		}
+
+		// POST /api/sessions/:id/stop — the desktop app's stop button, for one chat.
+		m = pathname.match(/^\/api\/sessions\/([^/]+)\/stop$/)
+		if (req.method === 'POST' && m) {
+			const sessionId = decodeURIComponent(m[1])
+			const body = JSON.parse((await readBody(req)) || '{}') as { workspaceId?: string }
+			const ws = body.workspaceId
+				? reads.getWorkspace(body.workspaceId)
+				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+			const located = locateChat(ws, sessionId)
+			if ('error' in located) return json(req, res, 409, { error: located.error })
+			// Nothing running is a success, not an error: the phone shows Stop the moment it
+			// sends (the optimistic hint) and a turn that ends on its own a beat before the tap
+			// is the common case, not a mistake worth a red banner. It also keeps the one
+			// keystroke this route presses off an idle chat entirely — Conductor's own
+			// composer has no stop button to mis-tap there either.
+			const before = reads.listSessions(ws.id).find(s => s.id === sessionId)
+			if (before?.status !== 'working') {
+				return json(req, res, 200, { ok: true, alreadyIdle: true, session: before })
+			}
+			const result = await stopTurn({ workspace: ws, sessionId, tab: located.tab })
+			if (!result.ok) return json(req, res, 502, result)
+			// The DB is the receipt, exactly as it is for agent settings: the keystroke is
+			// fire-and-forget, so what counts is `status` leaving `working`. Conductor writes
+			// that a beat after it tears the turn down.
+			let observed = before.status
+			for (let i = 0; i < 20 && observed === 'working'; i++) {
+				await sleep(300)
+				observed = reads.listSessions(ws.id).find(s => s.id === sessionId)?.status ?? observed
+			}
+			if (observed === 'working') {
+				return json(req, res, 502, {
+					ok: false,
+					strategy: result.strategy,
+					error: 'Conductor took the stop but the agent is still working. Try again, or stop it on your Mac.'
+				})
+			}
+			return json(req, res, 200, {
+				ok: true,
+				strategy: result.strategy,
+				session: reads.listSessions(ws.id).find(s => s.id === sessionId)
+			})
 		}
 
 		// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged

@@ -22,7 +22,11 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
     and writes the composer's `AXTextArea` directly. Pressing the sidebar
     `AXLink` and the Cmd+K palette remain the fallback. The same path can change
     the chat's model / effort / plan / fast (`POST /api/sessions/:id/agent`);
-    values are read from the DB.
+    values are read from the DB. Stopping a running turn
+    (`POST /api/sessions/:id/stop`) rides the same focus-and-assert path and then
+    presses Conductor's own **`⌘⇧⌫` "Cancel agent"** — a keystroke rather than the
+    composer's stop button, which exposes no accessible name and sits beside the
+    send button whenever the box has a draft.
   - **deep links** carry two of the writes now: `POST /api/workspaces` fires
     `conductor://prompt=…&path=…` to *create* a workspace, and the send path
     fires `conductor://workspace?id=…&session=…` to *focus* one — no
