@@ -140,8 +140,15 @@ export function SessionView() {
 					workingSince={workingSince}
 					queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 				/>
-				{/* The agent controls render inside the composer card (see Composer.tsx). */}
-				<Composer key={ws.id} session={activeSession} sessionId={sessionId} workspaceId={ws.id} actuator={actuator} />
+				{/* The agent controls — and the Stop button — render inside the composer card. */}
+				<Composer
+					key={ws.id}
+					session={activeSession}
+					sessionId={sessionId}
+					workspaceId={ws.id}
+					working={working}
+					actuator={actuator}
+				/>
 			</div>
 
 			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}

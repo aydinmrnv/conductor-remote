@@ -18,6 +18,7 @@ import type {
 	SettingsResponse,
 	StateResponse,
 	StatusResult,
+	StopResult,
 	WorkspaceDiff
 } from './types.ts'
 
@@ -162,6 +163,18 @@ export const client = {
 			`/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
 			{ method: 'POST', body: JSON.stringify({ text, workspaceId, agent }) },
 			SEND_TIMEOUT_MS
+		),
+	/**
+	 * Stop the answer this chat is streaming — Conductor's own "Cancel agent".
+	 * The relay focuses the chat, presses it, then waits for `sessions.status` to
+	 * leave `working` before answering, so it gets the action budget rather than a
+	 * poll's.
+	 */
+	stop: (sessionId: string, workspaceId: string) =>
+		api<StopResult>(
+			`/api/sessions/${encodeURIComponent(sessionId)}/stop`,
+			{ method: 'POST', body: JSON.stringify({ workspaceId }) },
+			ACTION_TIMEOUT_MS
 		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
 	newChat: (workspaceId: string) =>

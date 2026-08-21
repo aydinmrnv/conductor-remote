@@ -329,6 +329,36 @@ Two asymmetric halves — keep them separate:
     and an open menu dies the moment someone clicks elsewhere — so a run that fails
     while you are using the Mac is contention, not a bug. Uncontended it is 6/6 at
     ~11s; typing in Conductor at the same time made it look flaky.
+
+    **Stopping a turn** (`stopTurn`, `POST /api/sessions/:id/stop`) is the one
+    write here that is a **keystroke on purpose**, against the file's own
+    preference for AX presses. Conductor's own shortcut is **`⌘⇧⌫` ("Cancel
+    agent")**, read off its Keyboard shortcuts dialog (`⌘/` ▸ Chat), and the
+    composer's stop *button* cannot be addressed instead: it carries **no AX name,
+    description, help or identifier**, so the only thing separating it from the
+    send button beside it is its Tailwind class list — and while a chat is working
+    **with a draft in the composer both buttons are on screen at once**, stop left,
+    send right. "Press the last button in the composer" therefore *steers the
+    running agent with half-typed text* in exactly the case someone reaches for
+    stop. (The signature, if it is ever needed: send always carries `ml-1` plus a
+    `bg-foreground*`; stop carries `border-border` and no `ml-1`.) The keystroke
+    goes behind `⌘L` ("Focus chat input") so a focused terminal panel can't swallow
+    it, and behind the same pane assertion a send makes — cancelling the wrong
+    agent destroys work that was running fine, which is the same damage as landing
+    a prompt in the wrong chat. **The branch is required, not optional**, since
+    that assertion is the whole guard. The receipt is the DB, like agent settings:
+    the route refuses to press anything unless `sessions.status` reads `working`
+    first (a turn that ended a beat before the tap answers `alreadyIdle`, which is
+    a success, not a red banner) and then waits for it to leave `working`. The
+    phone mirrors the desktop composer exactly — working with an empty box shows
+    only Stop, working with a draft shows Stop *and* Send — because Conductor
+    allows steering and a Stop that replaced Send would take that away. A stopped
+    turn ends with the frame `{"type":"error","content":"aborted by user"}`, which
+    carries no `message.content` and so used to reach the phone as `transcript.ts`'s
+    raw-JSON dump for unknown shapes — harmless while stopping needed a Mac, and the
+    last line of every stopped chat once the phone could do it. Measured live: the
+    stop lands in ~3s, the neighbouring chat in the same workspace keeps working,
+    and the composer's draft survives the chord untouched.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently

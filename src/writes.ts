@@ -394,6 +394,46 @@ end tell
 }
 
 /**
+ * Stop the answer a chat is streaming — the desktop app's stop button, reached
+ * through the same focus-and-assert path as a send and then Conductor's own
+ * "Cancel agent" shortcut (see `cancelAgent` in conductor.applescript for why a
+ * keystroke rather than the button).
+ *
+ * The branch is required rather than optional. Everywhere else a workspace with
+ * no branch merely loses the pane assertion; here that assertion is the only thing
+ * standing between "stop this agent" and "throw away a different agent's turn", so
+ * a target that can't be checked is refused instead of aimed.
+ *
+ * Nothing is confirmed here: `sessions.status` leaving `working` is the receipt and
+ * server.ts waits for it, the same way agent settings are confirmed against the DB
+ * rather than against the UI that was just driven.
+ */
+export async function stopTurn(target: SendTarget): Promise<SendResult> {
+	if (!target.workspace.branch) {
+		return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
+	}
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+my activateConductor()
+my focusWorkspace()
+my selectChatTab()
+my cancelAgent()
+return "ok"`.trim()
+	try {
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: { ...process.env, ...targetEnv(target) },
+				timeout: SEND_ATTEMPT_MS
+			})
+		)
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
  * Conductor stores the effort level as `sessions.claude_effort_level`, but the
  * composer button is labelled with the human name and *cycles* through them in
  * this order. Both directions are needed: the label to press toward, and the DB

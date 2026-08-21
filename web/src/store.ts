@@ -110,6 +110,12 @@ interface AppState {
 	setOnline: (online: boolean) => void
 	setUpdate: (update: UpdateStatus | null) => void
 	markWorking: (sessionId: string) => void
+	/**
+	 * Drop that hint. A confirmed stop has to clear it by hand, or the chat keeps
+	 * claiming to work for the rest of the hint's 15s — a spinner running against a
+	 * Stop button that has already done its job.
+	 */
+	clearWorking: (sessionId: string) => void
 	/** Add (or reset, by id — used by Retry) an optimistic prompt in the `sending` state. */
 	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string }) => void
 	failPending: (id: string, error: string) => void
@@ -155,6 +161,10 @@ export const useApp = create<AppState>((set, get) => {
 		setOnline: online => set(online ? { online, lastSyncAt: Date.now() } : { online }),
 		setUpdate: update => set({ update }),
 		markWorking: sessionId => set({ workingHints: { ...get().workingHints, [sessionId]: Date.now() } }),
+		clearWorking: sessionId => {
+			const { [sessionId]: _gone, ...rest } = get().workingHints
+			set({ workingHints: rest })
+		},
 		addPending: m =>
 			set({
 				pending: [

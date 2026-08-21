@@ -789,6 +789,40 @@ on selectChatTab()
 	end tell
 end selectChatTab
 
+on cancelAgent()
+	-- Stop the answer this chat is streaming: Conductor's own "Cancel agent"
+	-- command, Command-Shift-Delete (key code 51). Taken from its Keyboard
+	-- shortcuts dialog (Command-slash, section "Chat"), not guessed - and it is
+	-- the only lever there is. The menu bar carries no stop command and neither
+	-- does the palette, and the composer's stop BUTTON is unnamed to
+	-- Accessibility: no title, no description, no help, no identifier, telling
+	-- itself apart from the send button beside it only by its Tailwind classes.
+	-- Which is a distinction worth nothing at the moment it matters, because
+	-- while a chat is working with a draft in the composer BOTH buttons are on
+	-- screen - stop on the left, send on the right - so "press the last button"
+	-- steers the running agent with whatever was half-typed instead of stopping
+	-- it. A keystroke can't confuse the two.
+	--
+	-- The keystroke lands wherever focus is, so this asserts the pane first, the
+	-- same check a send makes before typing. Cancelling the wrong agent destroys
+	-- work that was running fine, which is the same class of damage as landing a
+	-- prompt in the wrong chat and gets the same answer: error out, never guess.
+	set strips to my tabGroups()
+	if (count of strips) is 0 then error "couldn't find the chat pane to cancel in"
+	my assertWorkspace(item 1 of strips)
+	-- Command-L ("Focus chat input") first, so the shortcut is delivered inside the
+	-- chat view rather than to a terminal panel that had focus, where the terminal
+	-- would swallow it. It also parks focus somewhere harmless: the composer keeps
+	-- its draft, since Conductor binds this chord to Cancel agent rather than to any
+	-- text-deletion the field would otherwise do with it.
+	tell application "System Events"
+		keystroke "l" using {command down}
+		delay 0.2
+		key code 51 using {command down, shift down}
+	end tell
+	delay 0.3
+end cancelAgent
+
 on composerControls()
 	set strips to my tabGroups()
 	if (count of strips) is 0 then error "couldn't find the composer"
