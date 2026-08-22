@@ -327,7 +327,8 @@ Two asymmetric halves — keep them separate:
     is the one taken from the UI rather than confirmed against stored data. One
     caveat when testing: `uiTurn` serializes *our* UI operations, not the human's,
     and an open menu dies the moment someone clicks elsewhere — so a run that fails
-    while you are using the Mac is contention, not a bug. Uncontended it is 6/6 at
+    while the user is at the Mac is contention, not a bug, and the answer is the
+    ask-first rule below (Traps), never a re-run. Uncontended it is 6/6 at
     ~11s; typing in Conductor at the same time made it look flaky.
 
     **Stopping a turn** (`stopTurn`, `POST /api/sessions/:id/stop`) is the one
@@ -461,8 +462,15 @@ Two asymmetric halves — keep them separate:
   `-rw------- root` — `looksLikeHotspot` is a name guess that only ever *sorts* a
   list. The one real fact available is world-readable: `AutoHotspotMode` in
   `com.apple.airport.preferences.plist` (System Settings ▸ Wi-Fi ▸ Auto-join
-  Hotspot), and on `Never` the Mac will not reach for your phone unprompted no matter
-  what this relay does. Settings hold **SSIDs only** — passing a password to
+  Hotspot), and on `Never` macOS itself will not reach for your phone unprompted.
+  The relay has one lever of its own for that case: when a join answers "Could
+  not find network" (a hotspot doesn't broadcast until asked), the watchdog
+  presses the hotspot's row in Control Center's Wi-Fi popover via Accessibility
+  (`joinInstantHotspot` — writes.ts wraps the conductor.applescript handler),
+  which wakes the phone's hotspot over Continuity exactly like clicking it. It
+  needs an unlocked screen and an unattended Mac (any human click closes the
+  popover), so Auto-Join `Automatic` remains the layer below it. Settings hold
+  **SSIDs only** — passing a password to
   `networksetup` *writes* it into the keychain, so the relay only joins networks
   macOS already knows, and nothing secret reaches a file `/api/logs` might echo.
 
@@ -511,6 +519,16 @@ bind trap below), not by unit test.
 
 ## Traps (these will bite)
 
+- **Ask before every run that drives this Mac's live UI.** Anything that opens,
+  presses, or focuses real UI — Control Center's Wi-Fi popover, a sidebar row's
+  status menu, Conductor's window — fights the person at the Mac: their next
+  click closes what the run opened, the run steals focus from what they were
+  doing, and both sides lose. Do not explain that away in a result ("contention,
+  not a fault") and do not re-run; **ask the user for confirmation first, one ask
+  per run**, saying what will appear on screen and for roughly how long, and wait
+  for the yes. A yes covers exactly one run — not the topic, not the session.
+  Reads that draw nothing (DB, git, CGWindowList, AX reads of existing windows)
+  need no ask.
 - **Two run paths, one source: dev strips `.ts` live, the tarball ships compiled JS.**
   In a dev checkout `bin/cli.js` imports the `src/*.ts`/`scripts/*.ts` sources directly
   under plain `node` (Node 24's default TS *type-stripping*, no `--experimental-transform-types`).
@@ -584,9 +602,14 @@ bind trap below), not by unit test.
   Events"` block, ordinary-looking variable names resolve as **System Events
   terms** — `tabs` and `groups` become "every tab/group of the process", so a loop
   over your own list quietly iterates the wrong thing and the handler returns
-  nothing. Keep logic *outside* the tell and reach in via one-line helpers
-  (`tabLabel`, `paneLabels`), or name variables `strip`/`pane`. Nothing else in
-  the toolchain reads this language, so run `yarn verify` after every edit.
+  nothing. **Handler parameters are not exempt**: `findAxId`'s first argument was
+  once named `container` (an SE dictionary word), so inside the tell it resolved
+  as the term, the walk found nothing through an error-eating `try`, and a
+  provably open Control Center popover read as "no popover" for a whole debugging
+  session — `osacompile` and the handler check both pass it. Keep logic *outside*
+  the tell and reach in via one-line helpers (`tabLabel`, `paneLabels`), or name
+  variables `strip`/`pane`/`parentEl`. Nothing else in the toolchain reads this
+  language, so run `yarn verify` after every edit.
   - **It is a real file, and that is load-bearing in two directions.** `writes.ts`
     reads it as a sibling of its own module (`import.meta.dirname`, the one place
     that may — see the `packageRoot()` rule below), so `yarn build:node` has to
