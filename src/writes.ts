@@ -321,12 +321,12 @@ function targetEnv(target: SendTarget): Record<string, string> {
 }
 
 /** osascript echoes the whole failing script back; keep just the reason for the phone. */
-function osaError(err: unknown): string {
+function osaError(err: unknown, timeoutMsg = 'Conductor took too long to respond'): string {
 	const raw = err instanceof Error ? err.message : String(err)
 	// A timeout kill carries no execution error at all — its first line is
 	// "Command failed: osascript -e" plus the whole script, which is useless here.
 	if (err && typeof err === 'object' && 'killed' in err && (err as { killed?: boolean }).killed) {
-		return 'Conductor took too long to respond'
+		return timeoutMsg
 	}
 	return raw.match(/execution error: (.+?) \(-?\d+\)/)?.[1] ?? raw.split('\n')[0]
 }
@@ -430,6 +430,49 @@ return "ok"`.trim()
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
+ * Press the Wi-Fi menu's row for a personal hotspot — Instant Hotspot, the same
+ * button a human clicks. `networksetup` can only join a network that is
+ * broadcasting, and a personal hotspot usually isn't; the row in Control
+ * Center's Wi-Fi popover is fed by Continuity over Bluetooth, and pressing it
+ * asks the phone to wake its hotspot. The funnel watchdog reaches for this when
+ * a plain join answered "Could not find network".
+ *
+ * The one UI write here that doesn't target Conductor, and it still takes a
+ * uiTurn: the popover steals key focus, so a palette fallback running at the
+ * same moment would type into it. The name travels via a temp file like the
+ * prompt does — same escaping-and-encoding dodge, and hotspot names ("Han
+ * høyes iPhone") are non-ASCII more often than prompts are. Success here means
+ * *pressed*, nothing more: joining takes several seconds of Bluetooth wake +
+ * DHCP, so the caller owns the wait, and it watches `hasDefaultRoute()` — the
+ * one link signal that needs no permission — not this function's word.
+ * Everything else — the lock check, the toggle-aware close, the already-open
+ * abort, the contention story — lives with the handler in conductor.applescript.
+ */
+export async function joinInstantHotspot(name: string): Promise<{ ok: boolean; error?: string }> {
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+my joinInstantHotspot()`.trim()
+	const os = await import('node:os')
+	const fs = await import('node:fs/promises')
+	const tmp = path.join(os.tmpdir(), `relay-hotspot-${process.pid}-${Date.now()}.txt`)
+	await fs.writeFile(tmp, name, 'utf8')
+	try {
+		await uiTurn(() =>
+			exec('osascript', ['-e', script], {
+				env: { ...process.env, RELAY_HOTSPOT_FILE: tmp },
+				timeout: 25_000
+			})
+		)
+		return { ok: true }
+	} catch (err) {
+		return { ok: false, error: osaError(err, 'the Wi-Fi menu press took too long') }
+	} finally {
+		await fs.rm(tmp, { force: true }).catch(() => undefined)
 	}
 }
 

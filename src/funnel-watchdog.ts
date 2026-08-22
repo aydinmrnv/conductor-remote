@@ -31,6 +31,7 @@ import { promisify } from 'node:util'
 import { readSettings } from './settings.ts'
 import { magicDnsName, readExposeMode, relayPort, tailscaleBin } from './tailscale.ts'
 import { hasDefaultRoute, joinNetwork, preferredNetworks } from './wifi.ts'
+import { joinInstantHotspot } from './writes.ts'
 
 const execFileP = promisify(execFile)
 
@@ -165,6 +166,19 @@ let lastRejoinAt = 0
 
 const REJOIN_COOLDOWN_MS = 5 * 60 * 1000 // a network switch is disruptive; never churn on one
 const REJOIN_SETTLE_MS = 12 * 1000 // DHCP + tailscaled noticing the new endpoint
+// An Instant Hotspot press has the phone's Bluetooth wake + hotspot spin-up in front of the
+// same DHCP wait, so it gets a longer leash than a plain join before the tick gives up on it.
+const HOTSPOT_SETTLE_MS = 30 * 1000
+
+/** Poll for the default route instead of one fixed sleep — a join that lands early returns early. */
+async function routeAppeared(waitMs: number): Promise<boolean> {
+	const until = Date.now() + waitMs
+	while (Date.now() < until) {
+		if (await hasDefaultRoute()) return true
+		await new Promise(r => setTimeout(r, 3000))
+	}
+	return hasDefaultRoute()
+}
 
 /**
  * Last resort when the probe is down: this Mac has no link at all, so move it onto a
@@ -181,6 +195,14 @@ const REJOIN_SETTLE_MS = 12 * 1000 // DHCP + tailscaled noticing the new endpoin
  *  - Only into a network macOS already holds credentials for, so no password is stored
  *    or passed; an SSID that isn't in the preferred list is named in the log, not tried.
  *  - Behind a cooldown, so a Mac that is simply off the air doesn't cycle its Wi-Fi.
+ *
+ * Two ways in, tried in order. `networksetup` first — cheap, no UI — and when it answers
+ * "Could not find network" (a hotspot doesn't broadcast until asked), the Accessibility
+ * press on the Wi-Fi menu's own row (`joinInstantHotspot` in writes.ts), which wakes the
+ * phone's hotspot over Continuity exactly like clicking it. The press needs an unlocked
+ * screen — the lock hides the session from Accessibility, and the failure names that —
+ * so a lid-closed Mac still wants macOS's own Auto-Join Hotspot set to Automatic as the
+ * layer below this one.
  *
  * Returns true if a join reported success, meaning the caller should re-register rather
  * than treat this tick as an ordinary failure.
@@ -200,17 +222,30 @@ async function tryRejoin(): Promise<boolean> {
 	lastRejoinAt = Date.now()
 	for (const ssid of candidates) {
 		log(`no default route — joining fallback network "${ssid}"`)
+		let settleMs = REJOIN_SETTLE_MS
 		const joined = await joinNetwork(ssid)
 		if (!joined.ok) {
 			log(`join "${ssid}" failed: ${joined.error}`)
-			continue
+			// networksetup can only join a network that is broadcasting, and a personal
+			// hotspot usually isn't — its row in the Wi-Fi menu arrives over Continuity,
+			// and pressing it wakes the hotspot the way clicking it by hand does. Tried
+			// for every failed candidate rather than only hotspot-looking names: the
+			// name heuristic never decides anything (see looksLikeHotspot), and for an
+			// ordinary network that's simply out of range the press fails in words
+			// ("not in the Wi-Fi menu") that cost one popover flash.
+			log(`pressing the Wi-Fi menu's "${ssid}" row instead (Instant Hotspot)`)
+			const pressed = await joinInstantHotspot(ssid)
+			if (!pressed.ok) {
+				log(`Instant Hotspot press for "${ssid}" failed: ${pressed.error}`)
+				continue
+			}
+			settleMs = HOTSPOT_SETTLE_MS
 		}
-		await new Promise(r => setTimeout(r, REJOIN_SETTLE_MS))
-		if (await hasDefaultRoute()) {
+		if (await routeAppeared(settleMs)) {
 			log(`joined "${ssid}" and the link is up`)
 			return true
 		}
-		log(`joined "${ssid}" but no default route appeared after ${REJOIN_SETTLE_MS / 1000}s`)
+		log(`joined "${ssid}" but no default route appeared after ${settleMs / 1000}s`)
 	}
 	return false
 }
