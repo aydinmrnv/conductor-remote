@@ -62,6 +62,8 @@ function usage() {
 			'                                           read transcripts and drive workspaces via the relay',
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
+			'  conductor-remote config                  what the daemon is actually configured with, and',
+			'                                           where each value came from (read-only)',
 			'  conductor-remote logs [-n N] [--no-follow]  tail the running relay’s logs (follows by default)',
 			'  conductor-remote nosleep [duration]      keep this Mac awake (incl. lid-closed) until',
 			'                                           Ctrl-C or the duration (e.g. 1h, 90m)',
@@ -105,6 +107,12 @@ switch (cmd) {
 		// `nosleep 1h` → `1h` and `nosleep setup --uninstall` → `setup --uninstall`.
 		process.argv = [process.argv[0], process.argv[1], ...rest]
 		await import(resolveEntry('../dist-node/scripts/nosleep.js', '../scripts/nosleep.ts'))
+		break
+	case 'config':
+		// Read-only view of the daemon's effective configuration. A service.ts subcommand, re-shaped the
+		// same way `logs` is, because the answer lives in the plist that script writes.
+		process.argv = [process.argv[0], process.argv[1], 'config']
+		await import(resolveEntry('../dist-node/scripts/service.js', '../scripts/service.ts'))
 		break
 	case 'logs':
 		// `logs` is a service.ts subcommand; re-shape argv so its argv[2] is `logs` (mirrors the `service` case).
