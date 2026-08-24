@@ -50,12 +50,13 @@
 		"typecheck": "tsc -p tsconfig.json",
 		"lint": "biome check .",
 		"fix": "biome check . --fix",
-		"verify": "yarn typecheck && yarn lint && yarn check:applescript && yarn check:nosleep",
+		"verify": "yarn typecheck && yarn lint && yarn check:applescript && yarn check:nosleep && yarn check:uilock",
 		"release": "semantic-release",
 		"prepack": "yarn build && yarn build:node",
 		"postinstall": "husky || true",
 		"check:applescript": "node scripts/check-applescript.ts",
-		"check:nosleep": "node scripts/check-nosleep.ts"
+		"check:nosleep": "node scripts/check-nosleep.ts",
+		"check:uilock": "node scripts/check-uilock.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.8",

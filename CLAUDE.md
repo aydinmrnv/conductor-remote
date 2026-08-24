@@ -128,7 +128,22 @@ Two asymmetric halves — keep them separate:
   step's fail-closed assertion *cannot* catch, since each script's reads are true
   when it makes them. It was unreachable while every write was one person tapping
   one button; the first-prompt and parked-prompt queues, which send on their own
-  schedule, are what made it reachable.
+  schedule, are what made it reachable. **`src/mcp.ts` is what made the queue
+  itself real**, and "there is never a real queue of them" stopped being true with
+  it: N agents can now ask at once, so the lock carries a **bounded** queue
+  (past `MAX_UI_QUEUE` a caller is refused with `UiBusyError` → HTTP 503, because a
+  write costs seconds and a deep queue only guarantees the caller times out
+  anyway — "busy, retry" is actionable where "took too long" is indistinguishable
+  from a broken Conductor) and **two priorities** (`withUiPriority`, carried in an
+  `AsyncLocalStorage` scope rather than through eight signatures that don't care:
+  the phone is `interactive`, agents and both delivery queues are `background`, and
+  background never overtakes a waiting interactive run, though it is never
+  *interrupted* either). The subtle one: **release the lock before resolving the
+  caller.** Settling first and cleaning up in a chained `.then` frees it one
+  microtask late, so code that awaits a write and then reads `uiQueueDepth()` is
+  told a run is still in flight when none is. `scripts/check-uilock.ts` exists
+  because `tsc` reads all of this happily and caught neither that bug nor the
+  cascade behind it.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
   interface (`src/writes.ts`), two strategies:
   - `applescript` (**default**): drives Conductor's real UI send. **Conductor's
@@ -406,6 +421,44 @@ Two asymmetric halves — keep them separate:
   help either since the document is never retrieved. That, not cost, is the case for
   embeddings if search ever needs them.
 
+- **MCP is the same relay with an agent on the other end** (`src/mcp-tools.ts`).
+  Ten tools, and **every one of them is an HTTP call to the
+  running relay** — nothing here opens `conductor.db` and nothing here runs
+  AppleScript. That is the load-bearing part, not a convenience: `uiTurn` is a
+  *process-local* lock, so an MCP server that drove the UI itself would sit outside
+  it and two agents focusing different workspaces would land each other's prompts.
+  Routed through the relay, the phone, both delivery queues and every agent share
+  one lock. Requests carry `x-relay-client: mcp`, which `server.ts` turns into
+  `background` priority, so an agent never makes a human tap wait. It is hand-rolled
+  **Two transports, one tool set.** `src/mcp.ts` is stdio (`conductor-remote mcp`),
+  spawned as a child process by a local client; `POST /mcp` in `server.ts` is the
+  Streamable HTTP transport for a client that can only reach a URL. They share
+  `mcp-tools.ts` through an injected `call`, which is the only reason they cannot
+  drift — verified by diffing both transports' output for the same query. The HTTP
+  one calls the relay's own API **over loopback rather than reaching into
+  `reads`/`writes`**: a sub-millisecond hop buys one code path, against carving every
+  handler out of a 1000-line router. It is deliberately minimal — the server never
+  initiates a message, so there is no SSE stream, `GET` answers 405 (which the spec
+  allows) and no `Mcp-Session-Id` is issued. **A request carrying an `Origin` header
+  is refused**: a real MCP client sends none and a browser cannot omit one, so that
+  single check closes the DNS-rebinding hole the spec warns about without the relay
+  needing to know its own hostname behind Tailscale's TLS. And note *who* can reach
+  it is `EXPOSE`'s business, not the endpoint's: `tailnet` means any device on the
+  tailnet from any network (not LAN-only), while a **hosted** client — an agent on
+  someone else's servers — is on no tailnet and needs `public`, where the token is
+  the only thing between the internet and `send_prompt`.
+  rather than built on `@modelcontextprotocol/sdk` because stdio MCP is
+  newline-delimited JSON-RPC 2.0 and the SDK is **91 packages / 24 MB** (express,
+  hono, cors, jose) for a server that speaks neither HTTP nor OAuth — and this
+  package auto-updates itself while holding a token that drives your Mac, so the
+  supply-chain surface is not abstract. Two traps. **stdout is the wire**, so
+  `console.log`/`console.info` are redirected to stderr at import: one stray line
+  anywhere in the process is parsed as a protocol message and kills the session.
+  And **end-of-stdin must drain, not exit** — a tool call is an await on the relay
+  and a UI write takes tens of seconds, so exiting straight from the `close` event
+  silently drops every in-flight reply, which looks exactly like a client that
+  stopped listening.
+
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
   side of the split. `src/notify.ts` polls the same read-only SQLite for
   `sessions.status` transitions and POSTs a Web Push message; no Conductor
@@ -532,6 +585,7 @@ yarn verify   # typecheck (tsc) + lint (Biome) + AppleScript check + nosleep che
 yarn fix      # Biome autofix (format + safe lints)
 yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
 yarn check:nosleep     # run NOSLEEP_BODY against a stub pmset in a temp dir (no root, no real pmset)
+yarn check:uilock      # the UI lock's queue: order, priority, release-on-failure, cap
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
@@ -540,10 +594,11 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Two automated tests, and they share one reason to exist: **each guards a language
-nothing else in the toolchain reads.** Both live in a string or a sibling file, so
-`tsc` sees text and Biome sees text, and a mistake surfaces for the first time on
-someone's phone or someone's Mac.
+Three automated tests. Two of them share one reason to exist: **each guards a
+language nothing else in the toolchain reads** — they live in a string or a sibling
+file, so `tsc` sees text and Biome sees text, and a mistake surfaces for the first
+time on someone's phone or someone's Mac. The third guards control flow `tsc` reads
+fine and still cannot judge.
 
 - `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
   the way `osascript` will, and every `my handler()` call, in the script *and* in
@@ -562,6 +617,13 @@ someone's phone or someone's Mac.
   no fix on the phone. Covers the ordinary window, a clean takeover, a takeover the
   incumbent refuses (must exit 75, must not capture), and a recycled pid (must not
   be signalled). Portable, so the ubuntu job runs it too.
+
+- `scripts/check-uilock.ts` — the UI lock's queue (`writes.ts` ▸ `uiTurn`), driven
+  with timers instead of AppleScript, since it is the control flow being tested and
+  not the scripts. It earns its place on cost: a run that fails to release the lock
+  wedges **every** future write with no error and no fix from the phone, and a
+  priority bug puts a human tap behind a minute of agent work. It found both bugs in
+  the queue while that queue was being written. Portable, so the ubuntu job runs it.
 
 Nothing else is tested. Verify a runtime change by curling the relay (see the
 bind trap below), not by unit test.
