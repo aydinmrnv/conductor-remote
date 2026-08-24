@@ -43,12 +43,18 @@ jobs:
           node-version: 24
       - run: node scripts/check-applescript.ts
 
-  # Conventional Commits gate. The local husky hook is best-effort (can be
-  # bypassed with --no-verify); this backstops it so semantic-release always
-  # sees analyzable commits on main. Repo uses merge commits, so every PR commit
-  # lands on main and must conform.
+  # Conventional Commits gate, and the only one that actually runs. The husky
+  # commit-msg hook is not a second line of defence: besides `--no-verify`, it is
+  # simply *absent* from any clone that hasn't run `yarn install`, because husky
+  # points core.hooksPath at .husky from a `prepare` script — so a fresh checkout
+  # (a cloud agent's container, a CI-side clone) commits with no gate at all and
+  # no warning that it had none.
+  #
+  # It lints two different strings because the repo squash-merges, and GitHub
+  # picks the squash subject by commit count: a single-commit PR lands *that
+  # commit's* subject, a multi-commit PR lands the *PR title*. Either one can be
+  # the unparseable string, and checking only the commits misses half of that.
   commitlint:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +66,33 @@ jobs:
           node-version: 24
           cache: yarn
       - run: yarn install --immutable
-      - run: yarn commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+      - name: Branch commits
+        if: github.event_name == 'pull_request'
+        run: yarn commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+      # The title is whatever the PR's author typed, so it rides in an env var —
+      # interpolated straight into `run:` it would be a shell injection.
+      - name: PR title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s' "$PR_TITLE" | yarn commitlint --verbose
+      # The backstop for a red commitlint that got merged anyway. semantic-release
+      # *ignores* a commit it can't parse, and "no relevant changes" is a silent
+      # success — so main goes green, no tag is cut, and whatever that commit
+      # carried never reaches npm or the relays that auto-update from it. This is
+      # what makes an unreleasable main look unreleasable.
+      - name: What landed on main
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          # A first push, or one over rewritten history, reports an all-zero
+          # `before`; fall back to the tip's parent rather than linting the whole
+          # history back to the root commit.
+          from="$BEFORE"
+          case "$from" in '' | 0000000000000000000000000000000000000000) from="$(git rev-parse "$AFTER^")" ;; esac
+          yarn commitlint --from "$from" --to "$AFTER" --verbose
 
   release:
     # check-applescript gates the release too: the tarball ships the .applescript
