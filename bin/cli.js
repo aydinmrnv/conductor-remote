@@ -58,6 +58,8 @@ function usage() {
 			'',
 			'Usage:',
 			'  conductor-remote [start]                 run the relay (default)',
+			'  conductor-remote mcp                     MCP server on stdio — lets an agent search chats,',
+			'                                           read transcripts and drive workspaces via the relay',
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
 			'  conductor-remote logs [-n N] [--no-follow]  tail the running relay’s logs (follows by default)',
@@ -88,6 +90,10 @@ switch (cmd) {
 	case undefined:
 	case 'start':
 		await import(resolveEntry('../dist-node/src/server.js', '../src/server.ts'))
+		break
+	case 'mcp':
+		// MCP server on stdio: stdout is the JSON-RPC wire, so nothing else may print there.
+		await import(resolveEntry('../dist-node/src/mcp.js', '../src/mcp.ts'))
 		break
 	case 'service':
 		// service.ts reads its subcommand from argv[2]; re-shape argv so `service install` → `install`.

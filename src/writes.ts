@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -20,15 +21,121 @@ const exec = promisify(execFile)
  * It was unreachable while every write was one person tapping one button. It
  * stopped being unreachable when the relay grew a first-prompt queue that sends
  * on its own schedule (`firstprompt.ts`), so the queue can now fire while the
- * phone is mid-send. Cheap insurance either way: these run for seconds, the
- * caller is already awaiting, and there is never a real queue of them.
+ * phone is mid-send.
+ *
+ * **"There is never a real queue of them" stopped being true** once `src/mcp.ts`
+ * let agents drive this. A serialized queue was enough when the only two writers
+ * were a person and a timer; with N agents the queue itself becomes the problem,
+ * so three things go with the lock:
+ *
+ *  - **Depth is bounded.** Past `MAX_UI_QUEUE` a caller is refused immediately
+ *    with `UiBusyError` instead of joining a line it cannot see. A write takes
+ *    seconds against Conductor's real UI, so a deep queue guarantees the caller
+ *    times out anyway — and "busy, try again" is a fact you can act on, while
+ *    "took too long" is indistinguishable from a broken Conductor.
+ *  - **The person wins.** The phone is `interactive`, agents and the delivery
+ *    queues are `background`, and a background run never overtakes a waiting
+ *    interactive one. Without this a burst of agent writes puts a human tap
+ *    behind a minute of machine work on a lock they cannot see.
+ *  - **Depth is readable** (`uiQueueDepth`), so a caller can say what it is
+ *    waiting for rather than just hanging.
+ *
+ * Priority rides in an `AsyncLocalStorage` scope rather than a parameter: it is a
+ * property of *who asked*, known only at the request boundary, and threading it
+ * through every write signature would put it in eight places that don't care.
  */
-let uiTail: Promise<unknown> = Promise.resolve()
-function uiTurn<T>(op: () => Promise<T>): Promise<T> {
-	// `.then(op, op)` so a previous failure doesn't skip the next turn.
-	const turn = uiTail.then(op, op)
-	uiTail = turn.catch(() => undefined)
-	return turn
+export type UiPriority = 'interactive' | 'background'
+
+/** Waiting runs past this are refused rather than queued. */
+const MAX_UI_QUEUE = 4
+
+const uiPriorityScope = new AsyncLocalStorage<UiPriority>()
+
+/** Run `fn` with every UI operation it triggers marked at `priority`. */
+export function withUiPriority<T>(priority: UiPriority, fn: () => Promise<T>): Promise<T> {
+	return uiPriorityScope.run(priority, fn)
+}
+
+export class UiBusyError extends Error {
+	readonly waiting: number
+	constructor(waiting: number) {
+		super(`Conductor's UI is busy — ${waiting} operation${waiting === 1 ? '' : 's'} already queued. Try again shortly.`)
+		this.name = 'UiBusyError'
+		this.waiting = waiting
+	}
+}
+
+interface UiWaiter {
+	/** 0 = interactive, 1 = background. Lower goes first. */
+	rank: number
+	seq: number
+	start: () => void
+}
+
+let uiRunning = false
+let uiSeq = 0
+const uiWaiting: UiWaiter[] = []
+
+/** What the UI lock is doing right now — `waiting` excludes the run in flight. */
+export function uiQueueDepth(): { waiting: number; busy: boolean } {
+	return { waiting: uiWaiting.length, busy: uiRunning }
+}
+
+function pumpUi(): void {
+	if (uiRunning) return
+	const next = uiWaiting.shift()
+	if (!next) return
+	uiRunning = true
+	next.start()
+}
+
+/**
+ * Take the lock, run `op`, release it. Exported for `scripts/check-uilock.ts`,
+ * which is the only way this queue's control flow gets read by anything.
+ */
+export function uiTurn<T>(op: () => Promise<T>): Promise<T> {
+	const rank = uiPriorityScope.getStore() === 'background' ? 1 : 0
+	if (uiWaiting.length >= MAX_UI_QUEUE) return Promise.reject(new UiBusyError(uiWaiting.length))
+	return new Promise<T>((resolve, reject) => {
+		const waiter: UiWaiter = {
+			rank,
+			seq: uiSeq++,
+			start: () => {
+				// A throw *before* the first await is still this run's failure, not a crash
+				// that would leave the lock held forever.
+				let settled: Promise<T>
+				try {
+					settled = op()
+				} catch (err) {
+					settled = Promise.reject(err)
+				}
+				// Release *before* resolving the caller, not after. Settling first and cleaning
+				// up in a chained `.then` frees the lock one microtask late, so code that awaits
+				// a write and then reads `uiQueueDepth()` is told a run is still in flight when
+				// none is — and the next turn starts a tick later than it could.
+				const release = () => {
+					uiRunning = false
+					pumpUi()
+				}
+				settled.then(
+					value => {
+						release()
+						resolve(value)
+					},
+					err => {
+						release()
+						reject(err)
+					}
+				)
+			}
+		}
+		// Stable insert: by rank, FIFO within a rank. A background run already started
+		// keeps the lock — this decides who is next, never who is interrupted.
+		const at = uiWaiting.findIndex(w => w.rank > rank)
+		if (at < 0) uiWaiting.push(waiter)
+		else uiWaiting.splice(at, 0, waiter)
+		pumpUi()
+	})
 }
 
 export interface SendResult {

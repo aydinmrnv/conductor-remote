@@ -60,7 +60,10 @@ import {
 	setRestartGuard,
 	setWorkspaceStatus,
 	stopTurn,
-	WORKSPACE_STATUS_LABELS
+	UiBusyError,
+	uiQueueDepth,
+	WORKSPACE_STATUS_LABELS,
+	withUiPriority
 } from './writes.ts'
 
 // Before anything that logs: from here on every console line is also kept in memory for
@@ -283,12 +286,14 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 			alreadySent: !!session?.last_user_message_at
 		}
 	},
-	send: async (workspaceId, sessionId, text) => {
-		const ws = reads.getWorkspace(workspaceId)
-		if (!ws) return { ok: false, error: 'the workspace is gone' }
-		const result = await deliverPrompt(ws, sessionId, text)
-		return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
-	},
+	// The queue fires on its own schedule, so it must never make a human tap wait.
+	send: (workspaceId, sessionId, text) =>
+		withUiPriority('background', async () => {
+			const ws = reads.getWorkspace(workspaceId)
+			if (!ws) return { ok: false, error: 'the workspace is gone' }
+			const result = await deliverPrompt(ws, sessionId, text)
+			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
+		}),
 	// A locked Mac holds first prompts whole — no attempts spent, no aging — instead
 	// of burning all three sends into a lock screen nobody is there to see.
 	gate: async () => (await screenLocked()) !== true
@@ -329,21 +334,23 @@ const PARKED_ERROR = 'The Mac is locked — the relay parked the prompt and will
  */
 const parkedPrompts = new ParkedPromptQueue(path.join(stateDir(), 'parked-prompts.json'), {
 	locked: screenLocked,
-	deliver: async entry => {
-		const ws = reads.getWorkspace(entry.workspaceId)
-		if (!ws) return { ok: false, error: 'the workspace is gone' }
-		// Settings first, prompt only if they stuck — the same order and the same
-		// fail-closed rule as the phone's own send (running the prompt on the model
-		// the user moved away from is the mistake this exists to prevent). A re-run
-		// after a failed prompt re-applies harmlessly: every control is read before
-		// it is pressed, so an already-correct value presses nothing.
-		if (entry.agent) {
-			const applied = await applyAgentPatch(ws, entry.sessionId, entry.agent)
-			if (!applied.ok) return { ok: false, error: applied.error, blocked: lockBlocked(applied.error) }
-		}
-		const result = await deliverPrompt(ws, entry.sessionId, entry.text)
-		return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
-	},
+	// Delivers on unlock, on its own schedule — background, like the first-prompt queue.
+	deliver: entry =>
+		withUiPriority('background', async () => {
+			const ws = reads.getWorkspace(entry.workspaceId)
+			if (!ws) return { ok: false, error: 'the workspace is gone' }
+			// Settings first, prompt only if they stuck — the same order and the same
+			// fail-closed rule as the phone's own send (running the prompt on the model
+			// the user moved away from is the mistake this exists to prevent). A re-run
+			// after a failed prompt re-applies harmlessly: every control is read before
+			// it is pressed, so an already-correct value presses nothing.
+			if (entry.agent) {
+				const applied = await applyAgentPatch(ws, entry.sessionId, entry.agent)
+				if (!applied.ok) return { ok: false, error: applied.error, blocked: lockBlocked(applied.error) }
+			}
+			const result = await deliverPrompt(ws, entry.sessionId, entry.text)
+			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
+		}),
 	notify: (entry: ParkedPrompt, error?: string) => {
 		const ws = reads.getWorkspace(entry.workspaceId)
 		const title = ws?.workspace_name ?? ws?.pr_title ?? ws?.branch ?? 'Conductor'
@@ -462,531 +469,550 @@ const server = http.createServer(async (req, res) => {
 	// Everything under /api requires the shared secret.
 	if (!authed(req)) return json(req, res, 401, { error: 'unauthorized' })
 
-	try {
-		// GET /api/state — workspace list with active-session status
-		if (req.method === 'GET' && pathname === '/api/state') {
-			const update = updateStatus()
-			const workspaces = reads.listWorkspaces()
-			attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
-			// An undelivered first prompt rides along with its workspace: the phone renders it
-			// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
-			// Prompts parked for the lock screen ride the same way, one list per workspace,
-			// each entry naming its chat (src/parked.ts).
-			const parked = parkedPrompts.list()
-			for (const ws of workspaces) {
-				ws.pending_prompt = firstPrompts.get(ws.id)
-				const mine = parked.filter(p => p.workspaceId === ws.id)
-				if (mine.length) ws.parked_prompts = mine
-			}
-			return json(req, res, 200, {
-				workspaces,
-				actuator: await describeActuator(actuator),
-				version: update.current,
-				update
-			})
-		}
-
-		// GET /api/search?q= — find a workspace by its name or by what was said in its chats.
-		//
-		// Two sources, merged. `findWorkspacesByName` matches the workspace's own identity
-		// and wins ties, because someone who types a name wants that workspace and not the
-		// twelve chats that mention it. The transcript index answers the harder question —
-		// "which workspace did I do this in" — and is the only one that can, since the
-		// words you remember are usually the agent's, not the branch's.
-		//
-		// Both reach archived workspaces. That is the point: 1,846 of the 1,886 here are
-		// archived, so a search limited to the live sidebar would miss almost everything.
-		if (req.method === 'GET' && pathname === '/api/search') {
-			const q = url.searchParams.get('q') ?? ''
-			// 12, not 50: an OR query over common words ("add", "remove") has a long weak tail,
-			// and past the first screenful nobody scrolls — they retype instead.
-			const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 12) || 12))
-			const index = search.status()
-			const tokens = queryTokens(q)
-			if (!tokens.length) return json(req, res, 200, { query: q, results: [], index })
-
-			const hits = search.search(q)
-			const targets = reads.searchTargets([...new Set(hits.map(h => h.sessionId))])
-			const fromChats = foldHits<SearchWorkspace>(hits, sid => targets.get(sid)?.workspace ?? null)
-
-			const remaining = new Map(fromChats.map(r => [r.workspace.id, r]))
-			const merged: SearchResult<SearchWorkspace>[] = []
-			for (const workspace of reads.findWorkspacesByName(tokens, limit)) {
-				const evidence = remaining.get(workspace.id)
-				remaining.delete(workspace.id)
-				// Keep the chat evidence when there is any: the snippet is what tells you this
-				// is the right "fix-lamp-thing" out of three with similar names.
-				merged.push(
-					evidence
-						? { ...evidence, byName: true }
-						: { workspace, sessionId: null, hits: 0, score: 0, at: null, snippets: [], byName: true }
-				)
-			}
-			merged.push(...remaining.values())
-
-			return json(req, res, 200, {
-				query: q,
-				index,
-				results: merged.slice(0, limit).map(r => ({
-					...r,
-					sessionTitle: r.sessionId ? (targets.get(r.sessionId)?.sessionTitle ?? null) : null
-				}))
-			})
-		}
-
-		// GET /api/repos — repos a new workspace can be created in
-		if (req.method === 'GET' && pathname === '/api/repos') {
-			return json(req, res, 200, { repos: reads.listRepos() })
-		}
-
-		// GET /api/settings — relay preferences plus what the phone needs to edit them:
-		// the SSIDs this Mac already holds credentials for, so the picker offers a choice
-		// instead of asking someone to type a network name from memory on a phone keyboard.
-		// `ssid` is best-effort and often null (macOS gates it behind Location Services).
-		if (req.method === 'GET' && pathname === '/api/settings') {
-			// Four subprocesses, all concurrent: this is the one route that shells out more
-			// than once, and serialising them would put the phone's polls behind the sum.
-			const [known, current, autoJoinHotspot, nosleep] = await Promise.all([
-				preferredNetworks(),
-				currentSsid(),
-				// macOS's own Auto-join Hotspot setting. On "Never" the Mac won't reach for
-				// your phone unprompted, which no amount of relay code can substitute for.
-				autoJoinHotspotMode(),
-				nosleepState()
-			])
-			return json(req, res, 200, {
-				settings: readSettings(),
-				wifi: {
-					current,
-					known,
-					// A guess from the name, never a fact — see wifi.ts. It only sorts the picker.
-					likelyHotspots: known.filter(looksLikeHotspot),
-					autoJoinHotspot
-				},
-				nosleep: { ...nosleep, maxSeconds: NOSLEEP_MAX_SECONDS }
-			})
-		}
-
-		// PATCH /api/settings { fallbackSsids?, autoRejoin? } — merge and persist.
-		if (req.method === 'PATCH' && pathname === '/api/settings') {
-			const body = JSON.parse((await readBody(req)) || '{}') as { fallbackSsids?: unknown; autoRejoin?: unknown }
-			const patch: Parameters<typeof writeSettings>[0] = {}
-			if (Array.isArray(body.fallbackSsids)) patch.fallbackSsids = body.fallbackSsids as string[]
-			if (typeof body.autoRejoin === 'boolean') patch.autoRejoin = body.autoRejoin
-			if (Object.keys(patch).length === 0) return json(req, res, 400, { error: 'nothing to change' })
-			return json(req, res, 200, { settings: writeSettings(patch) })
-		}
-
-		// GET /api/nosleep — is the Mac being held awake, and can this relay do it at all
-		if (req.method === 'GET' && pathname === '/api/nosleep') {
-			return json(req, res, 200, { ...(await nosleepState()), maxSeconds: NOSLEEP_MAX_SECONDS })
-		}
-
-		// POST /api/nosleep { seconds } — hold this Mac awake, lid closed, for a bounded window.
-		// Only works once `conductor-remote nosleep setup` has installed the scoped sudoers
-		// rule; without it there is no way for a TTY-less daemon to reach root, and the
-		// response says so rather than failing vaguely.
-		if (req.method === 'POST' && pathname === '/api/nosleep') {
-			const body = JSON.parse((await readBody(req)) || '{}') as { seconds?: number }
-			const seconds = Number(body.seconds)
-			// Whole seconds, not just "> 0": the helper reads 0 as "until killed", and 0.4
-			// truncates to 0 — an unbounded window from a request that looked bounded.
-			if (!Number.isInteger(seconds) || seconds < 1)
-				return json(req, res, 400, { error: 'need a whole number of seconds >= 1' })
-			const result = await armNoSleep(seconds)
-			return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
-		}
-
-		// DELETE /api/nosleep — let it sleep again now, rather than at the window's end
-		if (req.method === 'DELETE' && pathname === '/api/nosleep') {
-			const result = await disarmNoSleep()
-			return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
-		}
-
-		// GET /api/logs?file=&limit= — the relay's own log, so a phone can diagnose a failed send
-		// without reaching the Mac. Default is this process's captured console (ordered, timestamped);
-		// `file` tails the daemon's stdout/stderr on disk, which is the only place the *previous*
-		// process's crash survives. Everything is redacted: the startup banner prints the token.
-		if (req.method === 'GET' && pathname === '/api/logs') {
-			const file = url.searchParams.get('file')
-			if (file && !(LOG_FILE_NAMES as readonly string[]).includes(file)) {
-				return json(req, res, 404, { error: `unknown log file ${file}`, files: LOG_FILE_NAMES })
-			}
-			const asked = Number(url.searchParams.get('limit') ?? 300)
-			const limit = Number.isFinite(asked) ? Math.min(2000, Math.max(1, Math.trunc(asked))) : 300
-			let entries: ReturnType<typeof recentLogs>
-			try {
-				entries = file ? tailLogFile(file, limit) : recentLogs(limit)
-			} catch (err) {
-				// The file only exists once the LaunchAgent has run; say so instead of a bare 500.
-				return json(req, res, 404, { error: `can’t read ${file}: ${err instanceof Error ? err.message : err}` })
-			}
-			return json(req, res, 200, {
-				source: file ?? 'live',
-				// False → the files below are some *other* (daemon) process's output, not this relay's.
-				managed: isManaged(),
-				startedAt: processStartedAt(),
-				now: Date.now(),
-				files: logFiles(),
-				entries: entries.map(e => ({ ...e, text: redactSecrets(e.text, cfg.token) }))
-			})
-		}
-
-		// GET /api/push — the VAPID public key the phone subscribes with, plus who's already subscribed
-		if (req.method === 'GET' && pathname === '/api/push') {
-			return json(req, res, 200, pushConfig())
-		}
-
-		// POST /api/push/subscribe { subscription, label? } — register (or refresh) this device.
-		// Idempotent by endpoint: the app re-sends on every load, which is what heals a relay that
-		// lost its store, or a subscription the browser silently renewed.
-		if (req.method === 'POST' && pathname === '/api/push/subscribe') {
-			const body = JSON.parse((await readBody(req)) || '{}') as {
-				subscription?: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
-				label?: string
-			}
-			const sub = body.subscription
-			if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys.auth) {
-				return json(req, res, 400, { error: 'need a subscription with endpoint and keys' })
-			}
-			// An endpoint is a URL we will POST to — never accept a non-HTTPS one.
-			if (!/^https:\/\//i.test(sub.endpoint)) return json(req, res, 400, { error: 'endpoint must be https' })
-			const registered = subscribeDevice(
-				{ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } },
-				(body.label ?? '').slice(0, 64)
-			)
-			return json(req, res, 200, { ok: true, ...registered })
-		}
-
-		// POST /api/push/unsubscribe { endpoint } — the phone turned notifications off
-		if (req.method === 'POST' && pathname === '/api/push/unsubscribe') {
-			const body = JSON.parse((await readBody(req)) || '{}') as { endpoint?: string }
-			if (!body.endpoint) return json(req, res, 400, { error: 'need the endpoint' })
-			return json(req, res, 200, { ok: unsubscribeDevice(body.endpoint), devices: pushConfig().devices })
-		}
-
-		// POST /api/push/test { id } — push to one device, so "is this actually wired up?" has an answer
-		if (req.method === 'POST' && pathname === '/api/push/test') {
-			const body = JSON.parse((await readBody(req)) || '{}') as { id?: string }
-			if (!body.id) return json(req, res, 400, { error: 'need the device id' })
-			const result = await notifyDevice(body.id, {
-				title: 'Conductor Remote',
-				body: 'Notifications are working. You’ll get one when an agent finishes.',
-				tag: 'test',
-				url: '/',
-				kind: 'test',
-				ts: Date.now()
-			})
-			return json(req, res, result.ok ? 200 : 502, result)
-		}
-
-		// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
-		if (req.method === 'POST' && pathname === '/api/workspaces') {
-			const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
-			// The prompt is optional — a bare `path=` opens an empty workspace, like
-			// Conductor's own New workspace — but *something* has to say where it goes.
-			const prompt = (body.prompt ?? '').trim()
-			if (!prompt && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
-			// Resolve the repo to a real path: an unmatched `path` would silently land
-			// the workspace in whichever repo Conductor happens to list first.
-			const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
-			if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
-			if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
-			const before = new Set(reads.listWorkspaces().map(w => w.id))
-			const result = await createWorkspace(prompt, repo?.root_path ?? null)
-			if (!result.ok) return json(req, res, 502, result)
-			// The deep link is fire-and-forget, so the new row is the only proof it worked.
-			// Creating a worktree takes a beat longer than opening a chat does.
-			let created: Workspace | undefined
-			for (let attempt = 0; attempt < 40 && !created; attempt++) {
-				await sleep(500)
-				created = reads.listWorkspaces().find(w => !before.has(w.id))
-			}
-			if (!created) {
-				return json(req, res, 502, {
-					ok: false,
-					strategy: result.strategy,
-					error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
-				})
-			}
-			// Return as soon as the row exists (~2s) — waiting for delivery would block the
-			// request through Conductor's whole setup, measured at 30s+ on a real repo and
-			// past any budget a phone should hold a request open for. The queue delivers on
-			// its own schedule and the phone watches it in /api/state; `send:true` opts API
-			// callers into waiting.
-			// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-			const settled = prompt ? firstPrompts.enqueue(created.id, prompt) : null
-			const failed = settled && body.send === true ? await settled : null
-			settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
-			return json(req, res, 200, {
-				ok: true,
-				workspaceId: created.id,
-				workspace: reads.getWorkspace(created.id) ?? created,
-				pendingPrompt: prompt || undefined,
-				sent: body.send === true ? !failed : false,
-				warning: failed?.error && `Workspace created; the prompt is pre-filled but wasn’t sent (${failed.error}).`
-			})
-		}
-
-		// GET /api/repos/:name/icon — the repo's resolved sidebar icon (see src/icons.ts)
-		let m = pathname.match(/^\/api\/repos\/([^/]+)\/icon$/)
-		if (req.method === 'GET' && m) {
-			const icon = reads.resolveRepoIcon(decodeURIComponent(m[1]))
-			if (!icon) return json(req, res, 404, { error: 'no icon' })
-			return void fs.readFile(icon.path, (err, data) => {
-				if (err) return void json(req, res, 404, { error: 'no icon' })
-				// Cache briefly on the phone; the resolver itself refreshes within ~30s of an icon change.
-				res.writeHead(200, { 'content-type': icon.contentType, 'cache-control': 'public, max-age=300' })
-				res.end(data)
-			})
-		}
-
-		// GET /api/workspaces/:id/sessions
-		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
-		if (req.method === 'GET' && m) {
-			return json(req, res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
-		}
-
-		// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
-		if (req.method === 'POST' && m) {
-			const workspaceId = decodeURIComponent(m[1])
-			const ws = reads.getWorkspace(workspaceId)
-			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
-			const before = new Set(reads.listSessions(workspaceId).map(s => s.id))
-			const result = await newChat(ws)
-			if (!result.ok) return json(req, res, 502, result)
-			// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
-			let sessionId: string | null = null
-			for (let i = 0; i < 12 && !sessionId; i++) {
-				await new Promise(r => setTimeout(r, 500))
-				sessionId = reads.listSessions(workspaceId).find(s => !before.has(s.id))?.id ?? null
-			}
-			return json(req, res, 200, { ok: true, sessionId })
-		}
-
-		// GET /api/workspaces/:id/diff
-		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/diff$/)
-		if (req.method === 'GET' && m) {
-			const ws = reads.getWorkspace(decodeURIComponent(m[1]))
-			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
-			if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
-			const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
-			return json(req, res, 200, diff)
-		}
-
-		// POST /api/workspaces/:id/merge — merge the workspace's open PR (mirrors Conductor's merge button)
-		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/merge$/)
-		if (req.method === 'POST' && m) {
-			const ws = reads.getWorkspace(decodeURIComponent(m[1]))
-			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
-			const result = await mergePr(ws)
-			return json(req, res, result.ok ? 200 : 409, result)
-		}
-
-		// POST /api/workspaces/:id/status { status } — move it between the sidebar's status groups.
-		// Conductor derives that status from a PR it sometimes never links (a PR merged inside its
-		// poll window is invisible to it afterwards), which strands finished work in "In progress"
-		// with no way to correct it from a phone. This is that way.
-		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/status$/)
-		if (req.method === 'POST' && m) {
-			const workspaceId = decodeURIComponent(m[1])
-			const body = JSON.parse((await readBody(req)) || '{}') as { status?: string }
-			const status = body.status ?? ''
-			if (!WORKSPACE_STATUS_LABELS[status]) {
-				const allowed = Object.keys(WORKSPACE_STATUS_LABELS).join(', ')
-				return json(req, res, 400, { error: `status must be one of ${allowed}` })
-			}
-			const ws = reads.getWorkspace(workspaceId)
-			if (!ws) return json(req, res, 404, { error: 'workspace not found' })
-			const result = await setWorkspaceStatus(ws, status)
-			if (!result.ok) return json(req, res, 502, result)
-			// The menu press lands in the DB a beat later. Confirm rather than assume —
-			// and if Conductor wrote something else, say what, instead of "didn't work".
-			let observed = ws.manual_status ?? ''
-			for (let i = 0; i < 10 && observed !== status; i++) {
-				await new Promise(r => setTimeout(r, 300))
-				observed = reads.getWorkspace(workspaceId)?.manual_status ?? ''
-			}
-			if (observed !== status) {
-				return json(req, res, 502, {
-					ok: false,
-					strategy: result.strategy,
-					error: observed
-						? `Conductor recorded the status as “${observed}”, not “${status}”.`
-						: 'Conductor didn’t record the change — it may have been asleep. Try again.'
-				})
-			}
-			return json(req, res, 200, { ok: true, workspace: reads.getWorkspace(workspaceId) })
-		}
-
-		// GET /api/sessions/:id/messages?after=<rowid>
-		m = pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
-		if (req.method === 'GET' && m) {
-			const after = Number(url.searchParams.get('after') ?? 0)
-			return json(req, res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
-		}
-
-		// GET /api/sessions/:id/models?workspaceId= — labels from Conductor's live picker
-		m = pathname.match(/^\/api\/sessions\/([^/]+)\/models$/)
-		if (req.method === 'GET' && m) {
-			const sessionId = decodeURIComponent(m[1])
-			const ws = reads.getWorkspace(url.searchParams.get('workspaceId') ?? '')
-			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const located = locateChat(ws, sessionId)
-			if ('error' in located) return json(req, res, 409, { error: located.error })
-			const result = await listAgentModels({ workspace: ws, sessionId, tab: located.tab })
-			return json(req, res, result.ok ? 200 : 502, result)
-		}
-
-		// POST /api/sessions/:id/agent  { effort?, plan?, fast?, model? }
-		// Drives the composer's own model/effort/plan/fast controls for one chat.
-		m = pathname.match(/^\/api\/sessions\/([^/]+)\/agent$/)
-		if (req.method === 'POST' && m) {
-			const sessionId = decodeURIComponent(m[1])
-			const body = JSON.parse((await readBody(req)) || '{}') as {
-				effort?: string
-				plan?: boolean
-				fast?: boolean
-				model?: string
-				workspaceId?: string
-			}
-			if (body.effort && !EFFORT_LABELS[body.effort]) {
-				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
-			}
-			const ws = body.workspaceId
-				? reads.getWorkspace(body.workspaceId)
-				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
-			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const applied = await applyAgentPatch(ws, sessionId, body)
-			if (!applied.ok) return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
-			return json(req, res, 200, { ok: true, session: reads.listSessions(ws.id).find(s => s.id === sessionId) })
-		}
-
-		// POST /api/sessions/:id/stop — the desktop app's stop button, for one chat.
-		m = pathname.match(/^\/api\/sessions\/([^/]+)\/stop$/)
-		if (req.method === 'POST' && m) {
-			const sessionId = decodeURIComponent(m[1])
-			const body = JSON.parse((await readBody(req)) || '{}') as { workspaceId?: string }
-			const ws = body.workspaceId
-				? reads.getWorkspace(body.workspaceId)
-				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
-			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			const located = locateChat(ws, sessionId)
-			if ('error' in located) return json(req, res, 409, { error: located.error })
-			// Nothing running is a success, not an error: the phone shows Stop the moment it
-			// sends (the optimistic hint) and a turn that ends on its own a beat before the tap
-			// is the common case, not a mistake worth a red banner. It also keeps the one
-			// keystroke this route presses off an idle chat entirely — Conductor's own
-			// composer has no stop button to mis-tap there either.
-			const before = reads.listSessions(ws.id).find(s => s.id === sessionId)
-			if (before?.status !== 'working') {
-				return json(req, res, 200, { ok: true, alreadyIdle: true, session: before })
-			}
-			const result = await stopTurn({ workspace: ws, sessionId, tab: located.tab })
-			if (!result.ok) return json(req, res, 502, result)
-			// The DB is the receipt, exactly as it is for agent settings: the keystroke is
-			// fire-and-forget, so what counts is `status` leaving `working`. Conductor writes
-			// that a beat after it tears the turn down.
-			let observed = before.status
-			for (let i = 0; i < 20 && observed === 'working'; i++) {
-				await sleep(300)
-				observed = reads.listSessions(ws.id).find(s => s.id === sessionId)?.status ?? observed
-			}
-			if (observed === 'working') {
-				return json(req, res, 502, {
-					ok: false,
-					strategy: result.strategy,
-					error: 'Conductor took the stop but the agent is still working. Try again, or stop it on your Mac.'
-				})
-			}
-			return json(req, res, 200, {
-				ok: true,
-				strategy: result.strategy,
-				session: reads.listSessions(ws.id).find(s => s.id === sessionId)
-			})
-		}
-
-		// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged
-		// settings patch, applied before the prompt so the two can't come apart (and so
-		// both park together when the Mac turns out to be locked).
-		m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
-		if (req.method === 'POST' && m) {
-			const sessionId = decodeURIComponent(m[1])
-			const body = JSON.parse((await readBody(req)) || '{}') as {
-				text?: string
-				workspaceId?: string
-				agent?: ParkedAgentPatch
-			}
-			const text = (body.text ?? '').trim()
-			if (!text) return json(req, res, 400, { error: 'empty prompt' })
-			const ws = body.workspaceId
-				? reads.getWorkspace(body.workspaceId)
-				: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
-			if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
-			// One deadline for the whole request: settings eat into the send's budget
-			// rather than extending it past what the phone said it would wait.
-			const deadline = Date.now() + sendBudget(req)
-			const agent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
-			if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
-				return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
-			}
-			if (agent) {
-				const applied = await applyAgentPatch(ws, sessionId, agent)
-				if (!applied.ok) {
-					if (lockBlocked(applied.error)) {
-						const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
-						return json(req, res, 202, {
-							ok: false,
-							parked: true,
-							queued,
-							strategy: actuator.name,
-							error: PARKED_ERROR
-						})
-					}
-					return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
+	// Who is asking decides who waits for Conductor's window. An agent (src/mcp.ts sets
+	// this header) yields the UI lock to the person holding the phone — see writes.ts ▸
+	// uiTurn. Anything unlabelled is treated as the person, because the phone is the
+	// only caller that predates the header and mislabelling it would be the bad way round.
+	const priority = req.headers['x-relay-client'] === 'mcp' ? 'background' : 'interactive'
+	return withUiPriority(priority, async () => {
+		try {
+			// GET /api/state — workspace list with active-session status
+			if (req.method === 'GET' && pathname === '/api/state') {
+				const update = updateStatus()
+				const workspaces = reads.listWorkspaces()
+				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
+				// An undelivered first prompt rides along with its workspace: the phone renders it
+				// in that chat rather than tracking delivery itself (see src/firstprompt.ts).
+				// Prompts parked for the lock screen ride the same way, one list per workspace,
+				// each entry naming its chat (src/parked.ts).
+				const parked = parkedPrompts.list()
+				for (const ws of workspaces) {
+					ws.pending_prompt = firstPrompts.get(ws.id)
+					const mine = parked.filter(p => p.workspaceId === ws.id)
+					if (mine.length) ws.parked_prompts = mine
 				}
+				return json(req, res, 200, {
+					workspaces,
+					actuator: await describeActuator(actuator),
+					version: update.current,
+					update
+				})
 			}
-			// Retries live inside deliverPrompt, confirmed against the transcript each time,
-			// and inside the deadline this phone told us it would wait.
-			const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
-			if (result.ok) {
-				// Whatever a queue was still holding has now been said by hand — the first
-				// prompt (including a failed entry retried from the chat), and any parked
-				// copy of this exact text, which delivering again would double.
-				firstPrompts.forget(ws.id)
-				parkedPrompts.forgetDelivered(sessionId, text)
-				return json(req, res, 200, result)
+
+			// GET /api/search?q= — find a workspace by its name or by what was said in its chats.
+			//
+			// Two sources, merged. `findWorkspacesByName` matches the workspace's own identity
+			// and wins ties, because someone who types a name wants that workspace and not the
+			// twelve chats that mention it. The transcript index answers the harder question —
+			// "which workspace did I do this in" — and is the only one that can, since the
+			// words you remember are usually the agent's, not the branch's.
+			//
+			// Both reach archived workspaces. That is the point: 1,846 of the 1,886 here are
+			// archived, so a search limited to the live sidebar would miss almost everything.
+			if (req.method === 'GET' && pathname === '/api/search') {
+				const q = url.searchParams.get('q') ?? ''
+				// 12, not 50: an OR query over common words ("add", "remove") has a long weak tail,
+				// and past the first screenful nobody scrolls — they retype instead.
+				const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 12) || 12))
+				const index = search.status()
+				const tokens = queryTokens(q)
+				if (!tokens.length) return json(req, res, 200, { query: q, results: [], index })
+
+				const hits = search.search(q)
+				const targets = reads.searchTargets([...new Set(hits.map(h => h.sessionId))])
+				const fromChats = foldHits<SearchWorkspace>(hits, sid => targets.get(sid)?.workspace ?? null)
+
+				const remaining = new Map(fromChats.map(r => [r.workspace.id, r]))
+				const merged: SearchResult<SearchWorkspace>[] = []
+				for (const workspace of reads.findWorkspacesByName(tokens, limit)) {
+					const evidence = remaining.get(workspace.id)
+					remaining.delete(workspace.id)
+					// Keep the chat evidence when there is any: the snippet is what tells you this
+					// is the right "fix-lamp-thing" out of three with similar names.
+					merged.push(
+						evidence
+							? { ...evidence, byName: true }
+							: { workspace, sessionId: null, hits: 0, score: 0, at: null, snippets: [], byName: true }
+					)
+				}
+				merged.push(...remaining.values())
+
+				return json(req, res, 200, {
+					query: q,
+					index,
+					results: merged.slice(0, limit).map(r => ({
+						...r,
+						sessionTitle: r.sessionId ? (targets.get(r.sessionId)?.sessionTitle ?? null) : null
+					}))
+				})
 			}
-			if (lockBlocked(result.error)) {
-				// Settings (if any) already stuck, so the entry parks without them.
-				const queued = parkedPrompts.park(ws.id, sessionId, text)
-				return json(req, res, 202, { ok: false, parked: true, queued, strategy: result.strategy, error: PARKED_ERROR })
+
+			// GET /api/repos — repos a new workspace can be created in
+			if (req.method === 'GET' && pathname === '/api/repos') {
+				return json(req, res, 200, { repos: reads.listRepos() })
 			}
-			return json(req, res, 502, result)
-		}
 
-		// DELETE /api/workspaces/:id/prompt — dismiss an undelivered first prompt
-		m = pathname.match(/^\/api\/workspaces\/([^/]+)\/prompt$/)
-		if (req.method === 'DELETE' && m) {
-			const workspaceId = decodeURIComponent(m[1])
-			if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
-			return json(req, res, 200, { ok: true })
-		}
+			// GET /api/settings — relay preferences plus what the phone needs to edit them:
+			// the SSIDs this Mac already holds credentials for, so the picker offers a choice
+			// instead of asking someone to type a network name from memory on a phone keyboard.
+			// `ssid` is best-effort and often null (macOS gates it behind Location Services).
+			if (req.method === 'GET' && pathname === '/api/settings') {
+				// Four subprocesses, all concurrent: this is the one route that shells out more
+				// than once, and serialising them would put the phone's polls behind the sum.
+				const [known, current, autoJoinHotspot, nosleep] = await Promise.all([
+					preferredNetworks(),
+					currentSsid(),
+					// macOS's own Auto-join Hotspot setting. On "Never" the Mac won't reach for
+					// your phone unprompted, which no amount of relay code can substitute for.
+					autoJoinHotspotMode(),
+					nosleepState()
+				])
+				return json(req, res, 200, {
+					settings: readSettings(),
+					wifi: {
+						current,
+						known,
+						// A guess from the name, never a fact — see wifi.ts. It only sorts the picker.
+						likelyHotspots: known.filter(looksLikeHotspot),
+						autoJoinHotspot
+					},
+					nosleep: { ...nosleep, maxSeconds: NOSLEEP_MAX_SECONDS }
+				})
+			}
 
-		// DELETE /api/sessions/:id/prompt — dismiss whatever is parked for this chat
-		m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
-		if (req.method === 'DELETE' && m) {
-			const sessionId = decodeURIComponent(m[1])
-			if (!parkedPrompts.forgetSession(sessionId)) return json(req, res, 404, { error: 'no parked prompt' })
-			return json(req, res, 200, { ok: true })
-		}
+			// PATCH /api/settings { fallbackSsids?, autoRejoin? } — merge and persist.
+			if (req.method === 'PATCH' && pathname === '/api/settings') {
+				const body = JSON.parse((await readBody(req)) || '{}') as { fallbackSsids?: unknown; autoRejoin?: unknown }
+				const patch: Parameters<typeof writeSettings>[0] = {}
+				if (Array.isArray(body.fallbackSsids)) patch.fallbackSsids = body.fallbackSsids as string[]
+				if (typeof body.autoRejoin === 'boolean') patch.autoRejoin = body.autoRejoin
+				if (Object.keys(patch).length === 0) return json(req, res, 400, { error: 'nothing to change' })
+				return json(req, res, 200, { settings: writeSettings(patch) })
+			}
 
-		return json(req, res, 404, { error: 'no route', pathname })
-	} catch (err) {
-		// Log the detail locally; don't reflect internals (paths, stack strings) back over the wire.
-		console.error(`[relay] ${req.method} ${pathname} failed:`, err)
-		return json(req, res, 500, { error: 'internal error' })
-	}
+			// GET /api/nosleep — is the Mac being held awake, and can this relay do it at all
+			if (req.method === 'GET' && pathname === '/api/nosleep') {
+				return json(req, res, 200, { ...(await nosleepState()), maxSeconds: NOSLEEP_MAX_SECONDS })
+			}
+
+			// POST /api/nosleep { seconds } — hold this Mac awake, lid closed, for a bounded window.
+			// Only works once `conductor-remote nosleep setup` has installed the scoped sudoers
+			// rule; without it there is no way for a TTY-less daemon to reach root, and the
+			// response says so rather than failing vaguely.
+			if (req.method === 'POST' && pathname === '/api/nosleep') {
+				const body = JSON.parse((await readBody(req)) || '{}') as { seconds?: number }
+				const seconds = Number(body.seconds)
+				// Whole seconds, not just "> 0": the helper reads 0 as "until killed", and 0.4
+				// truncates to 0 — an unbounded window from a request that looked bounded.
+				if (!Number.isInteger(seconds) || seconds < 1)
+					return json(req, res, 400, { error: 'need a whole number of seconds >= 1' })
+				const result = await armNoSleep(seconds)
+				return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
+			}
+
+			// DELETE /api/nosleep — let it sleep again now, rather than at the window's end
+			if (req.method === 'DELETE' && pathname === '/api/nosleep') {
+				const result = await disarmNoSleep()
+				return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
+			}
+
+			// GET /api/logs?file=&limit= — the relay's own log, so a phone can diagnose a failed send
+			// without reaching the Mac. Default is this process's captured console (ordered, timestamped);
+			// `file` tails the daemon's stdout/stderr on disk, which is the only place the *previous*
+			// process's crash survives. Everything is redacted: the startup banner prints the token.
+			if (req.method === 'GET' && pathname === '/api/logs') {
+				const file = url.searchParams.get('file')
+				if (file && !(LOG_FILE_NAMES as readonly string[]).includes(file)) {
+					return json(req, res, 404, { error: `unknown log file ${file}`, files: LOG_FILE_NAMES })
+				}
+				const asked = Number(url.searchParams.get('limit') ?? 300)
+				const limit = Number.isFinite(asked) ? Math.min(2000, Math.max(1, Math.trunc(asked))) : 300
+				let entries: ReturnType<typeof recentLogs>
+				try {
+					entries = file ? tailLogFile(file, limit) : recentLogs(limit)
+				} catch (err) {
+					// The file only exists once the LaunchAgent has run; say so instead of a bare 500.
+					return json(req, res, 404, { error: `can’t read ${file}: ${err instanceof Error ? err.message : err}` })
+				}
+				return json(req, res, 200, {
+					source: file ?? 'live',
+					// False → the files below are some *other* (daemon) process's output, not this relay's.
+					managed: isManaged(),
+					startedAt: processStartedAt(),
+					now: Date.now(),
+					files: logFiles(),
+					entries: entries.map(e => ({ ...e, text: redactSecrets(e.text, cfg.token) }))
+				})
+			}
+
+			// GET /api/push — the VAPID public key the phone subscribes with, plus who's already subscribed
+			if (req.method === 'GET' && pathname === '/api/push') {
+				return json(req, res, 200, pushConfig())
+			}
+
+			// POST /api/push/subscribe { subscription, label? } — register (or refresh) this device.
+			// Idempotent by endpoint: the app re-sends on every load, which is what heals a relay that
+			// lost its store, or a subscription the browser silently renewed.
+			if (req.method === 'POST' && pathname === '/api/push/subscribe') {
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					subscription?: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
+					label?: string
+				}
+				const sub = body.subscription
+				if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys.auth) {
+					return json(req, res, 400, { error: 'need a subscription with endpoint and keys' })
+				}
+				// An endpoint is a URL we will POST to — never accept a non-HTTPS one.
+				if (!/^https:\/\//i.test(sub.endpoint)) return json(req, res, 400, { error: 'endpoint must be https' })
+				const registered = subscribeDevice(
+					{ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } },
+					(body.label ?? '').slice(0, 64)
+				)
+				return json(req, res, 200, { ok: true, ...registered })
+			}
+
+			// POST /api/push/unsubscribe { endpoint } — the phone turned notifications off
+			if (req.method === 'POST' && pathname === '/api/push/unsubscribe') {
+				const body = JSON.parse((await readBody(req)) || '{}') as { endpoint?: string }
+				if (!body.endpoint) return json(req, res, 400, { error: 'need the endpoint' })
+				return json(req, res, 200, { ok: unsubscribeDevice(body.endpoint), devices: pushConfig().devices })
+			}
+
+			// POST /api/push/test { id } — push to one device, so "is this actually wired up?" has an answer
+			if (req.method === 'POST' && pathname === '/api/push/test') {
+				const body = JSON.parse((await readBody(req)) || '{}') as { id?: string }
+				if (!body.id) return json(req, res, 400, { error: 'need the device id' })
+				const result = await notifyDevice(body.id, {
+					title: 'Conductor Remote',
+					body: 'Notifications are working. You’ll get one when an agent finishes.',
+					tag: 'test',
+					url: '/',
+					kind: 'test',
+					ts: Date.now()
+				})
+				return json(req, res, result.ok ? 200 : 502, result)
+			}
+
+			// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
+			if (req.method === 'POST' && pathname === '/api/workspaces') {
+				const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
+				// The prompt is optional — a bare `path=` opens an empty workspace, like
+				// Conductor's own New workspace — but *something* has to say where it goes.
+				const prompt = (body.prompt ?? '').trim()
+				if (!prompt && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
+				// Resolve the repo to a real path: an unmatched `path` would silently land
+				// the workspace in whichever repo Conductor happens to list first.
+				const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
+				if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
+				if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
+				const before = new Set(reads.listWorkspaces().map(w => w.id))
+				const result = await createWorkspace(prompt, repo?.root_path ?? null)
+				if (!result.ok) return json(req, res, 502, result)
+				// The deep link is fire-and-forget, so the new row is the only proof it worked.
+				// Creating a worktree takes a beat longer than opening a chat does.
+				let created: Workspace | undefined
+				for (let attempt = 0; attempt < 40 && !created; attempt++) {
+					await sleep(500)
+					created = reads.listWorkspaces().find(w => !before.has(w.id))
+				}
+				if (!created) {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error: 'Conductor didn’t create a workspace — check it’s running and not showing a dialog.'
+					})
+				}
+				// Return as soon as the row exists (~2s) — waiting for delivery would block the
+				// request through Conductor's whole setup, measured at 30s+ on a real repo and
+				// past any budget a phone should hold a request open for. The queue delivers on
+				// its own schedule and the phone watches it in /api/state; `send:true` opts API
+				// callers into waiting.
+				// Whatever happens, the prompt is already pre-filled in Conductor's composer.
+				const settled = prompt ? firstPrompts.enqueue(created.id, prompt) : null
+				const failed = settled && body.send === true ? await settled : null
+				settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
+				return json(req, res, 200, {
+					ok: true,
+					workspaceId: created.id,
+					workspace: reads.getWorkspace(created.id) ?? created,
+					pendingPrompt: prompt || undefined,
+					sent: body.send === true ? !failed : false,
+					warning: failed?.error && `Workspace created; the prompt is pre-filled but wasn’t sent (${failed.error}).`
+				})
+			}
+
+			// GET /api/repos/:name/icon — the repo's resolved sidebar icon (see src/icons.ts)
+			let m = pathname.match(/^\/api\/repos\/([^/]+)\/icon$/)
+			if (req.method === 'GET' && m) {
+				const icon = reads.resolveRepoIcon(decodeURIComponent(m[1]))
+				if (!icon) return json(req, res, 404, { error: 'no icon' })
+				return void fs.readFile(icon.path, (err, data) => {
+					if (err) return void json(req, res, 404, { error: 'no icon' })
+					// Cache briefly on the phone; the resolver itself refreshes within ~30s of an icon change.
+					res.writeHead(200, { 'content-type': icon.contentType, 'cache-control': 'public, max-age=300' })
+					res.end(data)
+				})
+			}
+
+			// GET /api/workspaces/:id/sessions
+			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
+			if (req.method === 'GET' && m) {
+				return json(req, res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
+			}
+
+			// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
+			if (req.method === 'POST' && m) {
+				const workspaceId = decodeURIComponent(m[1])
+				const ws = reads.getWorkspace(workspaceId)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const before = new Set(reads.listSessions(workspaceId).map(s => s.id))
+				const result = await newChat(ws)
+				if (!result.ok) return json(req, res, 502, result)
+				// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
+				let sessionId: string | null = null
+				for (let i = 0; i < 12 && !sessionId; i++) {
+					await new Promise(r => setTimeout(r, 500))
+					sessionId = reads.listSessions(workspaceId).find(s => !before.has(s.id))?.id ?? null
+				}
+				return json(req, res, 200, { ok: true, sessionId })
+			}
+
+			// GET /api/workspaces/:id/diff
+			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/diff$/)
+			if (req.method === 'GET' && m) {
+				const ws = reads.getWorkspace(decodeURIComponent(m[1]))
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
+				const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
+				return json(req, res, 200, diff)
+			}
+
+			// POST /api/workspaces/:id/merge — merge the workspace's open PR (mirrors Conductor's merge button)
+			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/merge$/)
+			if (req.method === 'POST' && m) {
+				const ws = reads.getWorkspace(decodeURIComponent(m[1]))
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const result = await mergePr(ws)
+				return json(req, res, result.ok ? 200 : 409, result)
+			}
+
+			// POST /api/workspaces/:id/status { status } — move it between the sidebar's status groups.
+			// Conductor derives that status from a PR it sometimes never links (a PR merged inside its
+			// poll window is invisible to it afterwards), which strands finished work in "In progress"
+			// with no way to correct it from a phone. This is that way.
+			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/status$/)
+			if (req.method === 'POST' && m) {
+				const workspaceId = decodeURIComponent(m[1])
+				const body = JSON.parse((await readBody(req)) || '{}') as { status?: string }
+				const status = body.status ?? ''
+				if (!WORKSPACE_STATUS_LABELS[status]) {
+					const allowed = Object.keys(WORKSPACE_STATUS_LABELS).join(', ')
+					return json(req, res, 400, { error: `status must be one of ${allowed}` })
+				}
+				const ws = reads.getWorkspace(workspaceId)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const result = await setWorkspaceStatus(ws, status)
+				if (!result.ok) return json(req, res, 502, result)
+				// The menu press lands in the DB a beat later. Confirm rather than assume —
+				// and if Conductor wrote something else, say what, instead of "didn't work".
+				let observed = ws.manual_status ?? ''
+				for (let i = 0; i < 10 && observed !== status; i++) {
+					await new Promise(r => setTimeout(r, 300))
+					observed = reads.getWorkspace(workspaceId)?.manual_status ?? ''
+				}
+				if (observed !== status) {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error: observed
+							? `Conductor recorded the status as “${observed}”, not “${status}”.`
+							: 'Conductor didn’t record the change — it may have been asleep. Try again.'
+					})
+				}
+				return json(req, res, 200, { ok: true, workspace: reads.getWorkspace(workspaceId) })
+			}
+
+			// GET /api/sessions/:id/messages?after=<rowid>
+			m = pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
+			if (req.method === 'GET' && m) {
+				const after = Number(url.searchParams.get('after') ?? 0)
+				return json(req, res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
+			}
+
+			// GET /api/sessions/:id/models?workspaceId= — labels from Conductor's live picker
+			m = pathname.match(/^\/api\/sessions\/([^/]+)\/models$/)
+			if (req.method === 'GET' && m) {
+				const sessionId = decodeURIComponent(m[1])
+				const ws = reads.getWorkspace(url.searchParams.get('workspaceId') ?? '')
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				const located = locateChat(ws, sessionId)
+				if ('error' in located) return json(req, res, 409, { error: located.error })
+				const result = await listAgentModels({ workspace: ws, sessionId, tab: located.tab })
+				return json(req, res, result.ok ? 200 : 502, result)
+			}
+
+			// POST /api/sessions/:id/agent  { effort?, plan?, fast?, model? }
+			// Drives the composer's own model/effort/plan/fast controls for one chat.
+			m = pathname.match(/^\/api\/sessions\/([^/]+)\/agent$/)
+			if (req.method === 'POST' && m) {
+				const sessionId = decodeURIComponent(m[1])
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					effort?: string
+					plan?: boolean
+					fast?: boolean
+					model?: string
+					workspaceId?: string
+				}
+				if (body.effort && !EFFORT_LABELS[body.effort]) {
+					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
+				}
+				const ws = body.workspaceId
+					? reads.getWorkspace(body.workspaceId)
+					: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				const applied = await applyAgentPatch(ws, sessionId, body)
+				if (!applied.ok) return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
+				return json(req, res, 200, { ok: true, session: reads.listSessions(ws.id).find(s => s.id === sessionId) })
+			}
+
+			// POST /api/sessions/:id/stop — the desktop app's stop button, for one chat.
+			m = pathname.match(/^\/api\/sessions\/([^/]+)\/stop$/)
+			if (req.method === 'POST' && m) {
+				const sessionId = decodeURIComponent(m[1])
+				const body = JSON.parse((await readBody(req)) || '{}') as { workspaceId?: string }
+				const ws = body.workspaceId
+					? reads.getWorkspace(body.workspaceId)
+					: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				const located = locateChat(ws, sessionId)
+				if ('error' in located) return json(req, res, 409, { error: located.error })
+				// Nothing running is a success, not an error: the phone shows Stop the moment it
+				// sends (the optimistic hint) and a turn that ends on its own a beat before the tap
+				// is the common case, not a mistake worth a red banner. It also keeps the one
+				// keystroke this route presses off an idle chat entirely — Conductor's own
+				// composer has no stop button to mis-tap there either.
+				const before = reads.listSessions(ws.id).find(s => s.id === sessionId)
+				if (before?.status !== 'working') {
+					return json(req, res, 200, { ok: true, alreadyIdle: true, session: before })
+				}
+				const result = await stopTurn({ workspace: ws, sessionId, tab: located.tab })
+				if (!result.ok) return json(req, res, 502, result)
+				// The DB is the receipt, exactly as it is for agent settings: the keystroke is
+				// fire-and-forget, so what counts is `status` leaving `working`. Conductor writes
+				// that a beat after it tears the turn down.
+				let observed = before.status
+				for (let i = 0; i < 20 && observed === 'working'; i++) {
+					await sleep(300)
+					observed = reads.listSessions(ws.id).find(s => s.id === sessionId)?.status ?? observed
+				}
+				if (observed === 'working') {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error: 'Conductor took the stop but the agent is still working. Try again, or stop it on your Mac.'
+					})
+				}
+				return json(req, res, 200, {
+					ok: true,
+					strategy: result.strategy,
+					session: reads.listSessions(ws.id).find(s => s.id === sessionId)
+				})
+			}
+
+			// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged
+			// settings patch, applied before the prompt so the two can't come apart (and so
+			// both park together when the Mac turns out to be locked).
+			m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+			if (req.method === 'POST' && m) {
+				const sessionId = decodeURIComponent(m[1])
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					text?: string
+					workspaceId?: string
+					agent?: ParkedAgentPatch
+				}
+				const text = (body.text ?? '').trim()
+				if (!text) return json(req, res, 400, { error: 'empty prompt' })
+				const ws = body.workspaceId
+					? reads.getWorkspace(body.workspaceId)
+					: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				// One deadline for the whole request: settings eat into the send's budget
+				// rather than extending it past what the phone said it would wait.
+				const deadline = Date.now() + sendBudget(req)
+				const agent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
+				if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
+					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
+				}
+				if (agent) {
+					const applied = await applyAgentPatch(ws, sessionId, agent)
+					if (!applied.ok) {
+						if (lockBlocked(applied.error)) {
+							const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
+							return json(req, res, 202, {
+								ok: false,
+								parked: true,
+								queued,
+								strategy: actuator.name,
+								error: PARKED_ERROR
+							})
+						}
+						return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
+					}
+				}
+				// Retries live inside deliverPrompt, confirmed against the transcript each time,
+				// and inside the deadline this phone told us it would wait.
+				const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
+				if (result.ok) {
+					// Whatever a queue was still holding has now been said by hand — the first
+					// prompt (including a failed entry retried from the chat), and any parked
+					// copy of this exact text, which delivering again would double.
+					firstPrompts.forget(ws.id)
+					parkedPrompts.forgetDelivered(sessionId, text)
+					return json(req, res, 200, result)
+				}
+				if (lockBlocked(result.error)) {
+					// Settings (if any) already stuck, so the entry parks without them.
+					const queued = parkedPrompts.park(ws.id, sessionId, text)
+					return json(req, res, 202, {
+						ok: false,
+						parked: true,
+						queued,
+						strategy: result.strategy,
+						error: PARKED_ERROR
+					})
+				}
+				return json(req, res, 502, result)
+			}
+
+			// DELETE /api/workspaces/:id/prompt — dismiss an undelivered first prompt
+			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/prompt$/)
+			if (req.method === 'DELETE' && m) {
+				const workspaceId = decodeURIComponent(m[1])
+				if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
+				return json(req, res, 200, { ok: true })
+			}
+
+			// DELETE /api/sessions/:id/prompt — dismiss whatever is parked for this chat
+			m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+			if (req.method === 'DELETE' && m) {
+				const sessionId = decodeURIComponent(m[1])
+				if (!parkedPrompts.forgetSession(sessionId)) return json(req, res, 404, { error: 'no parked prompt' })
+				return json(req, res, 200, { ok: true })
+			}
+
+			return json(req, res, 404, { error: 'no route', pathname })
+		} catch (err) {
+			// A refused UI turn is not a server fault and a retry is the right move, so it gets
+			// 503 + Retry-After rather than a 500 that reads as "the relay is broken".
+			if (err instanceof UiBusyError) {
+				res.setHeader('retry-after', '15')
+				return json(req, res, 503, { error: err.message, busy: true, queue: uiQueueDepth() })
+			}
+			// Log the detail locally; don't reflect internals (paths, stack strings) back over the wire.
+			console.error(`[relay] ${req.method} ${pathname} failed:`, err)
+			return json(req, res, 500, { error: 'internal error' })
+		}
+	})
 })
 
 server.listen(cfg.port, cfg.host, () => {
