@@ -146,6 +146,13 @@ function buildPlist(): string {
 		['PATH', daemonPath],
 		['CONDUCTOR_REMOTE_MANAGED', '1']
 	]
+	// EXPOSE belongs here with the other runtime knobs, and leaving it out was a real bug. The daemon
+	// reads its posture on every boot (the funnel watchdog only arms itself for `public`), but install()
+	// reloads launchd *before* ensureTailscale() persists the choice — so a fresh `--expose tailnet`
+	// daemon came up reading the old posture, armed the watchdog against a Funnel that was about to be
+	// switched off, and ~3 failed probes later healed it straight back to public. Baking the resolved
+	// value makes the daemon's own environment the answer, so nothing depends on write ordering.
+	if (process.env.EXPOSE) envEntries.push(['EXPOSE', process.env.EXPOSE])
 	if (process.env.WRITE_STRATEGY) envEntries.push(['WRITE_STRATEGY', process.env.WRITE_STRATEGY])
 	if (process.env.RELAY_HOST) envEntries.push(['RELAY_HOST', process.env.RELAY_HOST])
 	if (process.env.RELAY_PORT) envEntries.push(['RELAY_PORT', process.env.RELAY_PORT])
@@ -431,6 +438,11 @@ function install(): void {
 		process.exit(1)
 	}
 	persistPinnedToken()
+	// Resolve (and persist) the expose posture *before* the plist is written and launchd is reloaded, so
+	// the daemon starts with an explicit EXPOSE in its own environment rather than racing the file
+	// ensureTailscale() writes further down. Folding it back into process.env is how every other knob
+	// travels here (see applyFlags), and it keeps ensureTailscale()'s own resolve a no-op re-read.
+	process.env.EXPOSE = resolveExposeMode()
 	fs.mkdirSync(path.dirname(plistPath), { recursive: true })
 	fs.mkdirSync(logDir, { recursive: true })
 	fs.writeFileSync(plistPath, buildPlist())
@@ -463,6 +475,158 @@ function restart(): void {
 	launchctl('kickstart', '-k', `${domain}/${LABEL}`)
 	console.info(`✓ restarted ${LABEL}`)
 	printUrl()
+}
+
+/**
+ * The daemon's environment, read back out of the plist it was installed with.
+ *
+ * This is the whole point of `config`: `process.env` here belongs to *your shell*, and the daemon
+ * runs under launchd with whatever `buildPlist()` baked in. Reading the shell's env to report the
+ * daemon's configuration is how a posture change can look applied while the running relay still
+ * believes something else — which is exactly the bug that made EXPOSE a plist entry.
+ */
+function readPlistEnv(): Record<string, string> {
+	try {
+		const out = execFileSync('plutil', ['-convert', 'json', '-o', '-', plistPath], {
+			encoding: 'utf8',
+			stdio: 'pipe'
+		})
+		const env = JSON.parse(out)?.EnvironmentVariables
+		return env && typeof env === 'object' ? (env as Record<string, string>) : {}
+	} catch {
+		return {}
+	}
+}
+
+interface Knob {
+	/** The `--flag` name, so the fix is copy-pasteable. */
+	name: string
+	env: string
+	/** Value when nothing is set, written the way the runtime actually resolves it. */
+	fallback: (env: Record<string, string>) => string
+	/** Where `fallback` came from, when it is not a plain default. */
+	fallbackSource?: (env: Record<string, string>) => string
+}
+
+const HOME = os.homedir()
+const tilde = (p: string): string => (p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p)
+
+const KNOBS: Knob[] = [
+	{
+		name: 'expose',
+		env: 'EXPOSE',
+		// The runtime's own precedence (src/tailscale.ts ▸ readExposeMode): env, then the persisted
+		// file, then public. Reported the same way so this can never describe a posture the relay
+		// isn't running.
+		fallback: () => {
+			try {
+				return normalizeExposeMode(fs.readFileSync(exposeStorePath(), 'utf8')) ?? 'public'
+			} catch {
+				return 'public'
+			}
+		},
+		fallbackSource: () => (fs.existsSync(exposeStorePath()) ? 'expose file' : 'default')
+	},
+	{ name: 'port', env: 'RELAY_PORT', fallback: () => '8787' },
+	{ name: 'host', env: 'RELAY_HOST', fallback: () => '127.0.0.1' },
+	{ name: 'write-strategy', env: 'WRITE_STRATEGY', fallback: () => 'applescript' },
+	{ name: 'auto-update', env: 'AUTO_UPDATE', fallback: () => 'auto' },
+	{ name: 'auto-update-interval', env: 'AUTO_UPDATE_INTERVAL_MINUTES', fallback: () => '5 (minutes)' },
+	{
+		name: 'funnel-watchdog',
+		env: 'FUNNEL_WATCHDOG',
+		// Two gates, not one: it defaults on for the managed daemon and then stands down unless the
+		// posture is public (src/funnel-watchdog.ts ▸ wantEnabled + startFunnelWatchdog).
+		fallback: env => (env.CONDUCTOR_REMOTE_MANAGED === '1' ? 'on (managed daemon)' : 'off (not managed)')
+	},
+	{ name: 'funnel-watchdog-interval', env: 'FUNNEL_WATCHDOG_INTERVAL_SECONDS', fallback: () => '60 (seconds)' },
+	{
+		name: 'db',
+		env: 'CONDUCTOR_DB',
+		fallback: () => tilde(path.join(HOME, 'Library', 'Application Support', 'com.conductor.app', 'conductor.db'))
+	},
+	{
+		name: 'workspaces',
+		env: 'CONDUCTOR_WORKSPACES',
+		fallback: () => tilde(path.join(HOME, 'conductor', 'workspaces'))
+	}
+]
+
+/**
+ * What is this daemon actually configured with, and where did each value come from.
+ *
+ * Read-only on purpose. Every knob is written by `service install`, and a second write path for the
+ * same state is how the plist and the `expose` file came to disagree in the first place. What was
+ * missing was the ability to *see* the disagreement, so that is what this adds — including a live
+ * cross-check of the Tailscale posture against the configured one.
+ */
+function config(): void {
+	if (!fs.existsSync(plistPath)) {
+		console.info(`plist:  (not installed)\n\nRun \`conductor-remote service install\` first.`)
+		return
+	}
+	const env = readPlistEnv()
+	console.info(`plist:  ${tilde(plistPath)}`)
+	console.info(`state:  ${tilde(path.dirname(exposeStorePath()))}`)
+	try {
+		const out = execFileSync('launchctl', ['print', `${domain}/${LABEL}`], { encoding: 'utf8', stdio: 'pipe' })
+		console.info(
+			`daemon: ${out.match(/state = (\S+)/)?.[1] ?? 'unknown'}  (pid ${out.match(/pid = (\d+)/)?.[1] ?? '—'})`
+		)
+	} catch {
+		console.info('daemon: loaded but not running (check `conductor-remote logs`)')
+	}
+
+	const rows = KNOBS.map(k => {
+		const set = env[k.env]
+		return {
+			name: k.name,
+			value: set ?? k.fallback(env),
+			source: set ? 'plist' : (k.fallbackSource?.(env) ?? 'default')
+		}
+	})
+	// The token is deliberately not a row above: it never rides in the plist, and this output is the
+	// kind of thing that gets pasted into an issue. Shown truncated, like every other log surface here.
+	let token = '(none yet — minted on first start)'
+	try {
+		const raw = fs.readFileSync(path.join(path.dirname(exposeStorePath()), 'token'), 'utf8').trim()
+		if (raw) token = `${raw.slice(0, 4)}…${raw.slice(-4)}`
+	} catch {
+		// no token file yet
+	}
+	rows.push({ name: 'token', value: token, source: 'token file' })
+
+	const width = Math.max(...rows.map(r => r.name.length))
+	const valueWidth = Math.max(...rows.map(r => r.value.length))
+	console.info('')
+	for (const r of rows) {
+		console.info(`  ${r.name.padEnd(width)}  ${r.value.padEnd(valueWidth)}  ${r.source}`)
+	}
+	console.info('\n  (values come from the daemon\u2019s own plist environment, not this shell\u2019s)')
+	console.info('  change one with: conductor-remote service install --<setting> <value>')
+
+	// The cross-check worth having. A posture the relay believes and a Tailscale that is doing something
+	// else is invisible in every other command, and it is self-healing in the wrong direction: the funnel
+	// watchdog only runs for `public`, so a relay that thinks it is public will re-register Funnel.
+	const bin = tailscaleBin()
+	const configured = rows.find(r => r.name === 'expose')?.value
+	if (!bin || !configured) return
+	const dns = magicDnsName(bin)
+	const live = tailscaleState(bin, dns)
+	const liveMode = live.funnelOn ? 'public' : live.proxyOk ? 'tailnet' : null
+	console.info('')
+	if (liveMode === null) {
+		console.info(`  \u26a0 tailscale is not fronting 127.0.0.1:${RELAY_PORT} at all — the phone URL is not wired.`)
+		console.info('    Fix with: conductor-remote service install')
+	} else if (liveMode === configured) {
+		console.info(
+			`  \u2713 tailscale agrees: ${liveMode === 'public' ? 'Funnel on (internet-facing)' : 'serve only (tailnet)'}`
+		)
+	} else {
+		console.info(`  \u26a0 tailscale says ${liveMode}, the daemon is configured ${configured}. They must match:`)
+		console.info(`    the funnel watchdog only runs for \`public\`, so the two can heal each other apart.`)
+		console.info(`    Fix with: conductor-remote service install --expose ${configured}`)
+	}
 }
 
 function status(): void {
@@ -516,13 +680,16 @@ switch (cmd) {
 	case 'status':
 		status()
 		break
+	case 'config':
+		config()
+		break
 	case 'logs':
 		logs()
 		break
 	default:
 		console.error(
 			`unknown command: ${cmd}\n` +
-				'usage: service.ts <install|uninstall|restart|status|logs> [flags]\n' +
+				'usage: service.ts <install|uninstall|restart|status|config|logs> [flags]\n' +
 				`  flags (install): ${Object.keys(FLAG_ENV).join(', ')}`
 		)
 		process.exit(1)

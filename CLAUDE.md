@@ -724,6 +724,22 @@ bind trap below), not by unit test.
   tailnet (Admin console nodeAttr) or it falls back to tailnet-only and says so.
   `curl 127.0.0.1:8787` works for local checks; `yarn service status` prints the URL
   and whether it's public or tailnet-only.
+- **The LaunchAgent plist *is* the daemon's environment, and `process.env` in a shell is
+  not.** `service install` bakes every runtime knob into the plist (`buildPlist`), so the
+  daemon reads its port, its DB path and its Funnel posture from there and from nothing
+  else. Two consequences. Reporting the daemon's configuration by reading your own shell's
+  env is wrong, which is why `conductor-remote config` parses the plist instead (`plutil
+  -convert json`) and prints the source of every value beside it. And anything the daemon
+  reads on boot has to be in that plist *before* `reloadAgent()`, or the restart races the
+  write: `EXPOSE` was persisted only to `stateDir()/expose`, by `ensureTailscale()`, which
+  runs **after** the reload — so `--expose tailnet` started a daemon that still read
+  `public`, armed the funnel watchdog against a Funnel that was one second from being
+  switched off, and ~3 failed probes later healed it straight back onto the public
+  internet. Reproduced against the old script in a sandboxed `HOME` with a stubbed
+  `launchctl`; the plist launchd saw carried no `EXPOSE` at all. The posture is now
+  resolved at the top of `install()` and baked like its nine siblings. `config` also
+  cross-checks the configured posture against live `tailscale serve status`, because a
+  relay that believes the wrong one repairs itself in the wrong direction.
 - **Token is persisted**, not per-boot: `~/Library/Application Support/conductor-remote/token`
   (`config.ts` → `resolveToken`). Don't reintroduce a random-per-start token — it
   breaks the phone's saved home-screen URL. `RELAY_TOKEN` env still overrides.

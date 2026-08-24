@@ -39,6 +39,12 @@ on your machine, so `npm i -g` finishes in about a second. `service install`
 prints a phone URL with an embedded token; open it and **Add to Home Screen**.
 Manage the service with `conductor-remote service status|restart|uninstall`.
 
+`conductor-remote config` prints what the daemon is **actually** configured with and
+where each value came from, then cross-checks the configured reachability against what
+Tailscale is really doing. Read-only. Reach for it first when the relay is behaving like
+a setting you thought you changed never took, because the values it reports come from the
+daemon's own environment rather than your shell's.
+
 **Install flags.** `service install` takes flags for the install-time knobs (each
 also settable via the env var in brackets — the flag wins when both are given).
 Run `conductor-remote --help` for the full list. The common ones:
@@ -156,6 +162,25 @@ and the AppleScript write path needs Accessibility permission granted to that
 Each knob is an env var (honored by `yarn start` and `service install`) and, for
 `service install`, the CLI flag in the second column. A flag wins over the ambient
 env. `EXPOSE`/`--expose` is documented under Install above.
+
+`service install` bakes these into the LaunchAgent plist, so that plist is the daemon's
+environment and re-running `service install --<flag> <value>` is how you change one.
+`conductor-remote config` reads them back:
+
+```
+$ conductor-remote config
+plist:  ~/Library/LaunchAgents/no.adluna.conductor-remote.plist
+state:  ~/Library/Application Support/conductor-remote
+daemon: running  (pid 85882)
+
+  expose                    tailnet      plist
+  port                      8787         default
+  write-strategy            applescript  default
+  …
+  token                     99f6…6b38    token file
+
+  ✓ tailscale agrees: serve only (tailnet)
+```
 
 | Var | Flag | Default | Purpose |
 | --- | --- | --- | --- |
