@@ -696,22 +696,72 @@ export function usePush(): PushControls {
 	}
 }
 
+/** Cache Storage entry the service worker parks a tapped notification's target in. */
+const ROUTE_CACHE = 'push-route'
+const ROUTE_KEY = '/__push-route'
 /**
- * Route a notification tap. The service worker focuses the open app and posts the
- * target instead of navigating it (see public/push-sw.js) — a real navigation
- * would remount the token-gated SPA and drop whatever was half-typed.
+ * How long a parked target stays worth honouring. The gap between the tap and the app
+ * coming up is seconds even on a cold launch, so anything older is a tap that never
+ * landed — jumping to it when someone opens the app hours later would be a surprise.
+ */
+const PARKED_ROUTE_MS = 120_000
+
+/** Read and consume the parked target. Reading it is what spends it — it fires once. */
+async function takeParkedRoute(): Promise<string | null> {
+	if (!('caches' in window)) return null
+	try {
+		const cache = await caches.open(ROUTE_CACHE)
+		const hit = await cache.match(ROUTE_KEY)
+		if (!hit) return null
+		await cache.delete(ROUTE_KEY)
+		const { url, ts } = (await hit.json()) as { url?: unknown; ts?: unknown }
+		if (typeof url !== 'string' || !url.startsWith('/')) return null
+		if (typeof ts !== 'number' || Date.now() - ts > PARKED_ROUTE_MS) return null
+		return url
+	} catch {
+		// An unreadable entry is not worth a broken app launch.
+		return null
+	}
+}
+
+/**
+ * Route a notification tap, from either half of the handoff in public/push-sw.js.
+ *
+ * The message is the fast path: the service worker posts the target to a live page, so
+ * the token gate and whatever is half-typed both survive — a real navigation would
+ * remount the SPA. On iOS neither that message nor `openWindow`'s path can be relied
+ * on: a backgrounded web app is resumed on the screen it was left on, which is what
+ * "tapping the notification does nothing" is. So the worker also parks the target, and
+ * the app claims it on the way back to the front — and once at startup, which is the
+ * cold-launch case, where iOS opens the start URL and ignores the one we asked for.
  */
 export function usePushRouting(): void {
 	const navigate = useNavigate()
 	useEffect(() => {
-		if (!('serviceWorker' in navigator)) return
+		let live = true
+		const claimParked = () => {
+			void takeParkedRoute().then(url => {
+				if (live && url) navigate(url)
+			})
+		}
 		const onMessage = (event: MessageEvent) => {
 			const data = event.data as { type?: string; url?: string } | null
 			if (data?.type === 'push-navigate' && typeof data.url === 'string' && data.url.startsWith('/')) {
+				// Consume the parked copy of this same tap, or it lands twice.
+				void takeParkedRoute()
 				navigate(data.url)
 			}
 		}
-		navigator.serviceWorker.addEventListener('message', onMessage)
-		return () => navigator.serviceWorker.removeEventListener('message', onMessage)
+		const onVisible = () => {
+			if (document.visibilityState === 'visible') claimParked()
+		}
+		if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', onMessage)
+		document.addEventListener('visibilitychange', onVisible)
+		claimParked()
+		return () => {
+			live = false
+			if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', onMessage)
+			document.removeEventListener('visibilitychange', onVisible)
+		}
 	}, [navigate])
 }

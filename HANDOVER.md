@@ -45,7 +45,13 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
   service + a stubbed `Reads`) confirmed one push per confirmed transition, none
   for the baseline tick, and none for a status that flaps back inside the
   confirmation window. Only the last hop — a real APNs/FCM subscription — is
-  untested from CI; the browser side needs a granted permission.
+  untested from CI; the browser side needs a granted permission. A tap lands on
+  the chat that ended, not just its workspace: the payload carries
+  `/w/<workspace>?session=<chat>` (`notify.ts` ▸ `chatRoute`, shared with the
+  parked-prompt receipt), the notification is tagged per chat so siblings don't
+  replace each other, and `SessionView` keeps the picked chat in that same query
+  parameter — one source of truth, so a repeat notification for a chat you tabbed
+  away from still wins.
 
 ## Run
 

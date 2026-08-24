@@ -27,7 +27,15 @@ import {
 	nosleepState,
 	watchNoSleepExpiry
 } from './nosleep.ts'
-import { notifyAll, notifyDevice, pushConfig, startNotifier, subscribeDevice, unsubscribeDevice } from './notify.ts'
+import {
+	chatRoute,
+	notifyAll,
+	notifyDevice,
+	pushConfig,
+	startNotifier,
+	subscribeDevice,
+	unsubscribeDevice
+} from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SessionRow, type Workspace } from './reads.ts'
@@ -338,7 +346,7 @@ const parkedPrompts = new ParkedPromptQueue(path.join(stateDir(), 'parked-prompt
 			body: error ? `Parked prompt failed: ${error}` : `Sent after unlock: ${preview}`,
 			// Per chat, so a second parked prompt replaces the first's notification.
 			tag: `parked-${entry.sessionId}`,
-			url: `/w/${entry.workspaceId}`,
+			url: chatRoute(entry.workspaceId, entry.sessionId),
 			kind: error ? 'error' : 'done',
 			ts: Date.now()
 		})

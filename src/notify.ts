@@ -270,6 +270,16 @@ export function deviceCount(): number {
 	return load().devices.length
 }
 
+/**
+ * Where a tapped notification lands. The chat id rides along because the phone
+ * otherwise picks the tab itself (Conductor's active session, else the first one)
+ * — and on a multi-chat workspace that is rarely the chat that just finished.
+ * Kept here so the notifier and the parked-prompt queue can't drift apart.
+ */
+export function chatRoute(workspaceId: string, sessionId: string): string {
+	return `/w/${workspaceId}?session=${encodeURIComponent(sessionId)}`
+}
+
 /** Collapse a transcript entry to one lock-screen line: no code fences, no blank runs. */
 function oneLine(text: string): string {
 	return clip(
@@ -347,9 +357,11 @@ async function fire(
 	const sent = await notifyAll({
 		title: state.repoName ? `${where} — ${state.repoName}` : where,
 		body,
-		// Per workspace, so a chatty agent replaces its own notification instead of stacking.
-		tag: state.workspaceId,
-		url: `/w/${state.workspaceId}`,
+		// Per chat, so a chatty agent replaces its own notification instead of stacking —
+		// and two chats in one workspace stay separately tappable, since each now lands
+		// somewhere different.
+		tag: sessionId,
+		url: chatRoute(state.workspaceId, sessionId),
 		kind,
 		ts: Date.now()
 	})
