@@ -12,9 +12,9 @@ import {
 	STATUS_COLORS,
 	STATUS_ORDER,
 	shortModel,
-	workspaceLabel,
 	workspaceStatus,
-	workspaceStatusLabel
+	workspaceStatusLabel,
+	workspaceTitle
 } from '../lib/format.ts'
 import { unreadCount } from '../lib/read.ts'
 import type { Workspace } from '../lib/types.ts'
@@ -31,7 +31,7 @@ function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
 	return [...list].sort((a, b) => {
 		const pin = Number(!!b.pinned_at) - Number(!!a.pinned_at)
 		if (pin) return pin
-		if (sortBy === 'name') return workspaceLabel(a).localeCompare(workspaceLabel(b))
+		if (sortBy === 'name') return workspaceTitle(a).localeCompare(workspaceTitle(b))
 		// SQLite datetime strings compare lexically; newest first.
 		return sortBy === 'created' ? b.created_at.localeCompare(a.created_at) : b.updated_at.localeCompare(a.updated_at)
 	})
@@ -374,7 +374,7 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 	return (
 		<>
 			<div className="relative shrink-0 self-start">
-				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceLabel(w)} />
+				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} />
 				{/* `bg-surface` fills the spinner's hollow centre so the avatar doesn't show through it. */}
 				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 bg-surface ring-2 ring-surface" />
 			</div>
@@ -387,7 +387,7 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 							unread || selected ? 'text-text' : 'text-muted'
 						)}
 					>
-						{workspaceLabel(w)}
+						{workspaceTitle(w)}
 					</span>
 					{isSettingUp(w) ? (
 						<span className="shrink-0 rounded-md bg-working/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-working">

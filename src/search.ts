@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { ConductorDb } from './db.ts'
+import { HIT_CLOSE, HIT_OPEN } from './shared.ts'
 import { parseMessage } from './transcript.ts'
 
 /**
@@ -50,13 +51,13 @@ const MAX_CHUNK_CHARS = 64_000
 const CHUNK_LIMIT = 300
 
 /**
- * Snippet highlight markers. Control characters rather than brackets: they survive
- * JSON, they need no escaping on the way to the phone, and no transcript contains
- * them, so `web/src/lib/format.ts` can split on them without a parser. The client
- * must not render them literally — see `splitSnippet`.
+ * Snippet highlight markers, from `src/shared.ts` because the phone splits on the
+ * same two characters (`web/src/lib/format.ts` ▸ `splitSnippet`). Control characters
+ * rather than brackets: they survive JSON, they need no escaping on the way to the
+ * phone, and no transcript contains them, so the client needs no parser. The client
+ * must not render them literally.
  */
-export const HIT_OPEN = '\u0001'
-export const HIT_CLOSE = '\u0002'
+export { HIT_CLOSE, HIT_OPEN } from './shared.ts'
 
 export interface SearchHit {
 	sessionId: string
@@ -106,9 +107,7 @@ export function matchQuery(raw: string): string | null {
 }
 
 /** The tokens `matchQuery` will search for — what a caller matches names against. */
-export function queryTokens(raw: string): string[] {
-	return raw.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []
-}
+export { queryTokens } from './shared.ts'
 
 interface ChunkRow {
 	session_id: string

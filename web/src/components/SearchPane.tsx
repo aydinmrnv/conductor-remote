@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useDebounced, useSearch } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
-import { queryTokens, relativeTime, splitSnippet, workspaceLabel } from '../lib/format.ts'
+import { queryTokens, relativeTime, splitSnippet, workspaceTitle } from '../lib/format.ts'
 import type { SearchSnippet, Workspace } from '../lib/types.ts'
 import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
 
@@ -40,7 +40,7 @@ export function SearchPane({
 		const byId = new Map<string, Row>()
 		if (tokens.length)
 			for (const w of live) {
-				const hay = [workspaceLabel(w), w.branch, w.repo_name, w.directory_name, w.session_title]
+				const hay = [workspaceTitle(w), w.branch, w.repo_name, w.directory_name, w.session_title]
 					.filter(Boolean)
 					.join(' ')
 					.toLowerCase()
@@ -147,15 +147,15 @@ function ResultRow({
 	// right, but nothing on them says so — the codename appears in no other field — so a
 	// correct result reads as a bug. Show it exactly when it is the only reason we matched.
 	const codename = w.directory_name?.toLowerCase()
-	const visible = `${workspaceLabel(w)} ${w.branch ?? ''} ${w.repo_name ?? ''}`.toLowerCase()
+	const visible = `${workspaceTitle(w)} ${w.branch ?? ''} ${w.repo_name ?? ''}`.toLowerCase()
 	const viaCodename = !!codename && tokens.some(t => codename.includes(t) && !visible.includes(t))
 	const body = (
 		<>
 			<div className="flex items-start gap-3">
-				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceLabel(w)} />
+				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} />
 				<div className="min-w-0 flex-1 overflow-hidden">
 					<div className="flex items-center gap-2">
-						<span className="min-w-0 flex-1 truncate font-medium text-text">{workspaceLabel(w)}</span>
+						<span className="min-w-0 flex-1 truncate font-medium text-text">{workspaceTitle(w)}</span>
 						{row.archived ? (
 							<span className="shrink-0 rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-faint">
 								Archived

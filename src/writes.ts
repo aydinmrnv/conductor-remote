@@ -164,6 +164,17 @@ export interface SendTarget {
 	tab?: ChatTab
 }
 
+/** How `/api/state` describes the write strategy in force (see `describeActuator`). */
+export interface ActuatorInfo {
+	name: string
+	/** Human-readable note about this strategy's limits, surfaced in the UI. */
+	caveat: string
+	/** True when delivery is addressed to a specific session (no window-focus dependency). */
+	precise: boolean
+	/** False when the strategy's runtime check says it can't deliver right now. */
+	available: boolean
+}
+
 export interface Actuator {
 	readonly name: string
 	/** Human-readable note about this strategy's limits, surfaced in the UI. */
@@ -804,9 +815,7 @@ export function pickActuator(strategy: WriteStrategy): Actuator {
 }
 
 /** Effective actuator description for the UI, factoring in runtime availability. */
-export async function describeActuator(
-	actuator: Actuator
-): Promise<{ name: string; caveat: string; precise: boolean; available: boolean }> {
+export async function describeActuator(actuator: Actuator): Promise<ActuatorInfo> {
 	const available = actuator.available ? await actuator.available().catch(() => false) : true
 	return { name: actuator.name, caveat: actuator.caveat, precise: actuator.precise, available }
 }

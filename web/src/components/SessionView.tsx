@@ -5,7 +5,7 @@ import { useParams, useSearchParams } from 'react-router'
 import { useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { shortModel, workspaceLabel } from '../lib/format.ts'
+import { shortModel, workspaceTitle } from '../lib/format.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
@@ -105,7 +105,7 @@ export function SessionView() {
 		<div className="flex h-full min-w-0 overflow-hidden">
 			<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
 				<Header
-					title={workspaceLabel(ws)}
+					title={workspaceTitle(ws)}
 					subtitle={subtitle}
 					menu
 					right={
