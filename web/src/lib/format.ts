@@ -1,30 +1,12 @@
+// The relay computes a workspace's title, the query's tokens and the snippet markers
+// too, so all three come from src/shared.ts — the one module under src/ this app may
+// import a *value* from (it is stdlib-free on purpose; everything else is `import type`
+// only, enforced by scripts/check-imports.ts). Two implementations of `workspaceTitle`
+// meant the sidebar and a push notification could name the same workspace differently.
+import { HIT_CLOSE, HIT_OPEN, queryTokens, type Titled, workspaceTitle } from '../../../src/shared.ts'
 import type { Workspace } from './types.ts'
 
-/**
- * Everything `workspaceLabel` needs. Structural rather than `Workspace` because a
- * search result is a leaner shape (`SearchWorkspace`) and must still be titled the
- * same way — a workspace that answers to two different names in one list is worse
- * than no search at all.
- */
-export type Titled = Pick<Workspace, 'id' | 'workspace_name' | 'pr_title' | 'branch' | 'directory_name'>
-
-export function workspaceLabel(w: Titled): string {
-	return w.workspace_name || w.pr_title || humanizeBranch(w.branch) || w.directory_name || w.id.slice(0, 8)
-}
-
-/**
- * The words a query will actually search for. Deliberately the same expression as
- * the relay's `queryTokens` (src/search.ts): the phone filters the live list with
- * these while the relay searches the transcript with those, and two different
- * splits would make one list disagree with the other on the same keystroke.
- */
-export function queryTokens(raw: string): string[] {
-	return raw.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []
-}
-
-/** Hit markers the relay wraps matches in (src/search.ts ▸ HIT_OPEN / HIT_CLOSE). */
-const HIT_OPEN = '\u0001'
-const HIT_CLOSE = '\u0002'
+export { queryTokens, type Titled, workspaceTitle }
 
 /**
  * Split a relay snippet into plain and highlighted runs. The markers are control
@@ -58,28 +40,9 @@ export function splitSnippet(text: string): { text: string; hit: boolean }[] {
 	return runs
 }
 
-/**
- * Conductor's own workspace title precedence, reproduced:
- *   manual name → PR title → humanized branch → worktree codename → id.
- * `pr_title` is Conductor's cached PR title, present exactly when the workspace
- * has a PR (in-review or done) and cleared back to empty otherwise — so it's the
- * live sidebar title, not a stale value. The branch minus its prefix, sentence-
- * cased, is Conductor's own fallback while a workspace is still in-progress:
- * prefix-agnostic (github_username/custom/none), stripping the first path segment
- * rather than reading Conductor's `branch_prefix_type` setting since the branch
- * already embeds the resolved prefix. directory_name (the worktree codename, e.g.
- * "managua-v2") is a last resort for a branchless workspace.
- */
-function humanizeBranch(branch: string | null): string {
-	if (!branch) return ''
-	const slug = branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch
-	const words = slug.replace(/[-_]/g, ' ').trim()
-	return words ? words[0].toUpperCase() + words.slice(1) : ''
-}
-
 /** Fallback avatar glyph when a repo has no resolvable icon — its leading letter. */
 export function repoMonogram(w: Workspace): string {
-	const src = w.repo_name || workspaceLabel(w)
+	const src = w.repo_name || workspaceTitle(w)
 	return (src.trim()[0] ?? '?').toUpperCase()
 }
 

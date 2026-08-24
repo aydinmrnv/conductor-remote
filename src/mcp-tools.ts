@@ -19,6 +19,20 @@
  * a tool cannot behave differently over HTTP than it does over stdio.
  */
 
+import { HIT_CLOSE, HIT_OPEN, workspaceTitle } from './shared.ts'
+import type {
+	CreateWorkspaceResult,
+	MessagesResponse,
+	ReposResponse,
+	SearchResponse,
+	SendResult,
+	SessionsResponse,
+	StateResponse,
+	StatusResult,
+	StopResult,
+	WorkspaceDiff
+} from './wire.ts'
+
 /** How a tool reaches the relay. Injected so both transports share one tool definition. */
 export interface CallOptions {
 	method?: string
@@ -44,36 +58,12 @@ export const WRITE_TIMEOUT_MS = 75_000
 // JSON: half the tokens, and every id an agent needs to chain the next call stays
 // visible instead of buried in a nested object.
 
-/** Search snippets arrive with control-character hit markers (search.ts ▸ HIT_OPEN). */
-const HIT_OPEN = '\u0001'
-const HIT_CLOSE = '\u0002'
-
 function unmark(text: string): string {
 	return text.replaceAll(HIT_OPEN, '«').replaceAll(HIT_CLOSE, '»').replace(/\s+/g, ' ').trim()
 }
 
 function clip(text: string, max: number): string {
 	return text.length > max ? `${text.slice(0, max)}… [${text.length - max} more chars]` : text
-}
-
-interface WorkspaceLike {
-	id: string
-	workspace_name?: string | null
-	pr_title?: string | null
-	branch?: string | null
-	directory_name?: string | null
-	repo_name?: string | null
-	state?: string | null
-	archived?: boolean
-}
-
-/** Conductor's own title precedence, third copy — see reads.ts ▸ workspaceTitle for why. */
-function label(w: WorkspaceLike): string {
-	const branch = w.branch ?? ''
-	const slug = branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch
-	const words = slug.replace(/[-_]/g, ' ').trim()
-	const humanized = words ? words[0].toUpperCase() + words.slice(1) : ''
-	return w.workspace_name || w.pr_title || humanized || w.directory_name || w.id.slice(0, 8)
 }
 
 // ── tools ───────────────────────────────────────────────────────────────────────
@@ -112,17 +102,9 @@ export function createTools(call: RelayCall): Tool[] {
 			run: async args => {
 				const query = need(args, 'query')
 				const limit = num(args.limit)
-				const data = await call<{
-					results: {
-						workspace: WorkspaceLike & { updated_at: string }
-						sessionId: string | null
-						sessionTitle: string | null
-						hits: number
-						byName: boolean
-						snippets: { role: string; at: string; text: string }[]
-					}[]
-					index: { ready: boolean; progress: number; chunks: number; error?: string }
-				}>(`/api/search?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`)
+				const data = await call<SearchResponse>(
+					`/api/search?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`
+				)
 
 				const lines: string[] = []
 				if (data.index.error) lines.push(`! chat index unavailable (${data.index.error}) — names matched only`)
@@ -134,7 +116,7 @@ export function createTools(call: RelayCall): Tool[] {
 					const w = r.workspace
 					const tags = [w.repo_name, w.branch, w.archived ? 'ARCHIVED' : w.state].filter(Boolean).join(' · ')
 					lines.push('')
-					lines.push(`## ${label(w)}`)
+					lines.push(`## ${workspaceTitle(w)}`)
 					lines.push(`${tags}${r.byName ? ' · name match' : ''}`)
 					lines.push(`workspace_id: ${w.id}${r.sessionId ? `  session_id: ${r.sessionId}` : ''}`)
 					if (r.hits) lines.push(`${r.hits} matching message${r.hits === 1 ? '' : 's'}:`)
@@ -160,10 +142,9 @@ export function createTools(call: RelayCall): Tool[] {
 				const sessionId = need(args, 'session_id')
 				const limit = Math.min(400, Math.max(1, num(args.limit) ?? 40))
 				const includeTools = args.include_tools === true
-				const data = await call<{ entries: { role: string; text: string; tool?: string; detail?: string }[] }>(
-					`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=0`,
-					{ timeoutMs: 30_000 }
-				)
+				const data = await call<MessagesResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=0`, {
+					timeoutMs: 30_000
+				})
 				const wanted = includeTools
 					? data.entries
 					: data.entries.filter(e => e.role === 'user' || e.role === 'assistant')
@@ -195,22 +176,13 @@ export function createTools(call: RelayCall): Tool[] {
 			},
 			run: async args => {
 				const status = str(args.status)
-				const data = await call<{
-					workspaces: (WorkspaceLike & {
-						session_status?: string | null
-						model?: string | null
-						active_session_id?: string | null
-						updated_at: string
-						pr_number?: number | null
-						pr_status?: string | null
-					})[]
-				}>('/api/state')
+				const data = await call<StateResponse>('/api/state')
 				const shown = status ? data.workspaces.filter(w => w.session_status === status) : data.workspaces
 				if (!shown.length) return status ? `no workspace is ${status}` : 'no live workspaces'
 				return shown
 					.map(w =>
 						[
-							`${w.session_status === 'working' ? '▶' : '·'} ${label(w)}`,
+							`${w.session_status === 'working' ? '▶' : '·'} ${workspaceTitle(w)}`,
 							`    ${[w.repo_name, w.branch, w.model, w.pr_number ? `PR #${w.pr_number} ${w.pr_status ?? ''}`.trim() : null].filter(Boolean).join(' · ')}`,
 							`    workspace_id: ${w.id}${w.active_session_id ? `  session_id: ${w.active_session_id}` : ''}`
 						].join('\n')
@@ -229,9 +201,7 @@ export function createTools(call: RelayCall): Tool[] {
 			},
 			run: async args => {
 				const id = need(args, 'workspace_id')
-				const data = await call<{
-					sessions: { id: string; title: string | null; status: string | null; model: string | null }[]
-				}>(`/api/workspaces/${encodeURIComponent(id)}/sessions`)
+				const data = await call<SessionsResponse>(`/api/workspaces/${encodeURIComponent(id)}/sessions`)
 				if (!data.sessions.length) return `no chats in workspace ${id}`
 				return data.sessions
 					.map(
@@ -251,12 +221,11 @@ export function createTools(call: RelayCall): Tool[] {
 			},
 			run: async args => {
 				const id = need(args, 'workspace_id')
-				const data = await call<{ files?: { path: string; additions: number; deletions: number }[]; diff?: string }>(
-					`/api/workspaces/${encodeURIComponent(id)}/diff`,
-					{ timeoutMs: 30_000 }
-				)
-				if (!data.files?.length) return 'no changes against the target branch'
-				return data.files.map(f => `${f.path}  +${f.additions} -${f.deletions}`).join('\n')
+				const data = await call<WorkspaceDiff>(`/api/workspaces/${encodeURIComponent(id)}/diff`, {
+					timeoutMs: 30_000
+				})
+				if (!data.files.length) return 'no changes against the target branch'
+				return data.files.map(f => `${f.path}  +${f.added} -${f.removed}`).join('\n')
 			}
 		},
 		{
@@ -265,9 +234,7 @@ export function createTools(call: RelayCall): Tool[] {
 				'The repos Conductor can create a workspace in. Use before create_workspace to get an exact repo name.',
 			inputSchema: { type: 'object', properties: {} },
 			run: async () => {
-				const data = await call<{ repos: { name: string; default_branch: string | null; root_path: string | null }[] }>(
-					'/api/repos'
-				)
+				const data = await call<ReposResponse>('/api/repos')
 				return data.repos.map(r => `${r.name}  (${r.default_branch ?? '?'})  ${r.root_path ?? ''}`).join('\n')
 			}
 		},
@@ -291,19 +258,13 @@ export function createTools(call: RelayCall): Tool[] {
 				const repo = need(args, 'repo')
 				const prompt = str(args.prompt)
 				const send = args.wait_for_send === true
-				const data = await call<{
-					workspaceId: string
-					workspace?: WorkspaceLike
-					pendingPrompt?: string
-					sent?: boolean
-					warning?: string
-				}>('/api/workspaces', {
+				const data = await call<CreateWorkspaceResult>('/api/workspaces', {
 					method: 'POST',
 					body: { repo, prompt, send },
 					timeoutMs: send ? WRITE_TIMEOUT_MS : 30_000
 				})
 				const lines = [
-					`created ${data.workspace ? label(data.workspace) : data.workspaceId}`,
+					`created ${data.workspace ? workspaceTitle(data.workspace) : data.workspaceId}`,
 					`workspace_id: ${data.workspaceId}`
 				]
 				if (data.warning) lines.push(`! ${data.warning}`)
@@ -332,10 +293,11 @@ export function createTools(call: RelayCall): Tool[] {
 			run: async args => {
 				const sessionId = need(args, 'session_id')
 				const text = need(args, 'text')
-				const data = await call<{ ok: boolean; parked?: boolean; error?: string; warning?: string }>(
-					`/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
-					{ method: 'POST', body: { text, workspaceId: str(args.workspace_id) }, timeoutMs: WRITE_TIMEOUT_MS }
-				)
+				const data = await call<SendResult>(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+					method: 'POST',
+					body: { text, workspaceId: str(args.workspace_id) },
+					timeoutMs: WRITE_TIMEOUT_MS
+				})
 				if (data.parked) return 'the Mac is locked — the prompt is parked and will be sent on unlock'
 				if (!data.ok) throw new Error(data.error ?? 'the send did not land')
 				return data.warning ? `sent (${data.warning})` : 'sent'
@@ -358,10 +320,11 @@ export function createTools(call: RelayCall): Tool[] {
 			},
 			run: async args => {
 				const sessionId = need(args, 'session_id')
-				const data = await call<{ ok: boolean; alreadyIdle?: boolean; error?: string }>(
-					`/api/sessions/${encodeURIComponent(sessionId)}/stop`,
-					{ method: 'POST', body: { workspaceId: str(args.workspace_id) }, timeoutMs: WRITE_TIMEOUT_MS }
-				)
+				const data = await call<StopResult>(`/api/sessions/${encodeURIComponent(sessionId)}/stop`, {
+					method: 'POST',
+					body: { workspaceId: str(args.workspace_id) },
+					timeoutMs: WRITE_TIMEOUT_MS
+				})
 				if (data.alreadyIdle) return 'that chat had already finished — nothing to stop'
 				if (!data.ok) throw new Error(data.error ?? 'the stop did not land')
 				return 'stopped'
@@ -382,7 +345,7 @@ export function createTools(call: RelayCall): Tool[] {
 			run: async args => {
 				const id = need(args, 'workspace_id')
 				const status = need(args, 'status')
-				const data = await call<{ ok: boolean; error?: string }>(`/api/workspaces/${encodeURIComponent(id)}/status`, {
+				const data = await call<StatusResult>(`/api/workspaces/${encodeURIComponent(id)}/status`, {
 					method: 'POST',
 					body: { status },
 					timeoutMs: WRITE_TIMEOUT_MS

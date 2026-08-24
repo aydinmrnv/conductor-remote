@@ -5,6 +5,7 @@ import type { ConductorDb } from './db.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import type { ParkedPrompt } from './parked.ts'
+import { workspaceTitle } from './shared.ts'
 import { parseMessage, type TranscriptEntry } from './transcript.ts'
 
 export interface WorkspaceRow {
@@ -170,27 +171,6 @@ function toSearchWorkspace(r: {
 		icon: describeRepoIcon({ icon: r.repo_icon, repoRoot: r.repo_root, remoteUrl: r.remote_url }),
 		archived: r.state === 'archived'
 	}
-}
-
-/**
- * Conductor's sidebar title for a workspace: manual name → PR title → humanized
- * branch → worktree codename → id. Deliberately a second copy of the web's
- * `workspaceLabel` (web/src/lib/format.ts, where the precedence is documented) —
- * the relay can't import from the Vite root, and a notification that names a
- * workspace differently from the list it came from is worse than the duplication.
- */
-export function workspaceTitle(w: {
-	id: string
-	workspace_name: string | null
-	pr_title: string | null
-	branch: string | null
-	directory_name: string | null
-}): string {
-	const branch = w.branch ?? ''
-	const slug = branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch
-	const words = slug.replace(/[-_]/g, ' ').trim()
-	const humanized = words ? words[0].toUpperCase() + words.slice(1) : ''
-	return w.workspace_name || w.pr_title || humanized || w.directory_name || w.id.slice(0, 8)
 }
 
 /**

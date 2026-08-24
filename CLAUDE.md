@@ -459,6 +459,40 @@ Two asymmetric halves — keep them separate:
   silently drops every in-flight reply, which looks exactly like a client that
   stopped listening.
 
+- **One set of types, because there are now three readers of the same JSON.** The
+  phone, an MCP tool and the relay all describe the same rows, and for a while each
+  kept its own copy: `web/src/lib/types.ts` was a 421-line hand mirror of `reads.ts`
+  and friends, and `src/mcp-tools.ts` declared a third set inline at every
+  `call<{…}>`. Nothing checked any of them — a field renamed on the relay typechecked
+  cleanly on both sides and turned up as `undefined` on a phone, which is exactly how
+  `workspace_diff` came to print `+undefined -undefined` for every file (it read
+  `additions`/`deletions`; `git.ts` sends `added`/`removed`). So a shape that leaves
+  the relay is declared **once**, in `src/wire.ts`, which re-exports the relay's own
+  domain types under their wire names and adds the response envelopes the routes
+  assemble; `web/src/lib/types.ts` is now `export type * from '…/src/wire.ts'`. This
+  needs no dependency and no RPC framework: **`src/` and `web/src/` are one
+  TypeScript project** (tsconfig.json includes both) and `verbatimModuleSyntax`
+  erases a type-only import outright, so a type may live in the same file as the
+  `node:sqlite` that produces it and none of it reaches the bundle.
+  - **Types cross freely; values do not.** The single module the web app may
+    import a *value* from is `src/shared.ts`, which is stdlib-free on purpose and
+    holds what both sides must compute identically — `workspaceTitle` (three copies
+    before, so the sidebar and a push notification could name one workspace two
+    ways), `queryTokens`, and the snippet hit markers. Everything else is
+    `import type`, enforced by `scripts/check-imports.ts`, because the near miss
+    (`import { type X }`, inline rather than statement-level) still emits a real
+    import.
+  - **This is also the answer to "should we adopt tRPC".** It buys the same shared
+    types, and it costs the tarball's `dependencies: {}` — a package that
+    auto-updates while holding a token that drives your Mac. It also cannot serve
+    the half of `/api` that is not RPC (static SPA + fallback, the binary icon
+    route, `/mcp` itself, the `x-client-timeout-ms` deadline, `x-relay-client`
+    priority), and `httpBatchLink` has no 304 path, which the phone's three polls
+    (1s, 2s, 2.5s, forever) get from `json()` today. The router-derived MCP tools
+    that make it pay elsewhere need ~200 procedures to earn it; there are ten here,
+    and most of `mcp-tools.ts` is agent-facing text formatting that no transport
+    changes.
+
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
   side of the split. `src/notify.ts` polls the same read-only SQLite for
   `sessions.status` transitions and POSTs a Web Push message; no Conductor
@@ -586,6 +620,7 @@ yarn fix      # Biome autofix (format + safe lints)
 yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
 yarn check:nosleep     # run NOSLEEP_BODY against a stub pmset in a temp dir (no root, no real pmset)
 yarn check:uilock      # the UI lock's queue: order, priority, release-on-failure, cap
+yarn check:imports     # web/src may only `import type` from src/ (src/shared.ts aside)
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
@@ -594,11 +629,12 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Three automated tests. Two of them share one reason to exist: **each guards a
+Four automated tests. Two of them share one reason to exist: **each guards a
 language nothing else in the toolchain reads** — they live in a string or a sibling
 file, so `tsc` sees text and Biome sees text, and a mistake surfaces for the first
-time on someone's phone or someone's Mac. The third guards control flow `tsc` reads
-fine and still cannot judge.
+time on someone's phone or someone's Mac. The other two guard things `tsc` reads
+fine and still cannot judge: control flow, and which side of the Node/browser line
+an import lands on.
 
 - `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
   the way `osascript` will, and every `my handler()` call, in the script *and* in
@@ -624,6 +660,16 @@ fine and still cannot judge.
   wedges **every** future write with no error and no fix from the phone, and a
   priority bug puts a human tap behind a minute of agent work. It found both bugs in
   the queue while that queue was being written. Portable, so the ubuntu job runs it.
+
+- `scripts/check-imports.ts` — the relay/web boundary (see "One set of types" above).
+  `web/src/**` may reach into `src/` only with a **statement-level** `import type`,
+  and the trap it exists for is that the inline form looks identical and is not:
+  under `verbatimModuleSyntax`, `import { type Workspace } from '…/reads.ts'` emits
+  `import {} from '…/reads.ts'`, a live import of a module that opens SQLite. It
+  typechecks, it lints, and it reaches the phone as a blank screen. It also asserts
+  that `src/shared.ts` — the one module the web app may import a *value* from — pulls
+  in no `node:` builtin, and that `src/wire.ts` declares types only. Portable, so the
+  ubuntu job runs it.
 
 Nothing else is tested. Verify a runtime change by curling the relay (see the
 bind trap below), not by unit test.
@@ -808,6 +854,9 @@ bind trap below), not by unit test.
   in imports are required (`allowImportingTsExtensions`).
 - **Layout:** `src/` = Node relay (server, db, reads, git, transcript, sidecar,
   writes, config) plus `conductor.applescript`, the UI script `writes.ts` runs.
+  Two files there are read by the phone as well: `src/wire.ts` (the `/api` contract,
+  types only) and `src/shared.ts` (stdlib-free, the only value import the web app may
+  make) — see "One set of types".
   `web/` = Vite-root React PWA (`web/src/`). `public/` = static
   PWA assets at the **repo root** (not under `web/`) so Conductor's repo-icon lookup
   finds them (`vite.config.ts` sets `publicDir: '../public'`); `scripts/` = dev,
