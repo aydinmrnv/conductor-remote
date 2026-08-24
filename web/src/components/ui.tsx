@@ -1,7 +1,8 @@
-import { RefreshCw, WifiOff } from 'lucide-react'
+import { CloudOff, RefreshCw, WifiOff } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { useRepoIcon } from '../hooks.ts'
+import { ApiError } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { statusDot } from '../lib/format.ts'
 import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
@@ -76,6 +77,68 @@ export function Badge({ children }: { children: ReactNode }) {
 		<span className="grid min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">
 			{children}
 		</span>
+	)
+}
+
+/**
+ * What to say when the first `/api/state` never lands, which is the only thing the phone
+ * can show on a cold launch: there is no cached list to fall back on.
+ *
+ * The old copy said "check the relay is running and the token is correct", and both of
+ * those were fine every single time this actually fired. A phone that reaches nothing is
+ * almost never a relay that stopped; it is the path to the relay. So the hints name the
+ * path, in the order these have really bitten (see the relay's own README ▸ Troubleshooting):
+ * the Mac asleep, then Tailscale, then a stale Funnel.
+ *
+ * The Private Relay line is the one worth the words. iCloud Private Relay routes WebKit
+ * traffic around the VPN, so a *tailnet-only* relay stays unreachable with Tailscale
+ * showing Connected — the phone resolves the name over public DNS and lands on a Funnel
+ * ingress that is switched off. Nothing on screen suggests a VPN is being bypassed, and
+ * the tailnet name never falls back to a working address, so this is unrecoverable by
+ * waiting. Measured: 10+ minutes after Funnel went off, public DNS still answered with
+ * the dead ingress IPs while MagicDNS answered with the node.
+ *
+ * A token problem cannot reach here — a 401 clears the token and raises the gate instead
+ * (hooks.ts ▸ useOnline) — so it is deliberately not in the list.
+ */
+export function RelayUnreachable({ error }: { error: unknown }) {
+	// `navigator.onLine` is only trustworthy in the negative: false means the OS has no
+	// route at all, and that is a different problem with different advice. True proves
+	// nothing, which is why every other case falls through to the hints.
+	const noNetwork = typeof navigator !== 'undefined' && navigator.onLine === false
+	const message = error instanceof Error ? error.message : String(error ?? 'request failed')
+	// A timeout normalises to ApiError(0) (lib/api.ts); a DNS or connection failure never
+	// becomes one at all, since `fetch` rejects before there is a status to read.
+	const unreachable = !(error instanceof ApiError) || error.status === 0
+
+	if (noNetwork)
+		return (
+			<Empty>
+				<WifiOff size={20} className="mx-auto mb-3 text-muted" />
+				<div className="font-medium text-text">This phone is offline</div>
+				<div className="mt-1">Check Wi-Fi or cellular. The list comes back on its own.</div>
+			</Empty>
+		)
+
+	return (
+		<Empty>
+			<CloudOff size={20} className="mx-auto mb-3 text-del" />
+			<div className="font-medium text-text">
+				{unreachable ? 'Can’t reach the relay' : 'The relay answered with an error'}
+			</div>
+			<div className="mt-1 break-words font-mono text-[11px] text-muted">{message}</div>
+			{unreachable ? (
+				<ul className="mt-4 space-y-2 text-left">
+					<li>Is the Mac awake and online?</li>
+					<li>
+						If the relay is tailnet-only: Tailscale connected on this phone, and{' '}
+						<span className="text-text">iCloud Private Relay off</span>. Private Relay routes around the VPN, so the app
+						stays stuck even while Tailscale says Connected.
+					</li>
+					<li>Otherwise the Funnel may be stale after a network change — re-deploy on the Mac.</li>
+				</ul>
+			) : null}
+		</Empty>
 	)
 }
 

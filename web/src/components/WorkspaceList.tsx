@@ -24,7 +24,7 @@ import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
 import { SearchPane } from './SearchPane.tsx'
-import { Badge, Chip, Empty, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
+import { Badge, Chip, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
@@ -166,12 +166,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				) : isLoading && !data ? (
 					<Spinner label="Loading workspaces…" />
 				) : isError ? (
-					<Empty>
-						{(error as Error)?.message}
-						<br />
-						<br />
-						Check the relay is running and the token is correct.
-					</Empty>
+					<RelayUnreachable error={error} />
 				) : workspaces.length === 0 ? (
 					<Empty>No active workspaces. Start one in Conductor and it’ll appear here.</Empty>
 				) : shown.length === 0 ? (
