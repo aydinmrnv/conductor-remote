@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router'
+import { useParams, useSearchParams } from 'react-router'
 import { useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -18,8 +18,15 @@ import { Spinner } from './ui.tsx'
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
+	// Which chat is on screen lives in the URL, because two things set it: the tab strip
+	// here, and a tapped notification, which names the chat that just finished
+	// (src/notify.ts ▸ chatRoute). Holding it in state instead loses that race — a repeat
+	// notification for a chat you had tabbed away from arrives as the *same* URL, so
+	// nothing would tell the state to give way. One source of truth, last writer wins.
+	const [searchParams, setSearchParams] = useSearchParams()
+	const pickedSession = searchParams.get('session')
+	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
-	const [pickedSession, setPickedSession] = useState<string | null>(null)
 	const [creatingChat, setCreatingChat] = useState(false)
 	const queryClient = useQueryClient()
 	const { data, isLoading } = useWorkspaces()
@@ -28,15 +35,14 @@ export function SessionView() {
 	const readMarks = useApp(s => s.readMarks)
 	const markRead = useApp(s => s.markRead)
 
-	// A manual tab pick only applies to the workspace it was made in.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the pick when switching workspaces
-	useEffect(() => setPickedSession(null), [workspaceId])
-
 	const ws = data?.workspaces.find(w => w.id === workspaceId)
 	const actuator = data?.actuator
 
 	const sessions = sessionsData?.sessions ?? []
 	const sessionId =
+		// A named chat that isn't here — hidden, or a stale link from an old notification —
+		// falls through to the usual pick rather than showing an empty pane. Switching
+		// workspace drops the parameter with the rest of the URL, so no pick outlives it.
 		(pickedSession && sessions.some(s => s.id === pickedSession) ? pickedSession : null) ??
 		ws?.active_session_id ??
 		sessions[0]?.id ??
@@ -88,7 +94,7 @@ export function SessionView() {
 			const r = await client.newChat(ws.id)
 			if (r.ok) {
 				await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
-				if (r.sessionId) setPickedSession(r.sessionId)
+				if (r.sessionId) pickSession(r.sessionId)
 			}
 		} finally {
 			setCreatingChat(false)
@@ -125,7 +131,7 @@ export function SessionView() {
 						sessions={sessions}
 						activeId={sessionId}
 						readMarks={readMarks}
-						onSelect={setPickedSession}
+						onSelect={pickSession}
 						onNewChat={createChat}
 						creating={creatingChat}
 					/>

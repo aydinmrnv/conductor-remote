@@ -13,6 +13,25 @@
 // 2. **A tap focuses the existing window** rather than navigating it. The app is a
 //    token-gated SPA; `openWindow` on a live client would remount the whole thing and
 //    throw away in-progress composer text, so we focus and post a route instead.
+// 3. **The route is also parked in Cache Storage**, because on iOS neither of the two
+//    direct routes survives. A backgrounded home-screen web app is resumed on whatever
+//    screen it was left on — `openWindow`'s path is ignored, and a `postMessage` to a
+//    frozen page is dropped (WebKit, reported from iOS 17.1 through 18.x and still
+//    open). The cache outlives both, so the app reads its target when it comes back to
+//    the front; see `usePushRouting` in web/src/hooks.ts.
+
+/** One entry, overwritten per tap: only the newest tap can still be waiting to land. */
+const ROUTE_CACHE = 'push-route'
+const ROUTE_KEY = '/__push-route'
+
+async function parkRoute(url) {
+	try {
+		const cache = await caches.open(ROUTE_CACHE)
+		await cache.put(ROUTE_KEY, new Response(JSON.stringify({ url, ts: Date.now() })))
+	} catch {
+		// Storage refused it (quota, a private window). The two direct routes below still stand.
+	}
+}
 
 self.addEventListener('push', event => {
 	const fallback = { title: 'Conductor Remote', body: 'Something changed in a workspace.', url: '/', tag: 'conductor' }
@@ -28,8 +47,9 @@ self.addEventListener('push', event => {
 	event.waitUntil(
 		self.registration.showNotification(data.title, {
 			body: data.body,
-			// Tagged per workspace by the relay: a chatty agent replaces its own notification
-			// instead of stacking. `renotify` keeps the replacement audible.
+			// Tagged per chat by the relay: a chatty agent replaces its own notification
+			// instead of stacking, while a sibling chat keeps its own (they open different
+			// screens). `renotify` keeps the replacement audible.
 			tag: data.tag,
 			renotify: true,
 			icon: '/icon-192.png',
@@ -45,18 +65,23 @@ self.addEventListener('notificationclick', event => {
 	const url = (event.notification.data && event.notification.data.url) || '/'
 	event.waitUntil(
 		(async () => {
+			// Park first. Everything below can succeed and still leave the phone on the wrong
+			// screen, and this is the copy the app reads when it wakes up.
+			await parkRoute(url)
 			const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
 			for (const client of clients) {
 				if (new URL(client.url).origin !== self.location.origin) continue
+				// Handled in web/src/hooks.ts (usePushRouting) — an in-app route change, so the
+				// token gate and React state survive the tap. Posted before the focus, since a
+				// refused focus is no reason to skip a message the page may well receive.
+				client.postMessage({ type: 'push-navigate', url })
 				try {
 					await client.focus()
-					// Handled in web/src/hooks.ts (usePushRouting) — an in-app route change,
-					// so the token gate and React state survive the tap.
-					client.postMessage({ type: 'push-navigate', url })
-					return
 				} catch {
-					// focus() can be refused (no user activation on some platforms) — fall through to openWindow
+					// focus() can be refused (no user activation on some platforms); on iOS the
+					// system foregrounds the web app on the tap regardless.
 				}
+				return
 			}
 			await self.clients.openWindow(url)
 		})()

@@ -394,7 +394,20 @@ Two asymmetric halves — keep them separate:
   repairing it can't wait for someone to open a sheet and look. The push handlers
   live in `public/push-sw.js` (plain JS, pulled into the Workbox-generated worker
   via `workbox.importScripts`) and **must always show a notification** — iOS drops
-  the subscription for a silent push.
+  the subscription for a silent push. **A tap has to be routed three ways, because
+  on iOS the two obvious ones both fail silently**: the payload names the chat that
+  ended (`/w/<workspace>?session=<chat>`, `notify.ts` ▸ `chatRoute`), and the worker
+  posts that to a live page — the fast path, which keeps the token gate and a
+  half-typed composer. But a backgrounded home-screen web app is *resumed on the
+  screen it was left on*: `openWindow`'s path is ignored and a `postMessage` to a
+  frozen page is dropped, which is what "tapping the notification does nothing"
+  actually is (WebKit, reported iOS 17.1 through 18.x, still open). So the worker
+  also **parks the target in Cache Storage**, and the app claims it on mount and on
+  every return to the front (`hooks.ts` ▸ `usePushRouting`). Reading spends it —
+  once, and only within 2 minutes — or the next launch would jump somewhere from a
+  tap that already landed. The chat on screen lives in that same `?session=`
+  parameter rather than in state, so a repeat notification for a chat you tabbed
+  away from still wins: the two writers share one source of truth.
 
 - **Keeping the Mac awake is the one write that needs *root*** — a fourth shape,
   touching neither the DB nor Conductor's UI. `pmset disablesleep` is the only lever
