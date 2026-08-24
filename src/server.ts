@@ -38,7 +38,8 @@ import {
 } from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
-import { Reads, type SessionRow, type Workspace } from './reads.ts'
+import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
+import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { readSettings, writeSettings } from './settings.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
@@ -70,6 +71,12 @@ const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
+
+// Full-text index over the chat prose, in the relay's own sidecar DB — never in
+// Conductor's (see src/search.ts). It backfills in the background and is disposable:
+// deleting the file rebuilds it on the next start.
+const search = new SearchIndex(db, path.join(stateDir(), 'search.db'))
+search.start()
 
 // A windowless Conductor that ignores reopen *and* a Dock click can only be fixed
 // by restarting it — and quitting takes any agent mid-turn down with it. So the
@@ -476,6 +483,54 @@ const server = http.createServer(async (req, res) => {
 				actuator: await describeActuator(actuator),
 				version: update.current,
 				update
+			})
+		}
+
+		// GET /api/search?q= — find a workspace by its name or by what was said in its chats.
+		//
+		// Two sources, merged. `findWorkspacesByName` matches the workspace's own identity
+		// and wins ties, because someone who types a name wants that workspace and not the
+		// twelve chats that mention it. The transcript index answers the harder question —
+		// "which workspace did I do this in" — and is the only one that can, since the
+		// words you remember are usually the agent's, not the branch's.
+		//
+		// Both reach archived workspaces. That is the point: 1,846 of the 1,886 here are
+		// archived, so a search limited to the live sidebar would miss almost everything.
+		if (req.method === 'GET' && pathname === '/api/search') {
+			const q = url.searchParams.get('q') ?? ''
+			// 12, not 50: an OR query over common words ("add", "remove") has a long weak tail,
+			// and past the first screenful nobody scrolls — they retype instead.
+			const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') ?? 12) || 12))
+			const index = search.status()
+			const tokens = queryTokens(q)
+			if (!tokens.length) return json(req, res, 200, { query: q, results: [], index })
+
+			const hits = search.search(q)
+			const targets = reads.searchTargets([...new Set(hits.map(h => h.sessionId))])
+			const fromChats = foldHits<SearchWorkspace>(hits, sid => targets.get(sid)?.workspace ?? null)
+
+			const remaining = new Map(fromChats.map(r => [r.workspace.id, r]))
+			const merged: SearchResult<SearchWorkspace>[] = []
+			for (const workspace of reads.findWorkspacesByName(tokens, limit)) {
+				const evidence = remaining.get(workspace.id)
+				remaining.delete(workspace.id)
+				// Keep the chat evidence when there is any: the snippet is what tells you this
+				// is the right "fix-lamp-thing" out of three with similar names.
+				merged.push(
+					evidence
+						? { ...evidence, byName: true }
+						: { workspace, sessionId: null, hits: 0, score: 0, at: null, snippets: [], byName: true }
+				)
+			}
+			merged.push(...remaining.values())
+
+			return json(req, res, 200, {
+				query: q,
+				index,
+				results: merged.slice(0, limit).map(r => ({
+					...r,
+					sessionTitle: r.sessionId ? (targets.get(r.sessionId)?.sessionTitle ?? null) : null
+				}))
 			})
 		}
 

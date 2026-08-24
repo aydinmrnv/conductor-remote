@@ -370,6 +370,42 @@ Two asymmetric halves — keep them separate:
     `query` send injects a real prompt into a running agent; never auto-run it to
     "test."** Since `applescript` is now precise, sidecar buys nothing today.
 
+- **Search is a read that builds an index, and it needs its own database.**
+  `src/search.ts` full-text-searches the chat history, which is only possible because
+  of one measurement: of the 3,106 MB in `session_messages.content`, the **prose is
+  38 MB** — 1.2%. tool_result output is 799 MB, `type:"system"` frames 522 MB,
+  tool_use arguments 162 MB, thinking 77 MB. So it indexes what a person would
+  actually search for (the prompts they typed and the agent's own words, via
+  `parseMessage`, so a hit is always something the chat view would show) and skips
+  the rest. Grepping the raw column would scan 3 GB to search 38 MB and would rank a
+  file the agent happened to `cat` above the sentence explaining the decision.
+  **FTS5 ships inside `node:sqlite`** — porter stemming, `bm25()`, `snippet()`,
+  `NEAR()` — so the index costs no runtime dependency; measured, the whole history
+  builds in **7.6s** into ~111k chunks and queries answer in 1–7ms. Four things are
+  load-bearing. The index lives in the relay's **own** file (`stateDir()/search.db`),
+  never in `conductor.db`, and is disposable — delete it and the next start rebuilds
+  it. The backfill cursor advances by the **last rowid scanned**, not the last one
+  matched, or a caught-up index re-reads the whole 3 GB tail every poll looking for
+  rows it already rejected. A phone query is never passed to `MATCH` raw: FTS5 reads
+  `-`, `*`, `:`, `AND`, `NEAR` as syntax, so an unquoted apostrophe is a *parse
+  error* rather than a poor result — `matchQuery` quotes every token and ORs them,
+  leaving BM25 to rank, because someone reaching for a workspace is recalling it and
+  not filtering it. And chunk hits are folded up into **workspaces** by summing only
+  the best 3, which was measured rather than chosen: searching "removing adding lamp
+  manual" for a chat that says "Add by name is gone. Removed the form", summing every
+  hit put the right answer **9th** (a 32-message conversation about lamps won on
+  volume), best-single-hit put it 5th, top-3 put it 5th and held up better across
+  other queries. `Reads.searchTargets` / `findWorkspacesByName` deliberately drop the
+  `state IN ('ready','setting_up')` filter the sidebar uses: **1,846 of the 1,886
+  workspaces here are archived**, so search limited to the live list would miss
+  almost everything. The phone can list those but not open them (`/api/state`
+  doesn't carry them, so `/w/<id>` would say "not found"), which is why an archived
+  result renders as a card with its excerpts instead of a button. The one thing
+  lexical search cannot do is bridge vocabulary: that lamp chat never contains the
+  word "manual", so no amount of BM25 tuning ranks it first, and reranking can't
+  help either since the document is never retrieved. That, not cost, is the case for
+  embeddings if search ever needs them.
+
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
   side of the split. `src/notify.ts` polls the same read-only SQLite for
   `sessions.status` transitions and POSTs a Web Push message; no Conductor

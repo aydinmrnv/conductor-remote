@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -326,6 +326,38 @@ export function useWorkspaces() {
 /** Repos Conductor knows about — static enough to fetch once per app load. */
 export function useRepos() {
 	return useQuery({ queryKey: ['repos'], queryFn: () => client.repos(), staleTime: 60_000 })
+}
+
+/** Hold a fast-changing value still until it settles, so a keystroke isn't a request. */
+export function useDebounced<T>(value: T, ms: number): T {
+	const [settled, setSettled] = useState(value)
+	useEffect(() => {
+		const t = setTimeout(() => setSettled(value), ms)
+		return () => clearTimeout(t)
+	}, [value, ms])
+	return settled
+}
+
+/**
+ * Search workspace names and chat transcripts (src/search.ts).
+ *
+ * Not polled: the answer only changes when the query does, and a phone typing into
+ * a search box is already making enough requests. `keepPreviousData` is what stops
+ * the list blanking between keystrokes — a result flashing away and back reads as a
+ * broken search, and on a phone it also moves the row under your thumb.
+ *
+ * Two characters is the floor. One letter matches thousands of chunks, so it costs
+ * a real query to return a list nobody wants.
+ */
+export function useSearch(query: string) {
+	const trimmed = query.trim()
+	return useQuery({
+		queryKey: ['search', trimmed],
+		queryFn: () => client.search(trimmed),
+		enabled: trimmed.length >= 2,
+		staleTime: 30_000,
+		placeholderData: keepPreviousData
+	})
 }
 
 export function useSessions(workspaceId: string | undefined) {

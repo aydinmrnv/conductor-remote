@@ -62,6 +62,62 @@ export interface Workspace {
 }
 
 /**
+ * A workspace as a search result names it (mirrors `SearchWorkspace` in src/reads.ts).
+ * Leaner than `Workspace` because search reaches archived ones, which have no
+ * worktree, no live chat and no git left to read.
+ */
+export interface SearchWorkspace {
+	id: string
+	workspace_name: string | null
+	pr_title: string | null
+	branch: string | null
+	directory_name: string | null
+	state: string | null
+	updated_at: string
+	repo_name: string | null
+	icon: RepoIcon | null
+	/** Conductor has archived it: it can be listed here, but not opened. */
+	archived: boolean
+}
+
+/** One matching excerpt. `text` carries hit markers — render it with `splitSnippet`. */
+export interface SearchSnippet {
+	sessionId: string
+	role: 'user' | 'assistant'
+	at: string
+	text: string
+}
+
+export interface SearchResult {
+	workspace: SearchWorkspace
+	/** The chat holding the strongest passage — where a tap should land. */
+	sessionId: string | null
+	sessionTitle: string | null
+	hits: number
+	score: number
+	at: string | null
+	snippets: SearchSnippet[]
+	/** The workspace's own name/branch matched, rather than (only) its chats. */
+	byName: boolean
+}
+
+/** Progress of the relay's transcript index (src/search.ts). */
+export interface SearchIndexStatus {
+	chunks: number
+	ready: boolean
+	/** 0–1 through the backlog; 1 once caught up. */
+	progress: number
+	/** Set when the index could not be opened at all — search is degraded to names only. */
+	error?: string
+}
+
+export interface SearchResponse {
+	query: string
+	index: SearchIndexStatus
+	results: SearchResult[]
+}
+
+/**
  * A prompt the relay is holding: a workspace's first prompt waiting on setup
  * (mirrors `FirstPrompt` in src/firstprompt.ts) or one parked for the lock screen
  * (mirrors `ParkedPrompt` in src/parked.ts — those carry `sessionId` and `reason`).

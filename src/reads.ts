@@ -46,6 +46,26 @@ export interface UnreadSession {
 	at: string
 }
 
+/**
+ * A workspace as a search result names it. Deliberately *not* `Workspace`: search
+ * reaches archived workspaces (1,846 of the 1,886 here), which have no worktree, no
+ * live session and no git to read, so resolving those would cost a `git worktree
+ * list` per repo to produce nulls.
+ */
+export interface SearchWorkspace {
+	id: string
+	workspace_name: string | null
+	pr_title: string | null
+	branch: string | null
+	directory_name: string | null
+	state: string | null
+	updated_at: string
+	repo_name: string | null
+	icon: RepoIcon | null
+	/** Conductor has archived it — the phone can list it but can't open it. */
+	archived: boolean
+}
+
 /** A repo Conductor can create workspaces in (see `Reads.listRepos`). */
 export interface RepoRow {
 	name: string
@@ -114,6 +134,43 @@ export interface Workspace extends WorkspaceRow {
 }
 
 const worktreeCache = new Map<string, string | null>()
+
+/**
+ * Neutralize LIKE's own wildcards in a user's search word. `queryTokens` already
+ * strips everything but letters, digits and `_` — and `_` is LIKE's single-character
+ * wildcard, so "add_set" would quietly also match "addaset" without this.
+ */
+function escapeLike(s: string): string {
+	return s.replace(/[\\%_]/g, m => `\\${m}`)
+}
+
+/** Shared row → `SearchWorkspace` shape for the two search reads below. */
+function toSearchWorkspace(r: {
+	id: string
+	workspace_name: string | null
+	pr_title: string | null
+	branch: string | null
+	directory_name: string | null
+	state: string | null
+	updated_at: string
+	repo_name: string | null
+	repo_icon: string | null
+	repo_root: string | null
+	remote_url: string | null
+}): SearchWorkspace {
+	return {
+		id: r.id,
+		workspace_name: r.workspace_name,
+		pr_title: r.pr_title,
+		branch: r.branch,
+		directory_name: r.directory_name,
+		state: r.state,
+		updated_at: r.updated_at,
+		repo_name: r.repo_name,
+		icon: describeRepoIcon({ icon: r.repo_icon, repoRoot: r.repo_root, remoteUrl: r.remote_url }),
+		archived: r.state === 'archived'
+	}
+}
 
 /**
  * Conductor's sidebar title for a workspace: manual name → PR title → humanized
@@ -264,6 +321,86 @@ export class Reads {
 			default_branch: r.default_branch,
 			icon: describeRepoIcon({ icon: r.icon, repoRoot: r.root_path, remoteUrl: r.remote_url })
 		}))
+	}
+
+	/**
+	 * Map chat ids to the workspace that owns them, archived included.
+	 *
+	 * `listWorkspaces` filters to `state IN ('ready','setting_up')`, which is right for
+	 * the sidebar and wrong for search: the whole point of searching the transcript is
+	 * to reach work you finished and put away. One query for the whole hit set, because
+	 * a search fans out over up to 300 chunks and a per-chat lookup would be 300 of them.
+	 */
+	searchTargets(sessionIds: string[]): Map<string, { sessionTitle: string | null; workspace: SearchWorkspace }> {
+		const out = new Map<string, { sessionTitle: string | null; workspace: SearchWorkspace }>()
+		if (!sessionIds.length) return out
+		const holes = sessionIds.map(() => '?').join(',')
+		const rows = this.db.query<{
+			session_id: string
+			session_title: string | null
+			id: string
+			workspace_name: string | null
+			pr_title: string | null
+			branch: string | null
+			directory_name: string | null
+			state: string | null
+			updated_at: string
+			repo_name: string | null
+			repo_icon: string | null
+			repo_root: string | null
+			remote_url: string | null
+		}>(
+			`SELECT s.id AS session_id, s.title AS session_title,
+			        w.id, w.workspace_name, w.pr_title, w.branch, w.directory_name, w.state, w.updated_at,
+			        r.name AS repo_name, r.icon AS repo_icon, r.root_path AS repo_root, r.remote_url AS remote_url
+			 FROM sessions s
+			 JOIN workspaces w ON w.id = s.workspace_id
+			 LEFT JOIN repos r ON r.id = w.repository_id
+			 WHERE s.id IN (${holes})`,
+			sessionIds
+		)
+		for (const r of rows) out.set(r.session_id, { sessionTitle: r.session_title, workspace: toSearchWorkspace(r) })
+		return out
+	}
+
+	/**
+	 * Workspaces whose own identity matches every token — name, PR title, branch,
+	 * worktree codename or repo. Archived included, same reason as `searchTargets`.
+	 *
+	 * This is the half of search the transcript index cannot do. A workspace named for
+	 * the thing you are looking for may never have said those words in its chat, and
+	 * one whose chat is empty has no chunks at all.
+	 */
+	findWorkspacesByName(tokens: string[], limit = 20): SearchWorkspace[] {
+		if (!tokens.length) return []
+		const fields = ['w.workspace_name', 'w.pr_title', 'w.branch', 'w.directory_name', 'r.name']
+		// AND across tokens, OR across fields: "auk lamp" should find the lamp workspace in
+		// the auk repo, where no single column holds both words.
+		const where = tokens.map(() => `(${fields.map(f => `${f} LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ')
+		const params = tokens.flatMap(t => fields.map(() => `%${escapeLike(t)}%`))
+		const rows = this.db.query<{
+			id: string
+			workspace_name: string | null
+			pr_title: string | null
+			branch: string | null
+			directory_name: string | null
+			state: string | null
+			updated_at: string
+			repo_name: string | null
+			repo_icon: string | null
+			repo_root: string | null
+			remote_url: string | null
+		}>(
+			`SELECT w.id, w.workspace_name, w.pr_title, w.branch, w.directory_name, w.state, w.updated_at,
+			        r.name AS repo_name, r.icon AS repo_icon, r.root_path AS repo_root, r.remote_url AS remote_url
+			 FROM workspaces w
+			 LEFT JOIN repos r ON r.id = w.repository_id
+			 WHERE ${where}
+			 ORDER BY (w.state = 'archived'), w.updated_at DESC
+			 LIMIT ?`,
+			[...params, limit]
+		)
+		return rows.map(toSearchWorkspace)
 	}
 
 	/** Resolve a repo's icon by its name (the sidebar avatar) — null if the repo or icon is unknown. */

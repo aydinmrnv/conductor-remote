@@ -1,7 +1,61 @@
 import type { Workspace } from './types.ts'
 
-export function workspaceLabel(w: Workspace): string {
+/**
+ * Everything `workspaceLabel` needs. Structural rather than `Workspace` because a
+ * search result is a leaner shape (`SearchWorkspace`) and must still be titled the
+ * same way — a workspace that answers to two different names in one list is worse
+ * than no search at all.
+ */
+export type Titled = Pick<Workspace, 'id' | 'workspace_name' | 'pr_title' | 'branch' | 'directory_name'>
+
+export function workspaceLabel(w: Titled): string {
 	return w.workspace_name || w.pr_title || humanizeBranch(w.branch) || w.directory_name || w.id.slice(0, 8)
+}
+
+/**
+ * The words a query will actually search for. Deliberately the same expression as
+ * the relay's `queryTokens` (src/search.ts): the phone filters the live list with
+ * these while the relay searches the transcript with those, and two different
+ * splits would make one list disagree with the other on the same keystroke.
+ */
+export function queryTokens(raw: string): string[] {
+	return raw.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []
+}
+
+/** Hit markers the relay wraps matches in (src/search.ts ▸ HIT_OPEN / HIT_CLOSE). */
+const HIT_OPEN = '\u0001'
+const HIT_CLOSE = '\u0002'
+
+/**
+ * Split a relay snippet into plain and highlighted runs. The markers are control
+ * characters, so they must never reach the DOM: an unsplit snippet renders as
+ * invisible garbage between the words it was supposed to emphasise. Written with
+ * splits rather than a regex because a control character inside one is a lint error
+ * (Biome ▸ noControlCharactersInRegex), and suppressing that rule to save four lines
+ * would be the wrong trade.
+ */
+export function splitSnippet(text: string): { text: string; hit: boolean }[] {
+	const runs: { text: string; hit: boolean }[] = []
+	const segments = text.split(HIT_OPEN)
+	for (let i = 0; i < segments.length; i++) {
+		const segment = segments[i]
+		if (i === 0) {
+			if (segment) runs.push({ text: segment, hit: false })
+			continue
+		}
+		const close = segment.indexOf(HIT_CLOSE)
+		// An unterminated marker means the snippet was cut mid-highlight: keep the words
+		// and drop the marker, rather than printing it.
+		if (close < 0) {
+			if (segment) runs.push({ text: segment, hit: true })
+			continue
+		}
+		const hit = segment.slice(0, close)
+		const rest = segment.slice(close + 1)
+		if (hit) runs.push({ text: hit, hit: true })
+		if (rest) runs.push({ text: rest, hit: false })
+	}
+	return runs
 }
 
 /**

@@ -99,6 +99,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   db.ts           read-only node:sqlite handle to conductor.db
   reads.ts        workspaces / sessions / messages + worktree resolution
   transcript.ts   Claude Code SDK stream JSON → phone-renderable entries
+  search.ts       FTS5 index over chat prose in its OWN sidecar db (stateDir()/search.db);
+                  backfills in the background, folds chunk hits up into workspaces
   git.ts          workspace diff vs target branch (incl. untracked via --no-index)
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
