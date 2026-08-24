@@ -360,6 +360,31 @@ dist/               built PWA (gitignored) — what the relay serves
 
 ## Troubleshooting
 
+### The phone can't reach a tailnet-only relay (Tailscale says Connected)
+
+Suspect **iCloud Private Relay** first. It routes WebKit traffic — Safari, and any
+home-screen web app — through Apple, around the VPN and its DNS, so MagicDNS never
+answers. Turn it off in Settings ▸ Apple ID ▸ iCloud ▸ Private Relay.
+
+It fails permanently rather than slowly, because `<node>.ts.net` keeps resolving
+*publicly* to the Funnel ingress addresses long after Funnel is switched off (measured
+unchanged 10+ minutes later, across three public resolvers), and those addresses answer
+nothing once `serve` replaced `funnel`. A tailnet device gets the node's `100.x` address
+from MagicDNS instead. So anything that bypasses MagicDNS lands on a dead address and
+stays there. The same phone works fine on `--expose public`, where those ingress
+addresses are live — which is what makes this look like the relay's fault.
+
+To tell them apart from the Mac:
+
+```bash
+tailscale ping <phone-name>                        # is the tunnel actually up?
+dig +short <node>.ts.net @1.1.1.1                  # public answer
+dscacheutil -q host -a name <node>.ts.net          # MagicDNS answer
+```
+
+Different answers plus a phone that is on the tailnet means something on the phone is
+resolving outside the VPN.
+
 ### Something failed and the Mac is somewhere else
 
 The relay's own log is readable from the phone: **Connect sheet ▸ Relay logs**
