@@ -70,3 +70,37 @@ export function queryTokens(raw: string): string[] {
  */
 export const HIT_OPEN = '\u0001'
 export const HIT_CLOSE = '\u0002'
+
+/**
+ * Epoch ms for one of Conductor's timestamps, or null. A stamp with no zone is UTC —
+ * SQLite has no other clock — and `Date` would read it as local, which is a day's
+ * error just after midnight. Anything else (RFC 3339, what the app writes itself)
+ * parses as it stands.
+ */
+export function stampMs(stamp: string | null | undefined): number | null {
+	const raw = (stamp ?? '').trim()
+	if (!raw) return null
+	const zoneless = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw)
+	const at = new Date(zoneless ? `${raw.replace(' ', 'T')}Z` : raw).getTime()
+	return Number.isFinite(at) ? at : null
+}
+
+/** Enough of a workspace to date it — structural, because a search result is a leaner row. */
+export interface Stamped {
+	created_at?: string | null
+	updated_at?: string | null
+}
+
+/**
+ * When a workspace last had anything happen to it. Conductor only moves `updated_at`
+ * on chat activity, so one nobody has spoken to yet carries whatever the insert left —
+ * older than the workspace itself, which filed a just-created workspace under Older.
+ * A row can't be touched before it exists, so `created_at` is the floor.
+ */
+export function lastActivityMs(w: Stamped): number | null {
+	const created = stampMs(w.created_at)
+	const updated = stampMs(w.updated_at)
+	if (created === null) return updated
+	if (updated === null) return created
+	return Math.max(created, updated)
+}

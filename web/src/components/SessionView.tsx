@@ -5,7 +5,7 @@ import { useParams, useSearchParams } from 'react-router'
 import { useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { shortModel, workspaceTitle } from '../lib/format.ts'
+import { shortModel, stampMs, workspaceTitle } from '../lib/format.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
@@ -79,7 +79,7 @@ export function SessionView() {
 	// is the one that knows when it started: once Conductor's status agrees, its dispatch
 	// time is exact (and survives a reload); until then only the hint from our own send
 	// exists, and the DB's `turn_started_at` is still the *previous* answer's.
-	const turnStart = activeSession?.turn_started_at ? Date.parse(activeSession.turn_started_at) : null
+	const turnStart = stampMs(activeSession?.turn_started_at)
 	const workingSince =
 		(activeSession?.status === 'working' ? (turnStart ?? workingHint) : (workingHint ?? turnStart)) ?? null
 

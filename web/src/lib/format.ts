@@ -3,10 +3,19 @@
 // import a *value* from (it is stdlib-free on purpose; everything else is `import type`
 // only, enforced by scripts/check-imports.ts). Two implementations of `workspaceTitle`
 // meant the sidebar and a push notification could name the same workspace differently.
-import { HIT_CLOSE, HIT_OPEN, queryTokens, type Titled, workspaceTitle } from '../../../src/shared.ts'
+import {
+	HIT_CLOSE,
+	HIT_OPEN,
+	lastActivityMs,
+	queryTokens,
+	type Stamped,
+	stampMs,
+	type Titled,
+	workspaceTitle
+} from '../../../src/shared.ts'
 import type { Workspace } from './types.ts'
 
-export { queryTokens, type Titled, workspaceTitle }
+export { lastActivityMs, queryTokens, type Stamped, stampMs, type Titled, workspaceTitle }
 
 /**
  * Split a relay snippet into plain and highlighted runs. The markers are control
@@ -148,17 +157,17 @@ function startOfDay(at: Date): number {
 }
 
 /**
- * Which bucket a timestamp falls in, by whole calendar days on *this device* — the
- * card's `relativeTime` reads the same column, and both should agree with the clock
- * in the status bar. Days apart rather than hours elapsed, or a workspace touched at
- * 23:50 would still say "Today" at 00:10; `Math.round` absorbs the 23- and 25-hour
- * days DST makes. A stamp ahead of this clock (the relay's Mac and the phone need
- * not agree) lands in `today` rather than somewhere past it.
+ * Which bucket an instant falls in, by whole calendar days on *this device* — the card
+ * beside the header is handed the same one (`lastActivityMs`), so a heading and the row
+ * under it never disagree. Days apart rather than hours elapsed, or a workspace touched
+ * at 23:50 would still say "Today" at 00:10; `Math.round` absorbs the 23- and 25-hour
+ * days DST makes. A stamp ahead of this clock (the relay's Mac and the phone need not
+ * agree) lands in `today` rather than somewhere past it.
  */
-export function recentBucket(iso: string, now: Date = new Date()): RecentBucket {
-	const at = new Date(iso)
-	if (!Number.isFinite(at.getTime())) return 'older'
-	const days = Math.round((startOfDay(now) - startOfDay(at)) / 86_400_000)
+export function recentBucket(at: number | string | null, now: Date = new Date()): RecentBucket {
+	const ms = typeof at === 'number' ? at : stampMs(at)
+	if (ms === null) return 'older'
+	const days = Math.round((startOfDay(now) - startOfDay(new Date(ms))) / 86_400_000)
 	if (days <= 0) return 'today'
 	if (days === 1) return 'yesterday'
 	if (days < 7) return 'week'
@@ -221,17 +230,18 @@ export function elapsed(ms: number): string {
  * otherwise show two "09:14"s a day apart.
  */
 export function messageTime(iso: string): string {
-	const at = new Date(iso)
-	if (!Number.isFinite(at.getTime())) return ''
+	const ms = stampMs(iso)
+	if (ms === null) return ''
+	const at = new Date(ms)
 	const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 	const today = new Date()
 	if (at.toDateString() === today.toDateString()) return time
 	return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
 }
 
-export function relativeTime(iso: string): string {
-	const then = new Date(iso).getTime()
-	if (!Number.isFinite(then)) return ''
+export function relativeTime(at: number | string | null): string {
+	const then = typeof at === 'number' ? at : stampMs(at)
+	if (then === null) return ''
 	const secs = Math.round((Date.now() - then) / 1000)
 	if (secs < 45) return 'now'
 	if (secs < 90) return '1m'

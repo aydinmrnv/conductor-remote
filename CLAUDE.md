@@ -43,6 +43,10 @@ Two asymmetric halves — keep them separate:
     reports null and the phone just shows the dots with no timer. It rides on the
     2s session poll for free — `idx_session_messages_sent_at(session_id, sent_at)`
     serves it directly.
+  - **Timestamps go through `stampMs` (src/shared.ts), never straight to `Date`:** a
+    zone-less `YYYY-MM-DD HH:MM:SS` is UTC, which JS reads as local — a day's error
+    at 00:30. And a workspace's date is `lastActivityMs`, not `updated_at`, which
+    Conductor only moves on chat activity; `created_at` is the floor.
 - **Deep links carry the two writes that aren't fragile — creating a workspace
   and focusing one.** The *documented* links
   (conductor.build/docs/reference/deep-links) are
@@ -670,6 +674,7 @@ an import lands on.
   that `src/shared.ts` — the one module the web app may import a *value* from — pulls
   in no `node:` builtin, and that `src/wire.ts` declares types only. Portable, so the
   ubuntu job runs it.
+
 
 Nothing else is tested. Verify a runtime change by curling the relay (see the
 bind trap below), not by unit test.

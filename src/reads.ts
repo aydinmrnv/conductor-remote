@@ -5,7 +5,7 @@ import type { ConductorDb } from './db.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
 import type { ParkedPrompt } from './parked.ts'
-import { workspaceTitle } from './shared.ts'
+import { lastActivityMs, workspaceTitle } from './shared.ts'
 import { parseMessage, type TranscriptEntry } from './transcript.ts'
 
 export interface WorkspaceRow {
@@ -264,13 +264,23 @@ export class Reads {
 			 ORDER BY (w.pinned_at IS NULL), w.updated_at DESC`
 		)
 		const unread = this.unreadSessions()
-		return rows.map(r => ({
-			...r,
-			unread_sessions: unread.get(r.id) ?? [],
-			worktree: resolveWorktree(this.workspacesRoot, r.repo_name, r.directory_name, r.branch, r.repo_root),
-			baseBranch: r.intended_target_branch || r.default_branch || 'main',
-			icon: describeRepoIcon({ icon: r.repo_icon, repoRoot: r.repo_root, remoteUrl: r.remote_url })
-		}))
+		// Pinned first, then newest activity (`lastActivityMs` — creation counts, for one
+		// still setting up). Sorted here rather than in SQL: the two stamps are spelled two
+		// different ways, so `MAX()` over them would compare separators. The query's order
+		// stands in for the rows neither stamp dates.
+		return rows
+			.map(r => ({
+				...r,
+				unread_sessions: unread.get(r.id) ?? [],
+				worktree: resolveWorktree(this.workspacesRoot, r.repo_name, r.directory_name, r.branch, r.repo_root),
+				baseBranch: r.intended_target_branch || r.default_branch || 'main',
+				icon: describeRepoIcon({ icon: r.repo_icon, repoRoot: r.repo_root, remoteUrl: r.remote_url })
+			}))
+			.sort((a, b) => {
+				const pin = Number(!!b.pinned_at) - Number(!!a.pinned_at)
+				if (pin) return pin
+				return (lastActivityMs(b) ?? 0) - (lastActivityMs(a) ?? 0)
+			})
 	}
 
 	getWorkspace(id: string): Workspace | null {

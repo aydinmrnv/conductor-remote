@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useDebounced, useSearch } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
-import { queryTokens, relativeTime, splitSnippet, workspaceTitle } from '../lib/format.ts'
+import { lastActivityMs, queryTokens, relativeTime, splitSnippet, workspaceTitle } from '../lib/format.ts'
 import type { SearchSnippet, Workspace } from '../lib/types.ts'
 import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
 
@@ -166,7 +166,7 @@ function ResultRow({
 						{w.repo_name ? <span className="shrink-0 font-mono text-faint">{w.repo_name}</span> : null}
 						{w.branch ? <Chip className="min-w-0 flex-1 truncate">{w.branch}</Chip> : null}
 						{viaCodename ? <Chip className="shrink-0 text-faint">dir {w.directory_name}</Chip> : null}
-						<span className="ml-auto shrink-0 pl-2 text-[11px] text-faint">{relativeTime(w.updated_at)}</span>
+						<span className="ml-auto shrink-0 pl-2 text-[11px] text-faint">{relativeTime(lastActivityMs(w))}</span>
 					</div>
 				</div>
 			</div>

@@ -5,6 +5,7 @@ import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	isSettingUp,
+	lastActivityMs,
 	RECENT_BUCKETS,
 	recentBucket,
 	recentBucketLabel,
@@ -12,6 +13,7 @@ import {
 	STATUS_COLORS,
 	STATUS_ORDER,
 	shortModel,
+	stampMs,
 	workspaceStatus,
 	workspaceStatusLabel,
 	workspaceTitle
@@ -26,14 +28,18 @@ import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
 import { SearchPane } from './SearchPane.tsx'
 import { Badge, Chip, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
-/** Pinned first (matches the relay's order), then the chosen sort key. */
+/**
+ * Pinned first (matches the relay's order), then the chosen sort key. Newest first,
+ * compared as instants and not as strings: Conductor's two spellings sort on the
+ * separator (`' '` before `'T'`), whatever the times say.
+ */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
 	return [...list].sort((a, b) => {
 		const pin = Number(!!b.pinned_at) - Number(!!a.pinned_at)
 		if (pin) return pin
 		if (sortBy === 'name') return workspaceTitle(a).localeCompare(workspaceTitle(b))
-		// SQLite datetime strings compare lexically; newest first.
-		return sortBy === 'created' ? b.created_at.localeCompare(a.created_at) : b.updated_at.localeCompare(a.updated_at)
+		if (sortBy === 'created') return (stampMs(b.created_at) ?? 0) - (stampMs(a.created_at) ?? 0)
+		return (lastActivityMs(b) ?? 0) - (lastActivityMs(a) ?? 0)
 	})
 }
 
@@ -46,7 +52,7 @@ interface Group {
 
 function bucketKey(w: Workspace, groupBy: GroupBy): string {
 	if (groupBy === 'status') return workspaceStatus(w)
-	if (groupBy === 'recent') return recentBucket(w.updated_at)
+	if (groupBy === 'recent') return recentBucket(lastActivityMs(w))
 	return w.repo_name ?? ''
 }
 
@@ -404,7 +410,7 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 					{typeof ctx === 'number' && ctx > 0 ? (
 						<span className="shrink-0 text-faint">{Math.round(ctx)}% ctx</span>
 					) : null}
-					<span className="ml-auto shrink-0 pl-2 text-[11px] text-faint">{relativeTime(w.updated_at)}</span>
+					<span className="ml-auto shrink-0 pl-2 text-[11px] text-faint">{relativeTime(lastActivityMs(w))}</span>
 				</div>
 			</div>
 		</>
