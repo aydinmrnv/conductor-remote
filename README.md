@@ -203,13 +203,39 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
+Two transports, same ten tools.
+
+**stdio** — for an agent running on this Mac. The client spawns it as a child process;
+there is no URL and nothing is exposed.
+
 ```bash
 claude mcp add conductor -- conductor-remote mcp
 ```
 
-It talks to the running relay over loopback and reads the token the relay already
-persisted, so there is nothing else to configure. The relay must be running
-(`conductor-remote service status`).
+**HTTP** — for an agent that can only reach a URL, at `POST /mcp` on the relay, gated by
+the same token as `/api/*`.
+
+```bash
+claude mcp add --transport http conductor https://<your-magicdns>/mcp \
+  --header "Authorization: Bearer $(cat ~/Library/Application\ Support/conductor-remote/token)"
+```
+
+Either way the relay must be running (`conductor-remote service status`). The stdio
+server reads the persisted token itself, so it needs no configuration at all.
+
+**Who can reach the HTTP endpoint depends on `EXPOSE`**, and this is the decision worth
+making deliberately:
+
+| `EXPOSE` | fronted by | who reaches `/mcp` |
+|---|---|---|
+| `tailnet` | `tailscale serve` | any device signed into your tailnet, from any network |
+| `public` (default) | `tailscale funnel` | anyone on the internet holding the token |
+
+`tailnet` is not LAN-only — a laptop on hotel wi-fi reaches it fine, over WireGuard. But
+a *hosted* client is not on your tailnet: an agent running on someone else's servers
+needs `public`, where the token is the only thing between the internet and
+`create_workspace` / `send_prompt`. Prefer stdio when the agent is local, which is most
+of the time.
 
 | tool | what it does |
 |---|---|
@@ -227,6 +253,12 @@ persisted, so there is nothing else to configure. The relay must be running
 The first six touch nothing. `create_workspace` opens a Conductor deep link, so it
 needs no Accessibility and steals no focus. The last three drive Conductor's real
 window for a few seconds.
+
+The HTTP transport is deliberately minimal: the server never initiates a message, so
+there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no
+session either. A request carrying an `Origin` header is refused outright — a real MCP
+client sends none and a browser cannot omit one, which closes the DNS-rebinding hole
+without the relay having to know its own hostname behind Tailscale's TLS.
 
 **Two agents cannot collide.** Conductor has one window, so every UI write in the
 relay is serialized by a single process-local lock — which is exactly why these

@@ -421,8 +421,8 @@ Two asymmetric halves — keep them separate:
   help either since the document is never retrieved. That, not cost, is the case for
   embeddings if search ever needs them.
 
-- **MCP is the same relay with an agent on the other end** (`src/mcp.ts`,
-  `conductor-remote mcp`). Ten tools, and **every one of them is an HTTP call to the
+- **MCP is the same relay with an agent on the other end** (`src/mcp-tools.ts`).
+  Ten tools, and **every one of them is an HTTP call to the
   running relay** — nothing here opens `conductor.db` and nothing here runs
   AppleScript. That is the load-bearing part, not a convenience: `uiTurn` is a
   *process-local* lock, so an MCP server that drove the UI itself would sit outside
@@ -430,6 +430,23 @@ Two asymmetric halves — keep them separate:
   Routed through the relay, the phone, both delivery queues and every agent share
   one lock. Requests carry `x-relay-client: mcp`, which `server.ts` turns into
   `background` priority, so an agent never makes a human tap wait. It is hand-rolled
+  **Two transports, one tool set.** `src/mcp.ts` is stdio (`conductor-remote mcp`),
+  spawned as a child process by a local client; `POST /mcp` in `server.ts` is the
+  Streamable HTTP transport for a client that can only reach a URL. They share
+  `mcp-tools.ts` through an injected `call`, which is the only reason they cannot
+  drift — verified by diffing both transports' output for the same query. The HTTP
+  one calls the relay's own API **over loopback rather than reaching into
+  `reads`/`writes`**: a sub-millisecond hop buys one code path, against carving every
+  handler out of a 1000-line router. It is deliberately minimal — the server never
+  initiates a message, so there is no SSE stream, `GET` answers 405 (which the spec
+  allows) and no `Mcp-Session-Id` is issued. **A request carrying an `Origin` header
+  is refused**: a real MCP client sends none and a browser cannot omit one, so that
+  single check closes the DNS-rebinding hole the spec warns about without the relay
+  needing to know its own hostname behind Tailscale's TLS. And note *who* can reach
+  it is `EXPOSE`'s business, not the endpoint's: `tailnet` means any device on the
+  tailnet from any network (not LAN-only), while a **hosted** client — an agent on
+  someone else's servers — is on no tailnet and needs `public`, where the token is
+  the only thing between the internet and `send_prompt`.
   rather than built on `@modelcontextprotocol/sdk` because stdio MCP is
   newline-delimited JSON-RPC 2.0 and the SDK is **91 packages / 24 MB** (express,
   hono, cors, jose) for a server that speaks neither HTTP nor OAuth — and this
