@@ -13,6 +13,7 @@ import type {
 	PushTestResult,
 	RelaySettings,
 	ReposResponse,
+	SearchResponse,
 	SendResult,
 	SessionsResponse,
 	SettingsResponse,
@@ -185,6 +186,12 @@ export const client = {
 		),
 	/** Repos a new workspace can be created in. */
 	repos: () => api<ReposResponse>('/api/repos'),
+	/**
+	 * Find a workspace by name or by what was said in its chats, archived included.
+	 * The relay answers from a local index, so this is a poll-budget call even though
+	 * it searches every conversation on the Mac.
+	 */
+	search: (q: string) => api<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`),
 	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
 	dismissPrompt: (workspaceId: string) =>
 		api<{ ok: boolean }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/prompt`, { method: 'DELETE' }),
