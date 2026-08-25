@@ -125,10 +125,12 @@ interface Row {
 const CARD = 'card w-full flex-col items-stretch gap-0'
 
 /**
- * An archived result is deliberately not a button. Its worktree is gone and
- * `/api/state` doesn't list it, so `/w/<id>` would render "Workspace not found" —
- * a tap that looks like it failed. Showing the excerpts in place is the honest
- * version until unarchiving exists.
+ * An archived result opens like any other, into a read-only reader
+ * (`ArchivedChat`). It could not before: `/api/state` lists only live workspaces, so
+ * `/w/<id>` rendered "Workspace not found" and the row had to be a dead card. What
+ * changed is that archiving deletes the worktree and leaves the conversation, and the
+ * relay now answers for a workspace in any state (`GET /api/workspaces/:id`) — so the
+ * chat search found is the chat you get, with no unarchive on the Mac.
  */
 function ResultRow({
 	row,
@@ -182,7 +184,6 @@ function ResultRow({
 			) : null}
 		</>
 	)
-	if (row.archived) return <div className={cn(CARD, 'active:scale-100')}>{body}</div>
 	return (
 		<button
 			type="button"

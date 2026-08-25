@@ -383,6 +383,42 @@ export class Reads {
 		return rows.map(toSearchWorkspace)
 	}
 
+	/**
+	 * One workspace by id, whatever state it is in — the read behind opening an archived
+	 * chat (`GET /api/workspaces/:id`).
+	 *
+	 * `getWorkspace` above is the *live* one: it resolves a worktree and a base branch,
+	 * and returns null for the 1,846 archived workspaces here, which is right for every
+	 * write (there is nothing to focus and nothing to diff) and wrong for reading. The
+	 * transcript survives archiving — Conductor deletes the worktree, not the chat — so
+	 * this returns the same `SearchWorkspace` a search result carries, with no worktree
+	 * and no git, and `listSessions`/`getMessages` do the rest by id.
+	 */
+	getAnyWorkspace(id: string): SearchWorkspace | null {
+		const rows = this.db.query<{
+			id: string
+			workspace_name: string | null
+			pr_title: string | null
+			branch: string | null
+			directory_name: string | null
+			state: string | null
+			updated_at: string
+			repo_name: string | null
+			repo_icon: string | null
+			repo_root: string | null
+			remote_url: string | null
+		}>(
+			`SELECT w.id, w.workspace_name, w.pr_title, w.branch, w.directory_name, w.state, w.updated_at,
+			        r.name AS repo_name, r.icon AS repo_icon, r.root_path AS repo_root, r.remote_url AS remote_url
+			 FROM workspaces w
+			 LEFT JOIN repos r ON r.id = w.repository_id
+			 WHERE w.id = ?
+			 LIMIT 1`,
+			[id]
+		)
+		return rows[0] ? toSearchWorkspace(rows[0]) : null
+	}
+
 	/** Resolve a repo's icon by its name (the sidebar avatar) — null if the repo or icon is unknown. */
 	resolveRepoIcon(repoName: string): ResolvedIcon | null {
 		const rows = this.db.query<{ root_path: string | null }>('SELECT root_path FROM repos WHERE name = ? LIMIT 1', [

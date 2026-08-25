@@ -24,7 +24,8 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
-	WorkspaceDiff
+	WorkspaceDiff,
+	WorkspaceResponse
 } from './types.ts'
 
 const TOKEN_KEY = 'conductor-remote-token'
@@ -152,6 +153,8 @@ export const client = {
 		}
 		return p
 	},
+	/** One workspace by id, archived included — how an archived chat is opened for reading. */
+	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
 	messages: (sessionId: string, after: number) =>
 		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`),

@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, QrCode, Search, SlidersHorizontal, X } from 'lucide-react'
+import { ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
@@ -24,7 +24,7 @@ import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
-import { SearchPane } from './SearchPane.tsx'
+import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Chip, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
@@ -88,10 +88,9 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [connectOpen, setConnectOpen] = useState(false)
 	const [newOpen, setNewOpen] = useState(false)
 	const [logsOpen, setLogsOpen] = useState(false)
-	const [query, setQuery] = useState('')
+	const [searchOpen, setSearchOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
-	const searching = query.trim().length > 0
 
 	const repos = [...new Set(workspaces.map(w => w.repo_name).filter((r): r is string => !!r))].sort()
 	if (view.repo && !repos.includes(view.repo)) repos.push(view.repo)
@@ -114,15 +113,13 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
 	const filtered = !!view.repo || view.hideMerged
 	const narrowed = !!view.repo || hiddenMerged > 0
-	const subtitle = searching
-		? `Searching every workspace, archived included`
-		: workspaces.length
-			? narrowed
-				? [`${shown.length} of ${workspaces.length}`, view.repo, hiddenMerged ? `${hiddenMerged} merged hidden` : null]
-						.filter(Boolean)
-						.join(' · ')
-				: `${workspaces.length} active`
-			: undefined
+	const subtitle = workspaces.length
+		? narrowed
+			? [`${shown.length} of ${workspaces.length}`, view.repo, hiddenMerged ? `${hiddenMerged} merged hidden` : null]
+					.filter(Boolean)
+					.join(' · ')
+			: `${workspaces.length} active`
+		: undefined
 
 	return (
 		<div className="flex h-full min-w-0 flex-col overflow-hidden">
@@ -131,14 +128,18 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					title="Workspaces"
 					subtitle={subtitle}
 					right={
+						/* No close button. The drawer already closes four other ways — the scrim, an
+						   edge swipe back, picking a workspace, the header toggle it opened from — and
+						   on md+ it is a static rail that cannot close at all, so the X was a control
+						   that did nothing half the time and cost a slot on the phone the whole time. */
 						<>
 							<button
 								type="button"
-								onClick={() => setNewOpen(true)}
-								aria-label="New workspace"
+								onClick={() => setSearchOpen(true)}
+								aria-label="Search workspaces and chats"
 								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
-								<Plus size={20} />
+								<Search size={18} />
 							</button>
 							<button
 								type="button"
@@ -157,24 +158,22 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 							>
 								<QrCode size={18} />
 							</button>
+							{/* Last, and the only filled one: it is the thing you came here to do. */}
 							<button
 								type="button"
-								onClick={() => setSidebarOpen(false)}
-								aria-label="Close workspaces"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2 md:hidden"
+								onClick={() => setNewOpen(true)}
+								aria-label="New workspace"
+								className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-text active:bg-surface-2"
 							>
-								<X size={20} />
+								<Plus size={20} />
 							</button>
 						</>
 					}
 				/>
 				{controlsOpen ? <ViewControls repos={repos} view={view} onClose={() => setControlsOpen(false)} /> : null}
 			</div>
-			<SearchField value={query} onChange={setQuery} />
 			<nav className="pb-safe min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
-				{searching ? (
-					<SearchPane query={query} live={workspaces} selectedId={selectedId} onOpen={open} />
-				) : isLoading && !data ? (
+				{isLoading && !data ? (
 					<Spinner label="Loading workspaces…" />
 				) : isError ? (
 					<RelayUnreachable error={error} />
@@ -242,48 +241,18 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				/>
 			) : null}
 			{newOpen ? <NewWorkspaceSheet onClose={() => setNewOpen(false)} /> : null}
-			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
-		</div>
-	)
-}
-
-/**
- * The list's search box. Always visible rather than hidden behind a header icon:
- * the header already carries four buttons on a phone, and search is the one control
- * here you reach for without knowing what you are reaching for.
- *
- * `type="text"`, not `type="search"` — WebKit's built-in clear affordance is a
- * different size and colour on every iOS version, so the X below is ours. The
- * keyboard hints matter more than they look: without `enterKeyHint` the return key
- * says "Go" and implies a submit this box does not have.
- */
-function SearchField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-	return (
-		<div className="relative px-3 pb-1">
-			<Search size={15} className="pointer-events-none absolute left-6 top-1/2 -translate-y-1/2 text-faint" />
-			<input
-				type="text"
-				inputMode="search"
-				enterKeyHint="search"
-				autoCapitalize="none"
-				autoCorrect="off"
-				spellCheck={false}
-				value={value}
-				onChange={e => onChange(e.target.value)}
-				placeholder="Search workspaces and chats"
-				aria-label="Search workspaces and chats"
-				className="w-full rounded-xl border border-border bg-surface py-2 pl-8 pr-9 text-sm text-text placeholder:text-faint focus:border-accent/50 focus:outline-none"
-			/>
-			{value ? (
-				<button
-					type="button"
-					onClick={() => onChange('')}
-					aria-label="Clear search"
-					className="absolute right-4 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted active:bg-surface-2"
-				>
-					<X size={15} />
-				</button>
+			{searchOpen ? (
+				<SearchSheet
+					live={workspaces}
+					selectedId={selectedId}
+					onOpen={(id, sessionId) => {
+						setSearchOpen(false)
+						open(id, sessionId)
+					}}
+					onClose={() => setSearchOpen(false)}
+				/>
 			) : null}
+			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
 		</div>
 	)
 }

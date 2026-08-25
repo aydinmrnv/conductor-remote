@@ -879,6 +879,16 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
+			// GET /api/workspaces/:id — one workspace by id, archived included. `/api/state` lists
+			// only the live ones, so this is what lets the phone open a chat search found in work
+			// that has been put away: the worktree is gone, the transcript is not.
+			const workspaceById = routeParam(routes.workspace, req.method, pathname)
+			if (workspaceById) {
+				const found = reads.getAnyWorkspace(workspaceById)
+				if (!found) return json(req, res, 404, { error: 'workspace not found' })
+				return json(req, res, 200, { workspace: found })
+			}
+
 			// GET /api/workspaces/:id/sessions
 			const listSessionsIn = routeParam(routes.sessions, req.method, pathname)
 			if (listSessionsIn) {

@@ -98,6 +98,16 @@ export interface ReposResponse {
 	repos: RepoRow[]
 }
 
+/**
+ * GET /api/workspaces/:id — one workspace by id, in any state.
+ *
+ * `SearchWorkspace`, not `Workspace`, and that is the whole point: this answers for the
+ * archived ones too, which have no worktree, no live session and no git to read.
+ */
+export interface WorkspaceResponse {
+	workspace: SearchWorkspace
+}
+
 /** GET /api/workspaces/:id/sessions */
 export interface SessionsResponse {
 	sessions: SessionRow[]

@@ -413,9 +413,19 @@ Two asymmetric halves — keep them separate:
   other queries. `Reads.searchTargets` / `findWorkspacesByName` deliberately drop the
   `state IN ('ready','setting_up')` filter the sidebar uses: **1,846 of the 1,886
   workspaces here are archived**, so search limited to the live list would miss
-  almost everything. The phone can list those but not open them (`/api/state`
-  doesn't carry them, so `/w/<id>` would say "not found"), which is why an archived
-  result renders as a card with its excerpts instead of a button. The one thing
+  almost everything. **And the phone can now read them**, which for a while it could
+  not: `/api/state` carries only the live list, so `/w/<id>` answered "Workspace not
+  found" and an archived hit had to render as a dead card. What makes reading one
+  safe is that archiving deletes the *worktree*, not the conversation — the rows stay
+  in `session_messages` — so `GET /api/workspaces/:id` (`reads.getAnyWorkspace`)
+  answers for a workspace in any state with the same `SearchWorkspace` a result
+  already carries, and `listSessions`/`getMessages` need nothing but ids.
+  `SessionView` asks that route before it says "not found" and hands an archived
+  answer to `ArchivedChat`. Two properties hold it up. **Every write is absent, not
+  disabled** — a send needs a Conductor pane that no longer exists, a diff needs the
+  deleted worktree, the status menu needs a sidebar row — and nothing there polls,
+  because an archived chat has no next message; `/api/state` is still what notices an
+  *unarchive*, which puts the live view back on its own. The one thing
   lexical search cannot do is bridge vocabulary: that lamp chat never contains the
   word "manual", so no amount of BM25 tuning ranks it first, and reranking can't
   help either since the document is never retrieved. That, not cost, is the case for

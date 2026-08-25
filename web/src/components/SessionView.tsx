@@ -2,13 +2,14 @@ import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
-import { useSessions, useWorkspaces } from '../hooks.ts'
+import { useAnyWorkspace, useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel, workspaceTitle } from '../lib/format.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
@@ -30,13 +31,21 @@ export function SessionView() {
 	const [creatingChat, setCreatingChat] = useState(false)
 	const queryClient = useQueryClient()
 	const { data, isLoading } = useWorkspaces()
-	const { data: sessionsData } = useSessions(workspaceId)
+	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
+	// `/api/state` lists only live workspaces, so an id that isn't in it is either archived
+	// or gone. Ask by id before saying "not found": the worktree is deleted on archive, the
+	// transcript is not, and search reaches those chats — 1,846 of the 1,886 here.
+	const missing = !!data && !liveWorkspace
+	// The tab list stops polling for an archived workspace — nothing in it can change, and
+	// the query is shared by key with the reader below, so the interval has to come off here.
+	const { data: sessionsData } = useSessions(workspaceId, !missing)
 	const workingHints = useApp(s => s.workingHints)
 	const readMarks = useApp(s => s.readMarks)
 	const markRead = useApp(s => s.markRead)
 
-	const ws = data?.workspaces.find(w => w.id === workspaceId)
+	const ws = liveWorkspace
 	const actuator = data?.actuator
+	const { data: anyWorkspace, isLoading: loadingAny } = useAnyWorkspace(workspaceId, missing)
 
 	const sessions = sessionsData?.sessions ?? []
 	const sessionId =
@@ -55,16 +64,23 @@ export function SessionView() {
 	// Only the chat you're actually on — a sibling tab's badge is not yours to clear.
 	const activeUpdatedAt = activeSession?.updated_at
 	useEffect(() => {
-		if (!(sessionId && activeUpdatedAt)) return
+		// Not for an archived chat: its unread flag is read off the live list, which no
+		// longer holds it, so a mark here would only grow the store with dead ids.
+		if (!(ws && sessionId && activeUpdatedAt)) return
 		if (document.visibilityState !== 'visible') return
 		markRead(sessionId, activeUpdatedAt)
-	}, [sessionId, activeUpdatedAt, markRead])
+	}, [ws, sessionId, activeUpdatedAt, markRead])
 
 	if (!ws) {
+		if (anyWorkspace) return <ArchivedChat workspace={anyWorkspace.workspace} />
 		return (
 			<div className="flex h-full flex-col overflow-hidden">
 				<Header title="Session" menu />
-				{isLoading ? <Spinner /> : <div className="p-6 text-center text-sm text-muted">Workspace not found.</div>}
+				{isLoading || (missing && loadingAny) ? (
+					<Spinner />
+				) : (
+					<div className="p-6 text-center text-sm text-muted">Workspace not found.</div>
+				)}
 			</div>
 		)
 	}
