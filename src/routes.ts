@@ -80,6 +80,8 @@ export const routes = {
 
 	// ── workspaces ──
 	createWorkspace: flat('POST', '/api/workspaces'),
+	/** One workspace by id, archived included — what `/api/state` deliberately leaves out. */
+	workspace: param('GET', '/api/workspaces/:workspaceId'),
 	sessions: param('GET', '/api/workspaces/:workspaceId/sessions'),
 	newChat: param('POST', '/api/workspaces/:workspaceId/sessions'),
 	diff: param('GET', '/api/workspaces/:workspaceId/diff'),

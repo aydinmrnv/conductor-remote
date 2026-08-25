@@ -78,6 +78,30 @@
 	html[data-standalone] #root {
 		height: var(--app-height, 100vh);
 	}
+	/* A `fixed` overlay resolves its height against the layout viewport, which does not
+	   shrink for the software keyboard — so a full-height sheet holding a focused input
+	   draws its own content behind that keyboard. `.app-height` is the app column's own
+	   sizing, above, for a sheet that must stop where the column does. Written out here
+	   rather than added to the selectors above so the desktop branch can win: the
+	   standalone rule is two selectors deep, which a `md:h-auto` utility would lose to. */
+	.app-height {
+		height: var(--app-height, 100dvh);
+	}
+	@media (display-mode: standalone) {
+		.app-height {
+			height: var(--app-height, 100vh);
+		}
+	}
+	html[data-standalone] .app-height {
+		height: var(--app-height, 100vh);
+	}
+	/* md and up the sheet is a centred panel that sizes to its results, not a screen. */
+	@media (width >= 48rem) {
+		.app-height,
+		html[data-standalone] .app-height {
+			height: auto;
+		}
+	}
 	html {
 		/* Paint the app bg on <html> too, so any sub-pixel gap in the safe area
 		   reads as the app color rather than a seam. */

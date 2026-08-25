@@ -17,7 +17,8 @@ export function Transcript({
 	workspaceId,
 	working,
 	workingSince,
-	queued
+	queued,
+	poll
 }: {
 	sessionId: string | null
 	workspaceId: string
@@ -26,8 +27,10 @@ export function Transcript({
 	workingSince?: number | null
 	/** The relay's undelivered first prompt for this workspace (src/firstprompt.ts). */
 	queued?: PendingPrompt | null
+	/** `false` for an archived chat: it is fetched once, because it has no next message. */
+	poll?: boolean
 }) {
-	const { entries, loading, error } = useTranscript(sessionId)
+	const { entries, loading, error } = useTranscript(sessionId, poll ?? true)
 	const pending = useApp(s => s.pending)
 	const removePending = useApp(s => s.removePending)
 	const sendPrompt = useSendPrompt()

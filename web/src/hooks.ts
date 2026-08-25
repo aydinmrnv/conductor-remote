@@ -360,13 +360,40 @@ export function useSearch(query: string) {
 	})
 }
 
-export function useSessions(workspaceId: string | undefined) {
+/**
+ * One workspace by id, whatever state it is in — the read that opens an archived chat.
+ *
+ * Not polled, and not merged into the `['state']` cache: this answers for workspaces
+ * `/api/state` deliberately leaves out, and an archived one cannot change. The state
+ * poll is still what notices if it comes *back* — an unarchived workspace reappears in
+ * the live list and the caller stops needing this at all.
+ */
+export function useAnyWorkspace(workspaceId: string | undefined, enabled: boolean) {
+	const report = useOnline()
+	const query = useQuery({
+		queryKey: ['workspace', workspaceId],
+		queryFn: () => client.workspace(workspaceId as string),
+		enabled: enabled && !!workspaceId,
+		staleTime: Number.POSITIVE_INFINITY,
+		// A 404 is this route's real answer for a stale link, so it is not worth a retry.
+		retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 1
+	})
+	useEffect(() => {
+		// 404 means the relay answered — the workspace is gone. Reporting that as offline
+		// would raise the red strip for two seconds over a link that is simply dead.
+		if (query.isError && !(query.error instanceof ApiError && query.error.status === 404)) report(false, query.error)
+	}, [query.isError, query.error, report])
+	return query
+}
+
+/** `poll: false` for a chat that cannot change — an archived workspace's tab list. */
+export function useSessions(workspaceId: string | undefined, poll = true) {
 	const report = useOnline()
 	const query = useQuery({
 		queryKey: ['sessions', workspaceId],
 		queryFn: () => client.sessions(workspaceId as string),
 		enabled: !!workspaceId,
-		refetchInterval: 2000
+		refetchInterval: poll ? 2000 : false
 	})
 	useEffect(() => {
 		if (query.isError) report(false, query.error)
@@ -465,7 +492,7 @@ export interface TranscriptState {
  * Incremental transcript polling. Keeps a rowid cursor and appends only new
  * rows, so long sessions don't re-transfer on every tick.
  */
-export function useTranscript(sessionId: string | null): TranscriptState {
+export function useTranscript(sessionId: string | null, poll = true): TranscriptState {
 	const report = useOnline()
 	const [state, setState] = useState<TranscriptState>({ entries: [], loading: true, error: null })
 	const cursor = useRef(0)
@@ -499,13 +526,14 @@ export function useTranscript(sessionId: string | null): TranscriptState {
 
 		tick()
 		// 1s cadence keeps the chat feeling live; incremental (cursor) fetches mean
-		// an idle tick is a tiny empty response, cheap even over Tailscale.
-		const timer = setInterval(tick, 1000)
+		// an idle tick is a tiny empty response, cheap even over Tailscale. An archived
+		// chat has no next message, so it is fetched once and left alone.
+		const timer = poll ? setInterval(tick, 1000) : undefined
 		return () => {
 			alive = false
-			clearInterval(timer)
+			if (timer) clearInterval(timer)
 		}
-	}, [sessionId, report])
+	}, [sessionId, poll, report])
 
 	return state
 }
