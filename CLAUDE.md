@@ -77,14 +77,36 @@ Two asymmetric halves — keep them separate:
   Conductor's own New workspace; that form is *undocumented* (every documented
   route carries a prompt) but verified live, so suspect it first if creation
   breaks. The link is fire-and-forget and only *pre-fills* the composer — someone
-  still has to press Enter ~30s later, once the worktree is `ready` and the chat
-  exists. **That someone is the relay** (`src/firstprompt.ts` ▸ `FirstPromptQueue`),
+  still has to press Enter. **That someone is the relay** (`src/firstprompt.ts` ▸ `FirstPromptQueue`),
   never the phone: a phone sleeps, iOS suspends a backgrounded PWA outright, and
   the delivery hook it used to run only looked at its parked set once per app
   launch, so prompts sat unsent until the next relaunch. Don't confuse that with
   "block the request": creation still returns as soon as the row exists (~2s;
   waiting for setup measured 30s+, past the phone's own 25s budget) and the queue
   delivers on its own schedule. `send:true` opts an API caller into awaiting it.
+  **And it presses Enter while the worktree is still building** — the one thing
+  this queue had wrong. `setting_up` describes the worktree and the setup script,
+  not the window: Conductor draws the workspace, its chat tab and its composer the
+  moment the row exists, and **starts the agent 4-9s later with setup still
+  running** — its own New workspace box does exactly that, on this repo's own
+  chats. Holding out for `ready` cost 2m23s to 3m33s on the four workspaces one
+  agent created in a burst (2026-08-25), so a caller that made a batch saw four
+  workspaces with nothing sent and reported the send as broken. Measured against
+  the live app the same day: workspace row at +1.6s with the chat row beside it,
+  the relay's send back at +5.4s, the user row at +5.9s and the agent's answer at
+  +12s, `state` reading `setting_up` throughout. So the send goes as soon as the
+  chat row is there, and `ready` is now only where a failure starts to *count*: a
+  send tried before it spends `earlyAttempts` (capped at **2** — each run holds
+  `uiTurn` for tens of seconds, and a human tap queues behind it) and never the
+  three below. Which means the worst an early send can do is what the queue did
+  before it — deliver once the worktree is ready. The one dial is
+  `sendImmediately` (default **true**, `POST /api/workspaces`, the phone's "Send
+  immediately" checkbox and `create_workspace`'s `send_immediately`), and it is
+  chosen per creation and frozen onto the entry, so a prompt already queued keeps
+  the answer it was created with. The phone keeps its own choice in localStorage
+  rather than in relay settings: it is that handset's habit, and it has to survive
+  the relay updating itself under a cached PWA. Off is for a repo whose setup
+  script installs what the agent's first move needs.
   Three properties hold it up: **one owner** (if the phone delivered too,
   `last_user_message_at` wouldn't save you — it's a read, not a lock, and both
   sides can read it null; the guard is still what makes *retrying* safe and what
@@ -735,13 +757,13 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Six automated tests. Three of them share one reason to exist: **each guards a
+Seven automated tests. Three of them share one reason to exist: **each guards a
 language nothing else in the toolchain reads** — an AppleScript handler, a shell body,
 a syntax another app parses. They live in a string or a sibling file, so `tsc` sees text
 and Biome sees text, and a mistake surfaces for the first time on someone's phone or
-someone's Mac. The other three guard things `tsc` reads fine and still cannot judge:
-control flow, which side of the Node/browser line an import lands on, and whether a URL
-still addresses the handler that answers it.
+someone's Mac. The other four guard things `tsc` reads fine and still cannot judge:
+control flow (twice over), which side of the Node/browser line an import lands on, and
+whether a URL still addresses the handler that answers it.
 
 - `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
   the way `osascript` will, and every `my handler()` call, in the script *and* in
@@ -767,6 +789,16 @@ still addresses the handler that answers it.
   wedges **every** future write with no error and no fix from the phone, and a
   priority bug puts a human tap behind a minute of agent work. It found both bugs in
   the queue while that queue was being written. Portable, so the ubuntu job runs it.
+
+- `scripts/check-firstprompt.ts` — the first-prompt queue's two budgets
+  (`src/firstprompt.ts` ▸ `step`). Sending before the worktree is ready means most of
+  the failures the queue now sees are ones waiting fixes, so an early send spends
+  `earlyAttempts` and only a post-`ready` one spends the three that give up in public.
+  Get that split backwards and every slow repo greets its owner with a `failed` prompt
+  Conductor would have taken a minute later — which is the regression the change itself
+  could introduce, and it typechecks either way. `DeliveryDeps` is injected, so this
+  needs no Mac, no Conductor and no relay; the delays are real seconds, so it waits on
+  the queue's own actions rather than on a stopwatch. Portable, so the ubuntu job runs it.
 
 - `scripts/check-routes.ts` — the `/api` route table (`src/routes.ts`). Every route
   matches the path it builds, the parameter survives encoding verbatim, no route answers

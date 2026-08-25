@@ -264,7 +264,7 @@ function QueuedEntry({
 			) : (
 				<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
 					<Loader2 size={11} className="animate-spin" />
-					{queued.reason ?? 'Sends when the workspace is ready'}
+					{queued.reason ?? 'The relay is sending this'}
 				</span>
 			)}
 		</div>

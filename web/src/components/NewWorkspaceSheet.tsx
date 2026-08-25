@@ -8,6 +8,24 @@ import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { RepoAvatar } from './ui.tsx'
 
+/** The "Send immediately" choice, remembered for next time — a preference, not state. */
+const SEND_NOW_KEY = 'conductor-remote-send-immediately'
+
+function loadSendNow(): boolean {
+	try {
+		// Absent means on: it is the default, and the old behaviour is what you opt into.
+		return localStorage.getItem(SEND_NOW_KEY) !== 'off'
+	} catch {
+		return true
+	}
+}
+
+function saveSendNow(on: boolean): void {
+	try {
+		localStorage.setItem(SEND_NOW_KEY, on ? 'on' : 'off')
+	} catch {}
+}
+
 /**
  * Start new work from the phone — the one action that previously needed the Mac.
  *
@@ -15,16 +33,24 @@ import { RepoAvatar } from './ui.tsx'
  * keystrokes) but only *pre-fills* the composer, and the worktree then takes
  * however long it takes — measured at 30s+ on a real repo, past the phone's own
  * request budget. So the relay returns as soon as the row exists and delivers the
- * prompt itself once the workspace turns ready (src/firstprompt.ts): a slow repo
- * shows a real workspace filling in rather than a spinner, and the prompt still
- * goes if the phone is locked, closed, or off the network by then. This screen's
- * job ends at the response; the chat shows the prompt until it lands.
+ * prompt itself (src/firstprompt.ts): a slow repo shows a real workspace filling in
+ * rather than a spinner, and the prompt still goes if the phone is locked, closed,
+ * or off the network by then. This screen's job ends at the response; the chat shows
+ * the prompt until it lands.
+ *
+ * **Send immediately** is that delivery's one dial, and it is on because Conductor
+ * is: its own New workspace box starts the agent 4-9s after the row exists, with the
+ * setup script still running. Turning it off holds the prompt until the worktree is
+ * built, which is worth it only where the agent's first move needs what setup
+ * installs. Kept in localStorage rather than on the relay — it is this phone's habit,
+ * and it has to survive the relay updating itself underneath the app.
  */
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
 	const [repo, setRepo] = useState<string>('')
 	const [prompt, setPrompt] = useState('')
 	const [pickerOpen, setPickerOpen] = useState(false)
+	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const navigate = useNavigate()
@@ -44,7 +70,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		setBusy(true)
 		setError(null)
 		try {
-			const r = await client.createWorkspace(repo, text)
+			const r = await client.createWorkspace(repo, text, sendNow)
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
 				return
@@ -121,6 +147,42 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
 					className="w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-base outline-none placeholder:text-faint"
 				/>
+				{/* A real checkbox behind a drawn one: the whole row is the tap target, and the
+				    box keeps its keyboard and VoiceOver behaviour. Disabled with no prompt
+				    rather than hidden, or it would reflow the sheet under your thumb as you type. */}
+				<label
+					className={cn(
+						'flex items-start gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 transition active:bg-surface-2',
+						!prompt.trim() && 'opacity-40'
+					)}
+				>
+					<input
+						type="checkbox"
+						checked={sendNow}
+						disabled={!prompt.trim()}
+						onChange={e => {
+							setSendNow(e.target.checked)
+							saveSendNow(e.target.checked)
+						}}
+						className="sr-only"
+					/>
+					<span
+						className={cn(
+							'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-md border transition',
+							sendNow ? 'border-accent bg-accent text-bg' : 'border-border'
+						)}
+					>
+						{sendNow ? <Check size={13} strokeWidth={3} /> : null}
+					</span>
+					<span className="min-w-0 flex-1">
+						<span className="block text-[15px] font-medium">Send immediately</span>
+						<span className="block text-xs text-muted">
+							{sendNow
+								? 'The prompt goes as soon as the chat exists, without waiting for setup.'
+								: 'The prompt waits until the worktree has finished setting up.'}
+						</span>
+					</span>
+				</label>
 				{error ? <div className="text-xs text-del">{error}</div> : null}
 			</div>
 
