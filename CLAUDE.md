@@ -421,8 +421,51 @@ Two asymmetric halves — keep them separate:
   help either since the document is never retrieved. That, not cost, is the case for
   embeddings if search ever needs them.
 
+- **An attachment is a file plus a token, and nothing else** (`src/attachments.ts`) —
+  which is the only reason the relay can make one. Conductor's composer stores an
+  attached file as `@⟦<name>⟧(<the worktree-relative path, percent-encoded>)` in the
+  prompt text, beside the file itself at `<worktree>/.context/attachments/<6 chars>/<name>`.
+  There *is* an `attachments` table in `conductor.db`, and it is dead in the same way
+  `workspaces.unread` is: 471 rows, last written 2026-05-19, **none of them in the
+  `<id>/<name>` layout every attachment has used since**, and zero rows for attachments
+  made today. So writing one costs no DB write, and the read-only rule at the top of
+  this file survives intact. The near misses are quiet: `encodeURIComponent` encoding
+  the slashes too *is* the format (tidying that away still sends, and simply isn't an
+  attachment any more), and the brackets are `⟦⟧`, not the ASCII ones they resemble.
+  `scripts/check-attachments.ts` pins both against a token Conductor itself wrote,
+  and pins the other half — that a name built from a **chat title**, which is free text
+  a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
+  - **`split_chat` is what it exists for** (`POST /api/sessions/:id/split`): copy a chat
+    into a fresh tab beside it, so a tangent asked inside a running conversation stops
+    leaving three threads interleaved in one tab. Conductor's own "Fork to new tab"
+    resumes the agent's real session, and is unreachable from here twice over — it lives
+    on a hover menu over one message, so finding it means walking a transcript that gets
+    more expensive the longer the chat is, which is the same unbounded-search cost the
+    status menu's depth caps exist to avoid.
+  - **What crosses is prose and reasoning, not tool calls**, and that cut is measured
+    rather than chosen. Conductor's own concise copy drops thinking; its full copy brings
+    the tool churn. On the chats here, thinking is the bigger half of a long one (p90:
+    139 kB of thinking against 123 kB of prose; the largest, 300 kB against 101 kB), and
+    it is the half that says *why*. Tool rows are ~98.8% of the raw bytes and the least
+    re-readable. So `renderTranscript` takes one flag each — the same words `read_chat`
+    already used, which is also why that tool stopped reading both off `include_tools`.
+    Every cut is named in the file's own header and in the elision markers, because a
+    transcript that quietly dropped half a chat reads exactly like a complete one.
+  - **It stops one step short of sending**, and that is not tidiness. ⌘T and a send are
+    two UI turns (28s + 55s of ceiling) which together outlast every caller's budget,
+    including the MCP client's 75s. Routing the composed prompt back through the ordinary
+    send route also buys the retry loop, the transcript confirm and the parked queue for
+    a locked Mac, none of which a second implementation would have. Which tab is the new
+    one is decided by diffing the list against the one read *before* ⌘T, never by taking
+    the newest: a sibling tab or another agent may have opened one in between.
+  - **One thing here is still unproven**, so nothing may depend on it: whether Conductor
+    re-parses a token *written into the composer* back into a chip, or leaves it as text.
+    The DB cannot answer it (the attachment instruction an agent sees is built at send
+    time and stored nowhere). So the prompt carries the token *and* a plain sentence
+    naming the file, and the next agent reads it either way.
+
 - **MCP is the same relay with an agent on the other end** (`src/mcp-tools.ts`).
-  Ten tools, and **every one of them is an HTTP call to the
+  Sixteen tools, and **every one of them is an HTTP call to the
   running relay** — nothing here opens `conductor.db` and nothing here runs
   AppleScript. That is the load-bearing part, not a convenience: `uiTurn` is a
   *process-local* lock, so an MCP server that drove the UI itself would sit outside
@@ -458,6 +501,26 @@ Two asymmetric halves — keep them separate:
   and a UI write takes tens of seconds, so exiting straight from the `close` event
   silently drops every in-flight reply, which looks exactly like a client that
   stopped listening.
+  - **The tool set tracks `/api`, minus what only exists to back a button.** An agent
+    needs no `merge` (it holds `gh`, and `send_prompt` can ask the agent that owns the
+    branch), no push subscription, no settings editor and no repo icon. What it cannot
+    reach any other way is what earns a tool: `set_agent_options`/`list_models`, because
+    Conductor keeps model, effort, plan and fast in its composer and a prompt cannot
+    touch them; `dismiss_prompt`, for a prompt the relay is still holding; `keep_awake`,
+    which is what keeps this Mac reachable at all through a long unattended run;
+    `split_chat`, because Conductor's own fork sits on a hover menu no agent can press;
+    and `relay_logs`. `list_workspaces` prints `pending_prompt`/`parked_prompts` for the same
+    reason — those live in the relay's queues, not the DB, so an agent reading only
+    `status` calls a stalled workspace idle and sends a second copy of the prompt already
+    waiting on it.
+  - **Register it as `conductor-remote`, never `conductor`.** Conductor injects an MCP
+    server of its own into every agent it runs and that one already holds the name
+    `conductor` (AskUserQuestion, DiffComment, GetWorkspaceDiff…). Registered under the
+    same name, the two collide inside a Conductor workspace: Conductor's tools win, these
+    sixteen are unreachable, and the *only* surviving trace is this server's
+    `INSTRUCTIONS` text landing in the prompt — so it reads exactly like a tool set that
+    should be there and isn't. User scope, too: a workspace is a fresh worktree, which a
+    project-scoped entry keyed to the main checkout does not cover.
 
 - **One set of types, because there are now three readers of the same JSON.** The
   phone, an MCP tool and the relay all describe the same rows, and for a while each
@@ -474,24 +537,47 @@ Two asymmetric halves — keep them separate:
   TypeScript project** (tsconfig.json includes both) and `verbatimModuleSyntax`
   erases a type-only import outright, so a type may live in the same file as the
   `node:sqlite` that produces it and none of it reaches the bundle.
-  - **Types cross freely; values do not.** The single module the web app may
-    import a *value* from is `src/shared.ts`, which is stdlib-free on purpose and
-    holds what both sides must compute identically — `workspaceTitle` (three copies
+  - **Types cross freely; values do not.** Two modules under `src/` may be imported
+    as *values* by the web app, both stdlib-free on purpose. `src/shared.ts` holds
+    what both sides must compute identically — `workspaceTitle` (three copies
     before, so the sidebar and a push notification could name one workspace two
     ways), `queryTokens`, and the snippet hit markers. Everything else is
     `import type`, enforced by `scripts/check-imports.ts`, because the near miss
     (`import { type X }`, inline rather than statement-level) still emits a real
-    import.
-  - **This is also the answer to "should we adopt tRPC".** It buys the same shared
-    types, and it costs the tarball's `dependencies: {}` — a package that
-    auto-updates while holding a token that drives your Mac. It also cannot serve
-    the half of `/api` that is not RPC (static SPA + fallback, the binary icon
-    route, `/mcp` itself, the `x-client-timeout-ms` deadline, `x-relay-client`
-    priority), and `httpBatchLink` has no 304 path, which the phone's three polls
-    (1s, 2s, 2.5s, forever) get from `json()` today. The router-derived MCP tools
-    that make it pay elsewhere need ~200 procedures to earn it; there are ten here,
-    and most of `mcp-tools.ts` is agent-facing text formatting that no transport
-    changes.
+    import. A third exception should be an argument, not an edit: each one is a
+    promise that nothing under it ever reaches for Node.
+  - **`src/routes.ts` is the other half of wire.ts: the paths, declared once.**
+    `wire.ts` made the shapes impossible to disagree about and left the *addresses*
+    written three times — a regex in `server.ts`, a template literal in
+    `web/src/lib/api.ts`, another in `src/mcp-tools.ts`, 62 spellings of 27 paths.
+    A renamed path typechecked in all three and surfaced as a 404 on a phone. Now
+    one pattern serves both directions: `param()` splits `/api/sessions/:id/stop` at
+    the placeholder to build `path(id)` for a client and the regex the relay matches
+    with, so they cannot drift. Decoding happens in `routeParam`, which is what stops
+    a handler forgetting `decodeURIComponent` on a repo name. **What the table cannot
+    fix is renaming a path**: both sides derive from the one string, so a typo stays
+    self-consistent and `scripts/check-routes.ts` passes — and the phone runs from a
+    service-worker cache while the relay updates itself, so an installed PWA can be a
+    version behind. Treat a path rename as a breaking change to that older client.
+  - **This is also the answer to "should we adopt tRPC", and `wire.ts` + `routes.ts`
+    are that answer's cheap half.** Between them the shapes and the paths are each
+    declared once, with no dependency, which is most of what tRPC was wanted for.
+    What is left is worth stating accurately rather than dismissing: `@trpc/server`
+    is genuinely zero-dependency, so the "91 packages" figure belongs to the MCP SDK
+    and not to it. The real cost is a validator plus a `.meta`-to-MCP generator, two
+    or three packages against a `dependencies: {}` tarball that auto-updates while
+    holding a token that drives your Mac. Two things it also would not cover: the
+    relay serves the PWA, the binary icon route and `/mcp` off the same port, so
+    tRPC would sit *inside* `server.ts` rather than replace it (a footnote, not an
+    objection); and `httpBatchLink` has no conditional-request path, while `json()`
+    answers the phone's three forever-polls (1s, 2s, 2.5s) with a 304 today.
+    - The measurement that decides it: of the 462 lines in the tool array, ~86 are
+      `inputSchema` and 17 are route strings — the part `.meta` would generate. The
+      other ~300 are agent-facing prose and **text** formatting, which exists because
+      a tool returns rendered text sized for an agent's context, not the JSON the
+      phone gets. Elsewhere the tool *is* the procedure, same in and same out, which
+      is why `.meta` pays there and mostly does not here. Revisit past ~25 tools, or
+      when something other than the phone becomes the primary client.
 
 - **Notifications are a read that pushes** — the cheap third shape, on the durable
   side of the split. `src/notify.ts` polls the same read-only SQLite for
@@ -615,12 +701,14 @@ Two asymmetric halves — keep them separate:
 ## Commands
 
 ```bash
-yarn verify   # typecheck (tsc) + lint (Biome) + AppleScript check + nosleep check — before every commit
+yarn verify   # typecheck (tsc) + lint (Biome) + imports/routes/attachments/AppleScript/nosleep/uilock — before every commit
 yarn fix      # Biome autofix (format + safe lints)
 yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
 yarn check:nosleep     # run NOSLEEP_BODY against a stub pmset in a temp dir (no root, no real pmset)
 yarn check:uilock      # the UI lock's queue: order, priority, release-on-failure, cap
-yarn check:imports     # web/src may only `import type` from src/ (src/shared.ts aside)
+yarn check:imports     # web/src may only `import type` from src/ (shared.ts/routes.ts aside)
+yarn check:routes      # the /api route table: round-trip, no collisions, method is identity
+yarn check:attachments # the @⟦⟧() token Conductor parses, and a chat title that can't escape the worktree
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
@@ -629,12 +717,13 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Four automated tests. Two of them share one reason to exist: **each guards a
-language nothing else in the toolchain reads** — they live in a string or a sibling
-file, so `tsc` sees text and Biome sees text, and a mistake surfaces for the first
-time on someone's phone or someone's Mac. The other two guard things `tsc` reads
-fine and still cannot judge: control flow, and which side of the Node/browser line
-an import lands on.
+Six automated tests. Three of them share one reason to exist: **each guards a
+language nothing else in the toolchain reads** — an AppleScript handler, a shell body,
+a syntax another app parses. They live in a string or a sibling file, so `tsc` sees text
+and Biome sees text, and a mistake surfaces for the first time on someone's phone or
+someone's Mac. The other three guard things `tsc` reads fine and still cannot judge:
+control flow, which side of the Node/browser line an import lands on, and whether a URL
+still addresses the handler that answers it.
 
 - `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
   the way `osascript` will, and every `my handler()` call, in the script *and* in
@@ -660,6 +749,25 @@ an import lands on.
   wedges **every** future write with no error and no fix from the phone, and a
   priority bug puts a human tap behind a minute of agent work. It found both bugs in
   the queue while that queue was being written. Portable, so the ubuntu job runs it.
+
+- `scripts/check-routes.ts` — the `/api` route table (`src/routes.ts`). Every route
+  matches the path it builds, the parameter survives encoding verbatim, no route answers
+  another route's path, and a route answers its own method only. It earns its place on
+  blast radius: the table is the one place a path is written now, read by the relay's
+  matcher, the phone and the MCP tools at once, so a single wrong character takes out all
+  three and `tsc` sees only a string. The collision check is the one ordering hides —
+  whichever `if` is written first in the dispatcher wins, so a real overlap looks fine
+  until someone reorders the file. Portable, so the ubuntu job runs it.
+
+- `scripts/check-attachments.ts` — the two halves of a Conductor attachment
+  (`src/attachments.ts`), both of them strings all the way down. The token is *another
+  app's* syntax, so it is asserted against one Conductor itself wrote, byte for byte:
+  the percent-encoded slashes look like a bug and are the format, and `⟦⟧` are not the
+  ASCII brackets they resemble. Tidy either and the prompt still sends, carrying a file
+  nobody is told to read. The other half is that the file name comes from a **chat
+  title** — free text a model wrote — and is then joined onto a path, so the test that
+  matters is the one where a title engineered to climb out still lands inside the
+  worktree. Portable, so the ubuntu job runs it.
 
 - `scripts/check-imports.ts` — the relay/web boundary (see "One set of types" above).
   `web/src/**` may reach into `src/` only with a **statement-level** `import type`,
@@ -871,8 +979,8 @@ bind trap below), not by unit test.
 - **Layout:** `src/` = Node relay (server, db, reads, git, transcript, sidecar,
   writes, config) plus `conductor.applescript`, the UI script `writes.ts` runs.
   Two files there are read by the phone as well: `src/wire.ts` (the `/api` contract,
-  types only) and `src/shared.ts` (stdlib-free, the only value import the web app may
-  make) — see "One set of types".
+  types only), plus `src/shared.ts` and `src/routes.ts` (both stdlib-free, the only
+  value imports the web app may make) — see "One set of types".
   `web/` = Vite-root React PWA (`web/src/`). `public/` = static
   PWA assets at the **repo root** (not under `web/`) so Conductor's repo-icon lookup
   finds them (`vite.config.ts` sets `publicDir: '../public'`); `scripts/` = dev,

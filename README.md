@@ -228,20 +228,42 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same ten tools.
+Two transports, same sixteen tools.
+
+| | |
+|---|---|
+| `search_chats` · `read_chat` | full-text search every chat on this Mac, archived included, then read one |
+| `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
+| `create_workspace` | start work in a repo, with an optional first prompt. Touches no UI |
+| `send_prompt` · `stop_turn` | talk to a running agent, or cancel its turn |
+| `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
+| `list_models` · `set_agent_options` | model, effort, plan, fast — Conductor keeps these in its UI and nowhere else |
+| `set_workspace_status` | move a workspace between the sidebar's status groups |
+| `dismiss_prompt` | throw away a prompt the relay is still holding |
+| `keep_awake` | hold this Mac awake with the lid shut, so a long run stays reachable |
+| `relay_logs` | the relay's own log — why a send failed |
+
+**Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
+own into every agent it runs, and that one is already called `conductor`. Register this
+under the same name and inside a Conductor workspace the two collide: Conductor's tools
+win, these sixteen vanish, and the only trace left is this server's instructions text —
+so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
 there is no URL and nothing is exposed.
 
 ```bash
-claude mcp add conductor -- conductor-remote mcp
+claude mcp add --scope user conductor-remote -- conductor-remote mcp
 ```
+
+`--scope user` because a Conductor workspace is a fresh worktree each time, and a
+project-scoped server registered against your main checkout does not reach it.
 
 **HTTP** — for an agent that can only reach a URL, at `POST /mcp` on the relay, gated by
 the same token as `/api/*`.
 
 ```bash
-claude mcp add --transport http conductor https://<your-magicdns>/mcp \
+claude mcp add --transport http conductor-remote https://<your-magicdns>/mcp \
   --header "Authorization: Bearer $(cat ~/Library/Application\ Support/conductor-remote/token)"
 ```
 

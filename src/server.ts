@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
@@ -40,9 +41,11 @@ import {
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
 import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
+import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { readSettings, writeSettings } from './settings.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
+import { renderTranscript } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import {
 	type AgentOptions,
@@ -217,6 +220,32 @@ function locateChat(
 		tab: { index: index + 1, count: sessions.length, title: sessions[index].title ?? '' },
 		session: sessions[index]
 	}
+}
+
+/**
+ * Open a chat tab in a workspace and come back with its id.
+ *
+ * ⌘T is fire-and-forget like every other keystroke here, so the id is not something
+ * the write can return — the DB is the receipt. Which row is the new one is decided by
+ * diffing the tab list against the one taken *before* the keystroke, not by taking the
+ * newest: a sibling tab or another agent may have opened one in between, and picking by
+ * `created_at` would hand back theirs.
+ */
+async function openChat(
+	ws: Workspace
+): Promise<{ sessionId: string | null } | { error: true; result: Awaited<ReturnType<typeof newChat>> }> {
+	const before = new Set(reads.listSessions(ws.id).map(s => s.id))
+	const result = await newChat(ws)
+	if (!result.ok) return { error: true, result }
+	// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
+	for (let i = 0; i < 12; i++) {
+		await sleep(500)
+		const fresh = reads.listSessions(ws.id).find(s => !before.has(s.id))
+		if (fresh) return { sessionId: fresh.id }
+	}
+	// The tab is almost certainly on screen; only its id is missing. Say so rather than
+	// failing the call, so a caller can still tell the user where the work went.
+	return { sessionId: null }
 }
 
 /** Poll the DB until Conductor records the setting we just drove through the UI. */
@@ -573,7 +602,7 @@ const server = http.createServer(async (req, res) => {
 	return withUiPriority(priority, async () => {
 		try {
 			// GET /api/state — workspace list with active-session status
-			if (req.method === 'GET' && pathname === '/api/state') {
+			if (isRoute(routes.state, req.method, pathname)) {
 				const update = updateStatus()
 				const workspaces = reads.listWorkspaces()
 				attachPrStatus(workspaces) // colours pr_status from cache; refreshes stale entries in the background
@@ -605,7 +634,7 @@ const server = http.createServer(async (req, res) => {
 			//
 			// Both reach archived workspaces. That is the point: 1,846 of the 1,886 here are
 			// archived, so a search limited to the live sidebar would miss almost everything.
-			if (req.method === 'GET' && pathname === '/api/search') {
+			if (isRoute(routes.search, req.method, pathname)) {
 				const q = url.searchParams.get('q') ?? ''
 				// 12, not 50: an OR query over common words ("add", "remove") has a long weak tail,
 				// and past the first screenful nobody scrolls — they retype instead.
@@ -644,7 +673,7 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// GET /api/repos — repos a new workspace can be created in
-			if (req.method === 'GET' && pathname === '/api/repos') {
+			if (isRoute(routes.repos, req.method, pathname)) {
 				return json(req, res, 200, { repos: reads.listRepos() })
 			}
 
@@ -652,7 +681,7 @@ const server = http.createServer(async (req, res) => {
 			// the SSIDs this Mac already holds credentials for, so the picker offers a choice
 			// instead of asking someone to type a network name from memory on a phone keyboard.
 			// `ssid` is best-effort and often null (macOS gates it behind Location Services).
-			if (req.method === 'GET' && pathname === '/api/settings') {
+			if (isRoute(routes.settings, req.method, pathname)) {
 				// Four subprocesses, all concurrent: this is the one route that shells out more
 				// than once, and serialising them would put the phone's polls behind the sum.
 				const [known, current, autoJoinHotspot, nosleep] = await Promise.all([
@@ -677,7 +706,7 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// PATCH /api/settings { fallbackSsids?, autoRejoin? } — merge and persist.
-			if (req.method === 'PATCH' && pathname === '/api/settings') {
+			if (isRoute(routes.updateSettings, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as { fallbackSsids?: unknown; autoRejoin?: unknown }
 				const patch: Parameters<typeof writeSettings>[0] = {}
 				if (Array.isArray(body.fallbackSsids)) patch.fallbackSsids = body.fallbackSsids as string[]
@@ -687,7 +716,7 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// GET /api/nosleep — is the Mac being held awake, and can this relay do it at all
-			if (req.method === 'GET' && pathname === '/api/nosleep') {
+			if (isRoute(routes.nosleep, req.method, pathname)) {
 				return json(req, res, 200, { ...(await nosleepState()), maxSeconds: NOSLEEP_MAX_SECONDS })
 			}
 
@@ -695,7 +724,7 @@ const server = http.createServer(async (req, res) => {
 			// Only works once `conductor-remote nosleep setup` has installed the scoped sudoers
 			// rule; without it there is no way for a TTY-less daemon to reach root, and the
 			// response says so rather than failing vaguely.
-			if (req.method === 'POST' && pathname === '/api/nosleep') {
+			if (isRoute(routes.armNoSleep, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as { seconds?: number }
 				const seconds = Number(body.seconds)
 				// Whole seconds, not just "> 0": the helper reads 0 as "until killed", and 0.4
@@ -707,7 +736,7 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// DELETE /api/nosleep — let it sleep again now, rather than at the window's end
-			if (req.method === 'DELETE' && pathname === '/api/nosleep') {
+			if (isRoute(routes.disarmNoSleep, req.method, pathname)) {
 				const result = await disarmNoSleep()
 				return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
 			}
@@ -716,7 +745,7 @@ const server = http.createServer(async (req, res) => {
 			// without reaching the Mac. Default is this process's captured console (ordered, timestamped);
 			// `file` tails the daemon's stdout/stderr on disk, which is the only place the *previous*
 			// process's crash survives. Everything is redacted: the startup banner prints the token.
-			if (req.method === 'GET' && pathname === '/api/logs') {
+			if (isRoute(routes.logs, req.method, pathname)) {
 				const file = url.searchParams.get('file')
 				if (file && !(LOG_FILE_NAMES as readonly string[]).includes(file)) {
 					return json(req, res, 404, { error: `unknown log file ${file}`, files: LOG_FILE_NAMES })
@@ -742,14 +771,14 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// GET /api/push — the VAPID public key the phone subscribes with, plus who's already subscribed
-			if (req.method === 'GET' && pathname === '/api/push') {
+			if (isRoute(routes.push, req.method, pathname)) {
 				return json(req, res, 200, pushConfig())
 			}
 
 			// POST /api/push/subscribe { subscription, label? } — register (or refresh) this device.
 			// Idempotent by endpoint: the app re-sends on every load, which is what heals a relay that
 			// lost its store, or a subscription the browser silently renewed.
-			if (req.method === 'POST' && pathname === '/api/push/subscribe') {
+			if (isRoute(routes.pushSubscribe, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as {
 					subscription?: { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
 					label?: string
@@ -768,14 +797,14 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// POST /api/push/unsubscribe { endpoint } — the phone turned notifications off
-			if (req.method === 'POST' && pathname === '/api/push/unsubscribe') {
+			if (isRoute(routes.pushUnsubscribe, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as { endpoint?: string }
 				if (!body.endpoint) return json(req, res, 400, { error: 'need the endpoint' })
 				return json(req, res, 200, { ok: unsubscribeDevice(body.endpoint), devices: pushConfig().devices })
 			}
 
 			// POST /api/push/test { id } — push to one device, so "is this actually wired up?" has an answer
-			if (req.method === 'POST' && pathname === '/api/push/test') {
+			if (isRoute(routes.pushTest, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as { id?: string }
 				if (!body.id) return json(req, res, 400, { error: 'need the device id' })
 				const result = await notifyDevice(body.id, {
@@ -790,7 +819,7 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
-			if (req.method === 'POST' && pathname === '/api/workspaces') {
+			if (isRoute(routes.createWorkspace, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
 				// The prompt is optional — a bare `path=` opens an empty workspace, like
 				// Conductor's own New workspace — but *something* has to say where it goes.
@@ -838,9 +867,9 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// GET /api/repos/:name/icon — the repo's resolved sidebar icon (see src/icons.ts)
-			let m = pathname.match(/^\/api\/repos\/([^/]+)\/icon$/)
-			if (req.method === 'GET' && m) {
-				const icon = reads.resolveRepoIcon(decodeURIComponent(m[1]))
+			const repo = routeParam(routes.repoIcon, req.method, pathname)
+			if (repo) {
+				const icon = reads.resolveRepoIcon(repo)
 				if (!icon) return json(req, res, 404, { error: 'no icon' })
 				return void fs.readFile(icon.path, (err, data) => {
 					if (err) return void json(req, res, 404, { error: 'no icon' })
@@ -851,32 +880,26 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// GET /api/workspaces/:id/sessions
-			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/)
-			if (req.method === 'GET' && m) {
-				return json(req, res, 200, { sessions: reads.listSessions(decodeURIComponent(m[1])) })
+			const listSessionsIn = routeParam(routes.sessions, req.method, pathname)
+			if (listSessionsIn) {
+				return json(req, res, 200, { sessions: reads.listSessions(listSessionsIn) })
 			}
 
 			// POST /api/workspaces/:id/sessions — open a new chat (Cmd+T) in the workspace
-			if (req.method === 'POST' && m) {
-				const workspaceId = decodeURIComponent(m[1])
+			const newChatIn = routeParam(routes.newChat, req.method, pathname)
+			if (newChatIn) {
+				const workspaceId = newChatIn
 				const ws = reads.getWorkspace(workspaceId)
 				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
-				const before = new Set(reads.listSessions(workspaceId).map(s => s.id))
-				const result = await newChat(ws)
-				if (!result.ok) return json(req, res, 502, result)
-				// The new session lands in the DB a beat after Cmd+T — poll for the fresh id.
-				let sessionId: string | null = null
-				for (let i = 0; i < 12 && !sessionId; i++) {
-					await new Promise(r => setTimeout(r, 500))
-					sessionId = reads.listSessions(workspaceId).find(s => !before.has(s.id))?.id ?? null
-				}
-				return json(req, res, 200, { ok: true, sessionId })
+				const opened = await openChat(ws)
+				if ('error' in opened) return json(req, res, 502, opened.result)
+				return json(req, res, 200, { ok: true, sessionId: opened.sessionId })
 			}
 
 			// GET /api/workspaces/:id/diff
-			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/diff$/)
-			if (req.method === 'GET' && m) {
-				const ws = reads.getWorkspace(decodeURIComponent(m[1]))
+			const diffOf = routeParam(routes.diff, req.method, pathname)
+			if (diffOf) {
+				const ws = reads.getWorkspace(diffOf)
 				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
 				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
 				const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
@@ -884,9 +907,9 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// POST /api/workspaces/:id/merge — merge the workspace's open PR (mirrors Conductor's merge button)
-			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/merge$/)
-			if (req.method === 'POST' && m) {
-				const ws = reads.getWorkspace(decodeURIComponent(m[1]))
+			const mergeOf = routeParam(routes.merge, req.method, pathname)
+			if (mergeOf) {
+				const ws = reads.getWorkspace(mergeOf)
 				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
 				const result = await mergePr(ws)
 				return json(req, res, result.ok ? 200 : 409, result)
@@ -896,9 +919,9 @@ const server = http.createServer(async (req, res) => {
 			// Conductor derives that status from a PR it sometimes never links (a PR merged inside its
 			// poll window is invisible to it afterwards), which strands finished work in "In progress"
 			// with no way to correct it from a phone. This is that way.
-			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/status$/)
-			if (req.method === 'POST' && m) {
-				const workspaceId = decodeURIComponent(m[1])
+			const statusOf = routeParam(routes.workspaceStatus, req.method, pathname)
+			if (statusOf) {
+				const workspaceId = statusOf
 				const body = JSON.parse((await readBody(req)) || '{}') as { status?: string }
 				const status = body.status ?? ''
 				if (!WORKSPACE_STATUS_LABELS[status]) {
@@ -929,16 +952,16 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// GET /api/sessions/:id/messages?after=<rowid>
-			m = pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
-			if (req.method === 'GET' && m) {
+			const messagesOf = routeParam(routes.messages, req.method, pathname)
+			if (messagesOf) {
 				const after = Number(url.searchParams.get('after') ?? 0)
-				return json(req, res, 200, reads.getMessages(decodeURIComponent(m[1]), Number.isFinite(after) ? after : 0))
+				return json(req, res, 200, reads.getMessages(messagesOf, Number.isFinite(after) ? after : 0))
 			}
 
 			// GET /api/sessions/:id/models?workspaceId= — labels from Conductor's live picker
-			m = pathname.match(/^\/api\/sessions\/([^/]+)\/models$/)
-			if (req.method === 'GET' && m) {
-				const sessionId = decodeURIComponent(m[1])
+			const modelsOf = routeParam(routes.models, req.method, pathname)
+			if (modelsOf) {
+				const sessionId = modelsOf
 				const ws = reads.getWorkspace(url.searchParams.get('workspaceId') ?? '')
 				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
 				const located = locateChat(ws, sessionId)
@@ -949,9 +972,9 @@ const server = http.createServer(async (req, res) => {
 
 			// POST /api/sessions/:id/agent  { effort?, plan?, fast?, model? }
 			// Drives the composer's own model/effort/plan/fast controls for one chat.
-			m = pathname.match(/^\/api\/sessions\/([^/]+)\/agent$/)
-			if (req.method === 'POST' && m) {
-				const sessionId = decodeURIComponent(m[1])
+			const agentOf = routeParam(routes.agent, req.method, pathname)
+			if (agentOf) {
+				const sessionId = agentOf
 				const body = JSON.parse((await readBody(req)) || '{}') as {
 					effort?: string
 					plan?: boolean
@@ -972,9 +995,9 @@ const server = http.createServer(async (req, res) => {
 			}
 
 			// POST /api/sessions/:id/stop — the desktop app's stop button, for one chat.
-			m = pathname.match(/^\/api\/sessions\/([^/]+)\/stop$/)
-			if (req.method === 'POST' && m) {
-				const sessionId = decodeURIComponent(m[1])
+			const stopOf = routeParam(routes.stop, req.method, pathname)
+			if (stopOf) {
+				const sessionId = stopOf
 				const body = JSON.parse((await readBody(req)) || '{}') as { workspaceId?: string }
 				const ws = body.workspaceId
 					? reads.getWorkspace(body.workspaceId)
@@ -1018,9 +1041,9 @@ const server = http.createServer(async (req, res) => {
 			// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged
 			// settings patch, applied before the prompt so the two can't come apart (and so
 			// both park together when the Mac turns out to be locked).
-			m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
-			if (req.method === 'POST' && m) {
-				const sessionId = decodeURIComponent(m[1])
+			const promptTo = routeParam(routes.sendPrompt, req.method, pathname)
+			if (promptTo) {
+				const sessionId = promptTo
 				const body = JSON.parse((await readBody(req)) || '{}') as {
 					text?: string
 					workspaceId?: string
@@ -1080,18 +1103,103 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 502, result)
 			}
 
+			// POST /api/sessions/:id/split { prompt?, includeThinking?, includeTools? }
+			//
+			// Conductor's own "Fork to new tab" resumes the agent's real session. This copies
+			// the conversation instead, as a Conductor attachment, which is the cut that
+			// survives being read by a *different* agent: prose and reasoning, no tool churn.
+			// Two reasons it exists at all. A tangent asked inside a running chat leaves three
+			// conversations interleaved in one tab, which reads badly for everyone afterwards;
+			// and Conductor's fork lives on a hover menu over one message, which an agent
+			// cannot reach and which the relay would have to find by walking a transcript that
+			// gets more expensive the longer the chat is.
+			//
+			// It stops before sending. The composed prompt goes out through the ordinary send
+			// route so it inherits the retry loop, the transcript confirm and the parked queue
+			// — and because ⌘T plus a send is two UI turns, which together outlast any caller's
+			// budget (28s + 55s against the MCP client's 75s).
+			const splitFrom = routeParam(routes.splitChat, req.method, pathname)
+			if (splitFrom) {
+				const sessionId = splitFrom
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					prompt?: string
+					workspaceId?: string
+					includeThinking?: boolean
+					includeTools?: boolean
+				}
+				// `active_session_id` is how every other route resolves this, and it would only
+				// ever find the tab on screen. Splitting a chat you are not looking at is the
+				// normal case here, so the session's own column decides.
+				const workspaceId = body.workspaceId ?? reads.sessionWorkspaceId(sessionId)
+				const ws = workspaceId ? reads.getWorkspace(workspaceId) : null
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
+				const source = reads.listSessions(ws.id).find(s => s.id === sessionId)
+				if (!source) return json(req, res, 404, { error: 'chat not found in that workspace' })
+
+				const format = { thinking: body.includeThinking !== false, tools: body.includeTools === true }
+				const { entries } = reads.getMessages(sessionId)
+				const rendered = renderTranscript(entries, format)
+				if (!rendered.kept) return json(req, res, 409, { error: 'that chat has nothing to copy yet' })
+
+				// Conductor's own name for a copied transcript, so the chip reads the same as one
+				// saved by hand. The header states the cut, because a transcript that silently
+				// drops half a chat is worse than one that admits to it.
+				const title = source.title?.trim() || 'chat'
+				const carried = [`thinking ${format.thinking ? 'included' : 'omitted'}`]
+				carried.push(`tool calls ${format.tools ? 'included' : 'omitted'}`)
+				const header = [
+					`# Transcript of ${title}`,
+					'',
+					`${[ws.repo_name, ws.branch].filter(Boolean).join(' · ')}`,
+					`Copied from the Conductor chat \`${sessionId}\` by conductor-remote. ${carried.join(', ')}.`,
+					'',
+					''
+				].join('\n')
+				const attachment = writeAttachment(ws.worktree, `Transcript of ${title}.md`, header + rendered.text)
+
+				const opened = await openChat(ws)
+				if ('error' in opened) {
+					return json(req, res, 502, { ...opened.result, attachment: { ...attachment, ...rendered } })
+				}
+				// Both forms on purpose: the token is what Conductor turns into a chip, and the
+				// sentence is what still works if it does not. Nothing here may depend on which.
+				const prompt = (body.prompt ?? '').trim()
+				const text = [
+					attachment.token,
+					`(the chat this was split off from — read \`${attachment.relPath}\` first)`,
+					'',
+					prompt
+				]
+					.join('\n')
+					.trim()
+				return json(req, res, 200, {
+					ok: true,
+					sessionId: opened.sessionId,
+					workspaceId: ws.id,
+					text,
+					attachment: {
+						name: attachment.name,
+						path: attachment.relPath,
+						bytes: attachment.bytes,
+						kept: rendered.kept,
+						elided: rendered.elided
+					}
+				})
+			}
+
 			// DELETE /api/workspaces/:id/prompt — dismiss an undelivered first prompt
-			m = pathname.match(/^\/api\/workspaces\/([^/]+)\/prompt$/)
-			if (req.method === 'DELETE' && m) {
-				const workspaceId = decodeURIComponent(m[1])
+			const forgetFirst = routeParam(routes.dismissFirstPrompt, req.method, pathname)
+			if (forgetFirst) {
+				const workspaceId = forgetFirst
 				if (!firstPrompts.forget(workspaceId)) return json(req, res, 404, { error: 'no pending prompt' })
 				return json(req, res, 200, { ok: true })
 			}
 
 			// DELETE /api/sessions/:id/prompt — dismiss whatever is parked for this chat
-			m = pathname.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
-			if (req.method === 'DELETE' && m) {
-				const sessionId = decodeURIComponent(m[1])
+			const forgetParked = routeParam(routes.dismissParkedPrompt, req.method, pathname)
+			if (forgetParked) {
+				const sessionId = forgetParked
 				if (!parkedPrompts.forgetSession(sessionId)) return json(req, res, 404, { error: 'no parked prompt' })
 				return json(req, res, 200, { ok: true })
 			}

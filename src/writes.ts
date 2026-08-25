@@ -782,6 +782,13 @@ export async function createWorkspace(prompt: string, repoPath: string | null): 
  * Open a new chat in the target workspace — Conductor's "New chat, same files"
  * (Cmd+T). Focuses the workspace first (its own link, see `workspaceLink`), then
  * Cmd+T; the caller detects the freshly-created session id from the DB.
+ *
+ * The pane is asserted before the keystroke for the same reason a send asserts before
+ * typing: `focusWorkspace` confirms every route it takes except its last one, the
+ * palette, and Cmd+T against an unconfirmed pane opens a tab in someone else's
+ * workspace. Nothing catches that afterwards — the caller looks for the new session in
+ * *this* workspace's tab list, so a stray tab reads as "the id could not be read back"
+ * while sitting in a conversation nobody asked to change.
  */
 export async function newChat(workspace: Workspace): Promise<SendResult> {
 	if (!focusQuery(workspace)) return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
@@ -790,6 +797,9 @@ ${CONDUCTOR_HANDLERS}
 
 my activateConductor()
 my focusWorkspace()
+set strips to my tabGroups()
+if (count of strips) is 0 then error "couldn't find the chat pane to open a tab in"
+my assertWorkspace(item 1 of strips)
 tell application "System Events"
 	keystroke "t" using {command down}
 end tell`.trim()

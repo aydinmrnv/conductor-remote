@@ -493,6 +493,23 @@ export class Reads {
 		return null
 	}
 
+	/**
+	 * Which workspace a chat belongs to.
+	 *
+	 * Every other route resolves this by matching `active_session_id`, which only ever
+	 * finds the tab that is currently on screen. That is fine for a phone, where the
+	 * chat you are looking at is the chat you are sending to. It is wrong for anything
+	 * addressing a chat by id — a background tab has a workspace too, and `sessions`
+	 * has carried `workspace_id` all along.
+	 */
+	sessionWorkspaceId(sessionId: string): string | null {
+		const rows = this.db.query<{ workspace_id: string | null }>(
+			`SELECT workspace_id FROM sessions WHERE id = ? LIMIT 1`,
+			[sessionId]
+		)
+		return rows[0]?.workspace_id ?? null
+	}
+
 	/** Session → worktree path, cached: it's stable for a session's lifetime and polled every tick. */
 	private readonly worktreeBySession = new Map<string, string | null>()
 

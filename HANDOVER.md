@@ -98,10 +98,13 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   pkg-root.ts     packageRoot(): walk up to package.json (works from src/ and dist-node/src/)
   db.ts           read-only node:sqlite handle to conductor.db
   reads.ts        workspaces / sessions / messages + worktree resolution
-  transcript.ts   Claude Code SDK stream JSON → phone-renderable entries
+  transcript.ts   Claude Code SDK stream JSON → phone-renderable entries, and back out to
+                  markdown (renderTranscript: prose always, thinking/tools per flag)
+  attachments.ts  writes a real Conductor attachment from outside Conductor: the file under
+                  .context/attachments/<id>/, and the @⟦name⟧(path) token the composer parses
   search.ts       FTS5 index over chat prose in its OWN sidecar db (stateDir()/search.db);
                   backfills in the background, folds chunk hits up into workspaces
-  mcp-tools.ts    the 10 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 16 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
@@ -146,7 +149,8 @@ scripts/         dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/u
                  + qr.ts (dep-free QR of the phone URL, printed by service.ts)
                  + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
                  + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)
-                 + check-applescript.ts and check-nosleep.ts (the two automated tests, run by `yarn verify`)
+                 + check-{applescript,nosleep,uilock,imports,routes,attachments}.ts
+                   (the automated tests, all run by `yarn verify`)
 dist/             built PWA (gitignored) — what the relay serves
 dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```

@@ -109,6 +109,37 @@ export interface MessagesResponse {
 	cursor: number
 }
 
+/**
+ * POST /api/sessions/:id/split — the source chat, written into a new tab's attachments.
+ *
+ * It stops one step short of sending. The prompt it composes goes out through the
+ * ordinary send route, which is what buys it the retry loop, the transcript confirm and
+ * the parked-prompt queue for a locked Mac. Doing both here would also put two UI turns
+ * (⌘T, then the send) inside one request, past what any caller waits.
+ */
+export interface SplitChatResult {
+	ok: boolean
+	/** The new chat. Present whenever the tab opened, even if nothing has been sent to it. */
+	sessionId: string | null
+	workspaceId: string
+	/** Ready to POST to `sendPrompt`: the attachment token, then the caller's prompt. */
+	text: string
+	attachment: SplitAttachment
+	error?: string
+}
+
+/** The transcript file `split` wrote, and what it left out of it. */
+export interface SplitAttachment {
+	name: string
+	/** Worktree-relative — the path an agent should read, and what the token spells. */
+	path: string
+	bytes: number
+	/** Transcript entries written. */
+	kept: number
+	/** Entries dropped, by kind, so a caller can report the cut instead of implying none. */
+	elided: { thinking: number; tools: number }
+}
+
 /** POST /api/sessions/:id/agent — the chat is re-read from the DB before this answers. */
 export interface AgentResult {
 	ok: boolean
@@ -218,5 +249,14 @@ export interface SettingsResponse {
 		/** macOS's Auto-join Hotspot setting: `Never` | `Ask` | `Automatic`, or null if unreadable. */
 		autoJoinHotspot: string | null
 	}
-	nosleep: NoSleepState & { maxSeconds: number }
+	nosleep: NoSleepStatus
+}
+
+/**
+ * GET /api/nosleep — the window's state plus the ceiling a caller may ask for. It rides
+ * along inside `SettingsResponse` as well, so the phone needs no second trip to draw the
+ * slider; both read this one declaration.
+ */
+export interface NoSleepStatus extends NoSleepState {
+	maxSeconds: number
 }
