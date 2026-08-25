@@ -39,7 +39,7 @@ export type { LogLevel } from './logbuf.ts'
 export type { MergeMethod, MergeResult } from './merge.ts'
 export type { NoSleepResult } from './nosleep.ts'
 export type { PrStatus, UnreadSession } from './reads.ts'
-export type { SearchSnippet } from './search.ts'
+export type { SearchRole, SearchSnippet } from './search.ts'
 export type {
 	ActuatorInfo,
 	DeviceInfo as PushDevice,

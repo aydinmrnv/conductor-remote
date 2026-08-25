@@ -123,7 +123,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'search_chats',
 			description:
-				'Full-text search every Conductor chat on this Mac, archived workspaces included, and get back the workspaces that discussed it with the matching excerpts. Use this to answer "which workspace did I do X in" or "what did we decide about X". Searches the prompts the user typed and the agent replies, not tool output. Results carry workspace_id and session_id for read_chat.',
+				'Full-text search every Conductor chat on this Mac, archived workspaces included, and get back the workspaces that discussed it with the matching excerpts. Use this to answer "which workspace did I do X in" or "what did we decide about X". Searches the prompts the user typed, the agent replies and the agent\'s reasoning, not tool output. Each excerpt is tagged [user], [assistant] or [thinking] — a [thinking] hit is reasoning the agent never said out loud, so do not quote it back as its answer. Results carry workspace_id and session_id for read_chat.',
 			inputSchema: {
 				type: 'object',
 				properties: {

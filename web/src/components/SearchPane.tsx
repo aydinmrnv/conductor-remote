@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useDebounced, useSearch } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { queryTokens, relativeTime, splitSnippet, workspaceTitle } from '../lib/format.ts'
-import type { SearchSnippet, Workspace } from '../lib/types.ts'
+import type { SearchRole, SearchSnippet, Workspace } from '../lib/types.ts'
 import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
 
 /**
@@ -195,11 +195,20 @@ function ResultRow({
 	)
 }
 
+/**
+ * Reasoning gets its own label rather than reading as the agent's answer: the words
+ * are real and the chat view renders them, but the agent never said them out loud,
+ * so an excerpt tagged "agent" would be quoted back as a statement it made.
+ */
+const ROLE_LABEL: Record<SearchRole, string> = { user: 'you', assistant: 'agent', thinking: 'thought' }
+
 function SnippetLine({ snippet }: { snippet: SearchSnippet }) {
 	return (
 		<p className="line-clamp-2 text-left text-xs leading-snug text-muted">
-			<span className="mr-1.5 text-[10px] uppercase tracking-wide text-faint">
-				{snippet.role === 'user' ? 'you' : 'agent'}
+			<span
+				className={`mr-1.5 text-[10px] uppercase tracking-wide ${snippet.role === 'thinking' ? 'text-faint italic' : 'text-faint'}`}
+			>
+				{ROLE_LABEL[snippet.role]}
 			</span>
 			{splitSnippet(snippet.text).map((run, i) =>
 				run.hit ? (
