@@ -10,18 +10,35 @@ import { parseMessage } from './transcript.ts'
  *
  * Two facts decide the whole shape of this file.
  *
- * **Prose is 1.2% of the transcript.** Measured over this Mac's 1.7M
+ * **Prose is a few percent of the transcript.** Measured over this Mac's 1.7M
  * `session_messages` rows (3,106 MB of `content`): tool_result output is 799 MB,
- * `type:"system"` frames 522 MB, tool_use arguments 162 MB, thinking 77 MB — and
- * what a person would ever search for, the assistant's own words plus the prompts
- * they typed, is **38 MB**. So this indexes prose only. A grep of the raw column
- * would be a 3 GB scan to search 38 MB, and it would rank a file dump the agent
- * happened to `cat` above the sentence that explained the decision.
+ * `type:"system"` frames 522 MB, tool_use arguments 162 MB — and what a person
+ * would ever search for is prose. So this indexes prose only. A grep of the raw
+ * column would be a 3 GB scan, and it would rank a file dump the agent happened
+ * to `cat` above the sentence that explained the decision.
+ *
+ * **Thinking counts as prose, and it is the bigger half.** Re-measured 2026-08-25:
+ * assistant text is 36.9 MB over 93,189 blocks, typed prompts 2.6 MB over 19,432
+ * rows, and thinking **82.7 MB over 102,776 blocks** — more than the other two
+ * together. Skipping it was the original cut and it was wrong: the chat view
+ * *renders* thinking, so a hit there opens to something you can read, and the
+ * reasoning is where a decision gets explained before the reply summarises it.
+ * Note the shape trap behind the source query below: **every thinking block sits
+ * in a row with no text block beside it** (0 of 102,773 rows carry both), so a
+ * prefilter written for `"type":"text"` excludes 100% of thinking rather than
+ * some of it — the bug that made this cut invisible.
+ *
+ * The cost is paid up front and it is bounded. Same machine, same history, five
+ * real queries at `CHUNK_LIMIT`: 112,571 chunks → **208,131**, 77 MB → 230 MB,
+ * 7.6s → **12.3s** to build, and 12–57ms → **25–137ms** per query. The worst case
+ * still fits inside the phone's 250ms search-as-you-type debounce, which is the
+ * only latency budget that binds here. (The 1–7ms this comment used to claim was
+ * measured on a smaller history and no longer held even before thinking: v1
+ * measures 12–57ms today.)
  *
  * **`node:sqlite` ships FTS5.** Porter stemming, `bm25()`, `snippet()`, `NEAR()`
  * all work on the bundled SQLite (3.51.2), so the index costs no runtime
- * dependency — which the tarball rule requires (see CLAUDE.md ▸ Traps). Measured
- * on the full history: 7.6s to build, 111,079 chunks, queries in 1–7ms.
+ * dependency — which the tarball rule requires (see CLAUDE.md ▸ Traps).
  *
  * The index is **never** written into `conductor.db`. That handle is read-only and
  * stays that way; this opens its own file under the relay's state dir, and it is
@@ -29,7 +46,7 @@ import { parseMessage } from './transcript.ts'
  */
 
 /** Bump to force a rebuild: a tokenizer or extraction change makes every stored chunk wrong. */
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 /**
  * Source rows advanced per tick. The cursor moves by *scanned* rowid rather than
@@ -59,11 +76,22 @@ const CHUNK_LIMIT = 300
  */
 export { HIT_CLOSE, HIT_OPEN } from './shared.ts'
 
+/**
+ * Which kind of prose matched. `thinking` is separate from `assistant` on purpose:
+ * a hit there is reasoning the agent never said out loud, and labelling it as the
+ * agent's answer would misread it. The three are exactly `TranscriptEntry['role']`
+ * minus the parts this index skips (`tool`, `system`).
+ */
+export type SearchRole = 'user' | 'assistant' | 'thinking'
+
+/** The `TranscriptEntry` roles this index keeps, and the set `search()` maps a stored role back through. */
+const INDEXED_ROLES = new Set<string>(['user', 'assistant', 'thinking'] satisfies SearchRole[])
+
 export interface SearchHit {
 	sessionId: string
 	/** `session_messages.rowid` this text came from — the transcript's own cursor. */
 	srcRowid: number
-	role: 'user' | 'assistant'
+	role: SearchRole
 	at: string
 	/** Higher is better. BM25 negated, so callers can sum and sort descending. */
 	score: number
@@ -226,8 +254,10 @@ export class SearchIndex {
 		}
 		const end = window[window.length - 1].rowid
 
-		// Only rows that can hold prose: a plain-text prompt, or a frame carrying a text
-		// block. Everything else is tool plumbing and 98.8% of the bytes.
+		// Only rows that can hold prose: a plain-text prompt, or a frame carrying a text or
+		// thinking block. Everything else is tool plumbing and the bulk of the bytes.
+		// The thinking clause is not redundant with the text one — the two block types never
+		// share a row (see this file's header), so dropping it drops thinking entirely.
 		const rows = this.source.query<{
 			rowid: number
 			id: string
@@ -242,7 +272,7 @@ export class SearchIndex {
 			`SELECT rowid, id, session_id, role, content, full_message, created_at, sent_at, queue_order
 			 FROM session_messages
 			 WHERE rowid > ? AND rowid <= ? AND session_id IS NOT NULL
-			   AND (role = 'user' OR content LIKE '%"type":"text"%')
+			   AND (role = 'user' OR content LIKE '%"type":"text"%' OR content LIKE '%"type":"thinking"%')
 			 ORDER BY rowid`,
 			[this.cursor, end]
 		)
@@ -256,7 +286,7 @@ export class SearchIndex {
 				// words, and indexing something the chat view would never show is how a search
 				// result becomes impossible to find once you open it.
 				for (const entry of parseMessage(row, null)) {
-					if (entry.role !== 'user' && entry.role !== 'assistant') continue
+					if (!INDEXED_ROLES.has(entry.role)) continue
 					const body = entry.text.trim()
 					if (!body) continue
 					insert.run(body.slice(0, MAX_CHUNK_CHARS), row.session_id, row.rowid, entry.role, entry.ts)
@@ -311,7 +341,9 @@ export class SearchIndex {
 		return rows.map(r => ({
 			sessionId: r.session_id,
 			srcRowid: Number(r.src_rowid),
-			role: r.role === 'user' ? 'user' : 'assistant',
+			// An index written before SCHEMA_VERSION 2 is dropped on open, so an unknown role
+			// here is a bug rather than an old row — fall back to the neutral one.
+			role: INDEXED_ROLES.has(r.role) ? (r.role as SearchRole) : 'assistant',
 			at: r.at,
 			score: Number(r.score),
 			snippet: r.snippet
@@ -322,7 +354,7 @@ export class SearchIndex {
 /** One matching excerpt, as the phone renders it. */
 export interface SearchSnippet {
 	sessionId: string
-	role: 'user' | 'assistant'
+	role: SearchRole
 	at: string
 	/** Hits wrapped in HIT_OPEN/HIT_CLOSE. */
 	text: string

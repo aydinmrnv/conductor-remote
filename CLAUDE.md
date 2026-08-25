@@ -410,16 +410,30 @@ Two asymmetric halves — keep them separate:
 - **Search is a read that builds an index, and it needs its own database.**
   `src/search.ts` full-text-searches the chat history, which is only possible because
   of one measurement: of the 3,106 MB in `session_messages.content`, the **prose is
-  38 MB** — 1.2%. tool_result output is 799 MB, `type:"system"` frames 522 MB,
-  tool_use arguments 162 MB, thinking 77 MB. So it indexes what a person would
-  actually search for (the prompts they typed and the agent's own words, via
+  122 MB** — 4%. tool_result output is 799 MB, `type:"system"` frames 522 MB,
+  tool_use arguments 162 MB. So it indexes what a person would actually search for
+  (the prompts they typed, the agent's own words and its reasoning, via
   `parseMessage`, so a hit is always something the chat view would show) and skips
-  the rest. Grepping the raw column would scan 3 GB to search 38 MB and would rank a
+  the rest. Grepping the raw column would scan 3 GB to search 122 MB and would rank a
   file the agent happened to `cat` above the sentence explaining the decision.
+  - **Thinking is two thirds of that prose, and skipping it was the original
+    mistake.** Measured 2026-08-25: assistant text 36.9 MB / 93,189 blocks, typed
+    prompts 2.6 MB / 19,432 rows, **thinking 82.7 MB / 102,776 blocks** — more than
+    the other two together, and the half that says *why* (the same cut `split_chat`
+    already makes). What hid it is a shape trap worth keeping: **a thinking block
+    never shares a row with a text block** (0 of 102,773 rows carry both), so the
+    prefilter written as `role='user' OR content LIKE '%"type":"text"%'` dropped
+    100% of thinking rather than some of it, and the index looked complete.
+    A thinking hit is labelled **`thought`** on the phone and `[thinking]` in
+    `search_chats`, never "agent": the agent never said those words out loud, and a
+    snippet tagged as its answer gets quoted back as one.
   **FTS5 ships inside `node:sqlite`** — porter stemming, `bm25()`, `snippet()`,
   `NEAR()` — so the index costs no runtime dependency; measured, the whole history
-  builds in **7.6s** into ~111k chunks and queries answer in 1–7ms. Four things are
-  load-bearing. The index lives in the relay's **own** file (`stateDir()/search.db`),
+  builds in **12.3s** into ~208k chunks (230 MB) and queries answer in 25–137ms,
+  inside the phone's 250ms search-as-you-type debounce, which is the only latency
+  budget that binds. Re-measure rather than re-quote: the 7.6s/111k/1–7ms this file
+  claimed before thinking was indexed had already drifted to 12–57ms on its own.
+  Four things are load-bearing. The index lives in the relay's **own** file (`stateDir()/search.db`),
   never in `conductor.db`, and is disposable — delete it and the next start rebuilds
   it. The backfill cursor advances by the **last rowid scanned**, not the last one
   matched, or a caught-up index re-reads the whole 3 GB tail every poll looking for
