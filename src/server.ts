@@ -339,12 +339,15 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 	inspect: workspaceId => {
 		const ws = reads.getWorkspace(workspaceId)
 		if (!ws) return null
-		// A new workspace is 'setting_up' while its worktree (and setup script) runs;
-		// its composer isn't the visible pane yet, so wait for 'ready' before typing.
+		// 'setting_up' is the worktree (and the setup script), not the window: Conductor
+		// draws the workspace and its chat the moment the row exists, so the queue tries
+		// the send then and treats only a post-'ready' failure as one worth counting.
+		// `getWorkspace` already limits itself to 'ready'/'setting_up', so an archived
+		// workspace reads as no row at all and ages out rather than being typed into.
 		const sessions = reads.listSessions(workspaceId)
 		const session = sessions.find(s => s.id === ws.active_session_id) ?? sessions[0]
 		return {
-			ready: ws.state === 'ready',
+			phase: ws.state === 'ready' ? 'ready' : 'setting_up',
 			sessionId: session?.id ?? null,
 			alreadySent: !!session?.last_user_message_at
 		}
@@ -820,7 +823,12 @@ const server = http.createServer(async (req, res) => {
 
 			// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
 			if (isRoute(routes.createWorkspace, req.method, pathname)) {
-				const body = JSON.parse((await readBody(req)) || '{}') as { repo?: string; prompt?: string; send?: boolean }
+				const body = JSON.parse((await readBody(req)) || '{}') as {
+					repo?: string
+					prompt?: string
+					send?: boolean
+					sendImmediately?: boolean
+				}
 				// The prompt is optional — a bare `path=` opens an empty workspace, like
 				// Conductor's own New workspace — but *something* has to say where it goes.
 				const prompt = (body.prompt ?? '').trim()
@@ -853,7 +861,7 @@ const server = http.createServer(async (req, res) => {
 				// its own schedule and the phone watches it in /api/state; `send:true` opts API
 				// callers into waiting.
 				// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-				const settled = prompt ? firstPrompts.enqueue(created.id, prompt) : null
+				const settled = prompt ? firstPrompts.enqueue(created.id, prompt, body.sendImmediately !== false) : null
 				const failed = settled && body.send === true ? await settled : null
 				settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
 				return json(req, res, 200, {

@@ -297,7 +297,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'create_workspace',
 			description:
-				'Start a new Conductor workspace in a repo, optionally with a first prompt. This is the one write that touches no UI: it opens a Conductor deep link, so it needs no Accessibility and steals no focus. Returns as soon as the workspace row exists (~2s); the worktree may still be setting up and the relay delivers the first prompt on its own schedule once it is ready.',
+				'Start a new Conductor workspace in a repo, optionally with a first prompt. This is the one write that touches no UI: it opens a Conductor deep link, so it needs no Accessibility and steals no focus. Returns as soon as the workspace row exists (~2s), before the worktree is built; the relay delivers the first prompt itself, normally within seconds, and Conductor runs it once setup finishes. Creating several in a row is fine — do not resend a prompt list_workspaces still shows as pending.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -305,7 +305,13 @@ export function createTools(call: RelayCall): Tool[] {
 					prompt: { type: 'string', description: 'First prompt for the new agent. Omit to open an empty workspace.' },
 					wait_for_send: {
 						type: 'boolean',
-						description: 'Block until the first prompt is actually delivered (can take 30s+). Default false.'
+						description:
+							'Block until the first prompt is actually delivered (tens of seconds, and longer behind other queued sends). Default false.'
+					},
+					send_immediately: {
+						type: 'boolean',
+						description:
+							"Send the first prompt without waiting for the worktree to finish building, which is how Conductor's own New workspace box behaves. Default true. Pass false only when the agent's first move needs what the repo's setup script installs."
 					}
 				},
 				required: ['repo']
@@ -314,9 +320,11 @@ export function createTools(call: RelayCall): Tool[] {
 				const repo = need(args, 'repo')
 				const prompt = str(args.prompt)
 				const send = args.wait_for_send === true
+				// Default on, matching the relay: an omitted flag must never mean "wait".
+				const sendImmediately = args.send_immediately !== false
 				const data = await call<CreateWorkspaceResult>(routes.createWorkspace.path(), {
 					method: routes.createWorkspace.method,
-					body: { repo, prompt, send },
+					body: { repo, prompt, send, sendImmediately },
 					timeoutMs: send ? WRITE_TIMEOUT_MS : 30_000
 				})
 				const lines = [
@@ -325,7 +333,7 @@ export function createTools(call: RelayCall): Tool[] {
 				]
 				if (data.warning) lines.push(`! ${data.warning}`)
 				else if (data.pendingPrompt && !data.sent)
-					lines.push('the first prompt is queued — the relay sends it once the worktree is ready')
+					lines.push('the first prompt is queued — the relay delivers it, so do not send it again')
 				else if (data.sent) lines.push('the first prompt was delivered')
 				return lines.join('\n')
 			}

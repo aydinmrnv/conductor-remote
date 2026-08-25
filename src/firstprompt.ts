@@ -1,15 +1,30 @@
 /**
- * The first prompt of a workspace created from the phone, delivered by the relay
- * once Conductor has finished setting the worktree up.
+ * The first prompt of a workspace created from the phone or by an agent, delivered
+ * by the relay rather than by whoever asked for the workspace.
  *
  * Conductor's deep link creates the workspace and *pre-fills* its composer, but
- * never presses Enter — so something has to, ~30s later, when the worktree turns
- * `ready` and the chat exists. That "something" used to be the PWA, which is the
+ * never presses Enter — so something has to, once the chat exists. That "something"
+ * used to be the PWA, which is the
  * worst possible scheduler for it: the phone sleeps, iOS suspends a backgrounded
  * PWA outright, and it may not be on the network at all. Meanwhile the relay is a
  * daemon on the same Mac as the target, already holding the DB and the actuator.
  * So the relay owns delivery and the phone only *watches* it (`/api/state`
  * carries the pending prompt, `DELETE …/prompt` dismisses one).
+ *
+ * **Setting up is not a reason to wait, and that is what this file got wrong.**
+ * Conductor draws the new workspace, its chat tab and its composer while the
+ * worktree is still building, and its own New workspace box proves the backend
+ * takes a first message that early: the row lands ~100ms after the workspace and
+ * sits queued until the agent starts. The relay held the prompt until `state`
+ * turned `ready` instead, which on a real repo is minutes — four workspaces
+ * created in one burst on 2026-08-25 were delivered at +2m23s, +3m22s, +3m33s and
+ * +3m33s — so an MCP caller that created a batch got four workspaces with nothing
+ * sent and read it as a broken send. So the send is tried as soon as the chat row
+ * exists, and `ready` is now only the point where a failure starts to *count*: an
+ * early send that doesn't land spends no attempt, because "Conductor hasn't drawn
+ * the pane yet" is a wait wearing a failure's clothes. `MAX_EARLY_ATTEMPTS` bounds
+ * it, since every run holds `uiTurn` for tens of seconds and the phone is behind
+ * the same lock.
  *
  * Three properties this has to keep:
  *
@@ -31,12 +46,30 @@ import path from 'node:path'
 
 export type FirstPromptStatus = 'waiting' | 'failed'
 
+/**
+ * How far Conductor has got with the workspace. Only `ready` means the worktree is
+ * built; `setting_up` covers every state before it, which is still worth sending
+ * into (see the header) and still not worth judging a failure by.
+ */
+export type WorkspacePhase = 'setting_up' | 'ready'
+
 export interface FirstPrompt {
 	workspaceId: string
 	text: string
 	status: FirstPromptStatus
-	/** Sends already spent on it. */
+	/** Sends already spent on it *after* the worktree turned ready — the budget that counts. */
 	attempts: number
+	/** Sends tried before that, bounded separately and never fatal. */
+	earlyAttempts?: number
+	/**
+	 * Try the send before the worktree is built, which is what makes a prompt land in
+	 * seconds instead of minutes (see the header). Default on; `false` restores the
+	 * old wait for a repo whose setup script the agent's first move depends on, and
+	 * an entry written before this existed has no field and gets the default.
+	 */
+	sendImmediately?: boolean
+	/** When the last send finished, so the next is spaced without sleeping the loop (see `step`). */
+	lastAttemptAt?: number
 	createdAt: number
 	/** Why it was given up on — shown on the phone beside the undelivered text. */
 	error?: string
@@ -48,7 +81,7 @@ export interface DeliveryDeps {
 	 * The DB's current view of a target. `null` means no such workspace row *yet* —
 	 * which is normal for a beat after creation, so it is not a reason to give up.
 	 */
-	inspect: (workspaceId: string) => { ready: boolean; sessionId: string | null; alreadySent: boolean } | null
+	inspect: (workspaceId: string) => { phase: WorkspacePhase; sessionId: string | null; alreadySent: boolean } | null
 	/**
 	 * Drive the actual UI send, read-back included. `blocked` = the send was shut
 	 * out by something delivery can't fix and waiting can (the lock screen) — the
@@ -73,6 +106,16 @@ const POLL_MS = 1000
 /** Breathing room between failed sends — Conductor may be mid-launch or showing a dialog. */
 const RETRY_DELAY_MS = 5000
 const MAX_ATTEMPTS = 3
+/**
+ * Sends tried while the worktree is still building. Two, because the first one is
+ * the one worth having — it goes ~2s after creation, against the minutes `ready`
+ * costs — and the second only covers Conductor still drawing the new workspace. A
+ * third would buy nothing: past that the composer's absence is the answer, and each
+ * run costs the shared UI lock tens of seconds that a human tap then waits behind.
+ */
+const MAX_EARLY_ATTEMPTS = 2
+/** Spacing between those two, long enough for Conductor to have finished drawing. */
+const EARLY_RETRY_DELAY_MS = 20_000
 /** A workspace that hasn't turned ready in this long isn't going to. */
 const MAX_AGE_MS = 15 * 60 * 1000
 /** Failed entries the user never dismissed are still dropped eventually. */
@@ -110,10 +153,10 @@ export class FirstPromptQueue {
 	 * prompt lands (`null`) or is given up on (the failed entry) — awaited by API
 	 * callers that asked to block, ignored by the phone.
 	 */
-	enqueue(workspaceId: string, text: string): Promise<FirstPrompt | null> {
+	enqueue(workspaceId: string, text: string, sendImmediately = true): Promise<FirstPrompt | null> {
 		this.entries = [
 			...this.entries.filter(e => e.workspaceId !== workspaceId),
-			{ workspaceId, text, status: 'waiting', attempts: 0, createdAt: Date.now() }
+			{ workspaceId, text, status: 'waiting', attempts: 0, createdAt: Date.now(), sendImmediately }
 		]
 		this.save()
 		const settled = new Promise<FirstPrompt | null>(resolve => {
@@ -169,32 +212,56 @@ export class FirstPromptQueue {
 		// is exactly the "gave up while you were out" this queue exists to prevent.
 		if (this.deps.gate && !(await this.deps.gate())) return
 		const target = this.deps.inspect(entry.workspaceId)
-		// No row yet is normal right after creation, and a workspace that really is
-		// gone falls out through the age cap below rather than being guessed at here.
-		if (!target?.ready || !target.sessionId) {
-			if (Date.now() - entry.createdAt > MAX_AGE_MS) {
-				return this.fail(entry, 'the workspace never finished setting up')
-			}
-			return
+		// No row yet is normal right after creation, and a workspace that really is gone
+		// falls out here rather than being guessed at. Asked before anything below, so an
+		// entry that has spent its early sends still expires instead of waiting forever.
+		const sendable = target?.phase === 'ready' && !!target.sessionId
+		if (!sendable && Date.now() - entry.createdAt > MAX_AGE_MS) {
+			return this.fail(entry, 'the workspace never finished setting up')
 		}
+		if (!target?.sessionId) return
 		// It already went — the user sent it from the Mac, where the deep link left it
 		// pre-filled in the composer. Sending again would double it.
 		if (target.alreadySent) return this.delivered(entry)
 
-		entry.attempts += 1
+		// Before `ready`, a send is worth trying and not worth judging: Conductor may not
+		// have drawn the chat pane yet, and that comes back as an ordinary failure. So an
+		// early run spends its own small budget and the real one stays whole — the worst
+		// this can do is what the file did before, deliver once the worktree is built.
+		const early = target.phase !== 'ready'
+		// The caller can opt back into the old wait — see `sendImmediately`.
+		if (early && entry.sendImmediately === false) return
+		// Spacing is read off the *current* phase rather than stamped in at the last
+		// failure, so the long early gap stops applying the moment the worktree is ready:
+		// what it was waiting out was an undrawn pane, and 'ready' is the answer to that.
+		const spacing = early ? EARLY_RETRY_DELAY_MS : RETRY_DELAY_MS
+		if (entry.lastAttemptAt && Date.now() - entry.lastAttemptAt < spacing) return
+		if (early && (entry.earlyAttempts ?? 0) >= MAX_EARLY_ATTEMPTS) return
+		if (early) entry.earlyAttempts = (entry.earlyAttempts ?? 0) + 1
+		else entry.attempts += 1
 		this.save()
+
 		const result = await this.deps.send(entry.workspaceId, target.sessionId, entry.text)
 		if (result.ok) return this.delivered(entry)
 		if (result.blocked) {
 			// The gate closed between the check above and the send: hand the attempt back.
-			entry.attempts -= 1
+			if (early) entry.earlyAttempts = (entry.earlyAttempts ?? 1) - 1
+			else entry.attempts -= 1
 			this.save()
 			return
 		}
 		const error = result.error ?? 'the send didn’t land'
+		// A stamp, never a sleep: `pump` walks every waiting entry in one pass, so
+		// sleeping here holds up the siblings created in the same burst — which is the
+		// case this queue was reported broken on.
+		entry.lastAttemptAt = Date.now()
+		if (early) {
+			console.info(`[relay] first prompt for ${entry.workspaceId} didn’t land during setup (${error}) — waiting`)
+			return this.save()
+		}
 		console.warn(`[relay] first prompt for ${entry.workspaceId} failed (attempt ${entry.attempts}): ${error}`)
 		if (entry.attempts >= MAX_ATTEMPTS) return this.fail(entry, error)
-		await sleep(RETRY_DELAY_MS)
+		this.save()
 	}
 
 	/** Delivered: the entry's job is done, so it stops existing. */

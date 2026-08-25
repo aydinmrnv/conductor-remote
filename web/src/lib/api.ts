@@ -202,13 +202,14 @@ export const client = {
 		api<{ ok: boolean }>(routes.dismissParkedPrompt.path(sessionId), { method: routes.dismissParkedPrompt.method }),
 	/**
 	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
-	 * soon as the row exists — the worktree may still be setting up, so the caller
-	 * submits the prompt once the workspace is ready.
+	 * soon as the row exists — the worktree may still be setting up, and the relay
+	 * sends the prompt itself from there (src/firstprompt.ts). `sendImmediately: false`
+	 * holds that send until the worktree is built instead.
 	 */
-	createWorkspace: (repo: string, prompt: string) =>
+	createWorkspace: (repo: string, prompt: string, sendImmediately = true) =>
 		api<CreateWorkspaceResult>(
 			routes.createWorkspace.path(),
-			{ method: routes.createWorkspace.method, body: JSON.stringify({ repo, prompt }) },
+			{ method: routes.createWorkspace.method, body: JSON.stringify({ repo, prompt, sendImmediately }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Change a chat's model / effort / plan / fast via Conductor's own composer controls. */
