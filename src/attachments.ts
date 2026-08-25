@@ -13,10 +13,12 @@
  * written — zero rows. So the relay produces a real attachment while keeping its DB
  * handle read-only, which is not a nicety here but the rule the whole design rests on.
  *
- * The one thing that stays unproven until a send runs: whether Conductor re-parses a
- * token *written into the composer* back into a chip, or leaves it as text. Callers
- * must not depend on the answer. Name the file in plain words next to the token as
- * well, and the next agent reads it either way.
+ * A token *written into the composer* is re-parsed, which was the one open question and
+ * is now measured: a split sent this way reached the next agent as a real attachment,
+ * carrying Conductor's own "The user has attached these files. Read them before
+ * proceeding. - <path> (113.8 KB)" ahead of the prompt. Keep naming the file in plain
+ * words beside the token anyway. It costs a line, and it is what leaves the next agent a
+ * readable path on the day that parsing changes.
  */
 
 import crypto from 'node:crypto'

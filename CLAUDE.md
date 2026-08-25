@@ -458,11 +458,19 @@ Two asymmetric halves — keep them separate:
     a locked Mac, none of which a second implementation would have. Which tab is the new
     one is decided by diffing the list against the one read *before* ⌘T, never by taking
     the newest: a sibling tab or another agent may have opened one in between.
-  - **One thing here is still unproven**, so nothing may depend on it: whether Conductor
-    re-parses a token *written into the composer* back into a chip, or leaves it as text.
-    The DB cannot answer it (the attachment instruction an agent sees is built at send
-    time and stored nowhere). So the prompt carries the token *and* a plain sentence
-    naming the file, and the next agent reads it either way.
+  - **A token written into the composer is re-parsed**, which the DB cannot tell you (the
+    attachment instruction an agent sees is built at send time and stored nowhere) and
+    which one live split settled: the next agent was handed Conductor's own *"The user has
+    attached these files. Read them before proceeding. - &lt;path&gt; (113.8 KB)"* ahead of the
+    prompt, and read the file. The prompt still carries a plain sentence naming the file
+    beside the token. That costs a line and is what leaves a readable path behind on the
+    day the parsing changes.
+  - **⌘T alone does not open the tab, and it fails by opening something else.** The
+    keystroke lands wherever focus is, so a focused terminal panel takes it and you get a
+    new *terminal* — measured: the run reported success, `sessions` gained nothing, and
+    `terminal_sessions` gained a row in the same workspace at that second. So `newChat`
+    presses **⌘L ("Focus chat input") first**, exactly as `stopTurn` does with its own
+    chord, and asserts the pane before either. Both chords are Conductor's own.
 
 - **MCP is the same relay with an agent on the other end** (`src/mcp-tools.ts`).
   Sixteen tools, and **every one of them is an HTTP call to the

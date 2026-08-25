@@ -789,6 +789,12 @@ export async function createWorkspace(prompt: string, repoPath: string | null): 
  * workspace. Nothing catches that afterwards — the caller looks for the new session in
  * *this* workspace's tab list, so a stray tab reads as "the id could not be read back"
  * while sitting in a conversation nobody asked to change.
+ *
+ * Cmd+L ("Focus chat input") goes first for the reason `cancelAgent` does the same: a
+ * keystroke lands wherever focus is, and a focused terminal panel swallows this one.
+ * Measured live before the fix — the run reported success, `sessions` gained nothing,
+ * and `terminal_sessions` gained a row in this very workspace at the second the chord
+ * was sent. Both chords are Conductor's own, confirmed against its Cmd+/ dialog.
  */
 export async function newChat(workspace: Workspace): Promise<SendResult> {
 	if (!focusQuery(workspace)) return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
@@ -801,6 +807,8 @@ set strips to my tabGroups()
 if (count of strips) is 0 then error "couldn't find the chat pane to open a tab in"
 my assertWorkspace(item 1 of strips)
 tell application "System Events"
+	keystroke "l" using {command down}
+	delay 0.2
 	keystroke "t" using {command down}
 end tell`.trim()
 	try {
