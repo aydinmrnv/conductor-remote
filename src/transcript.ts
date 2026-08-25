@@ -156,3 +156,113 @@ export function parseMessage(row: RawRow, worktree: string | null = null): Trans
 	flush()
 	return entries
 }
+
+// ── rendering ───────────────────────────────────────────────────────────────────
+
+/**
+ * What a rendered transcript carries beyond the prose.
+ *
+ * The base is what Conductor's own "Copy concise transcript" produces: the user's
+ * prompts and the agent's replies, verbatim, with a marker where anything was left
+ * out. The two flags are the cuts Conductor cannot make. Its concise copy drops
+ * thinking, which is the half of a long chat that explains *why*, and its full copy
+ * brings the tool churn back with it — 98.8% of the bytes and the least re-readable
+ * part. `include_tools` on `read_chat` already means exactly this, so the words are
+ * reused rather than invented.
+ */
+export interface TranscriptFormat {
+	thinking: boolean
+	tools: boolean
+}
+
+/** What a render left out, so the caller can say so instead of implying completeness. */
+export interface TranscriptElisions {
+	thinking: number
+	tools: number
+}
+
+const HEADINGS: Record<TranscriptEntry['role'], string> = {
+	user: 'User',
+	assistant: 'Assistant',
+	thinking: 'Thinking',
+	tool: 'Tools',
+	system: 'System'
+}
+
+/** One tool row per line, the shape `read_chat` prints: what it did, then what it did it to. */
+function toolLine(e: TranscriptEntry): string {
+	if (e.error) return `- [error] ${e.text}`
+	return `- [${e.tool ?? 'tool'}] ${e.text}${e.detail ? ` — \`${e.detail}\`` : ''}`
+}
+
+function plural(n: number, one: string): string {
+	return `${n} ${one}${n === 1 ? '' : 's'}`
+}
+
+/**
+ * A chat as markdown, in Conductor's own transcript layout.
+ *
+ * The layout is copied from the files Conductor writes (`Transcript of <chat>.md`):
+ * an `##` heading per role, prose verbatim under it, and an elision marker for what
+ * was dropped. The heading comes *before* the marker — a run of tool calls between a
+ * prompt and its answer prints as `## Assistant`, then the marker, then the reply —
+ * which is what makes the result read like Conductor's own file rather than a log.
+ *
+ * The marker says what kind of thing went missing rather than only how many, because
+ * this render is configurable and Conductor's is not: "12 tool calls elided" tells
+ * you a flag was off, where a bare count reads as noise nobody wanted.
+ *
+ * `system` rows are always kept. They are rare, short, and one of them is how a
+ * cancelled turn ends ("aborted by user") — the single line that explains why an
+ * answer stops mid-thought, and dropping it would leave the next agent to guess.
+ */
+export function renderTranscript(
+	entries: TranscriptEntry[],
+	format: TranscriptFormat
+): { text: string; kept: number; elided: TranscriptElisions } {
+	const out: string[] = []
+	const elided: TranscriptElisions = { thinking: 0, tools: 0 }
+	const pending: TranscriptElisions = { thinking: 0, tools: 0 }
+	let heading: string | null = null
+	let kept = 0
+
+	const flushElisions = () => {
+		const parts: string[] = []
+		if (pending.tools) parts.push(plural(pending.tools, 'tool call'))
+		if (pending.thinking) parts.push(plural(pending.thinking, 'thinking block'))
+		pending.tools = 0
+		pending.thinking = 0
+		if (parts.length) out.push(`[${parts.join(', ')} elided]`)
+	}
+
+	for (const e of entries) {
+		if (e.role === 'thinking' && !format.thinking) {
+			pending.thinking++
+			elided.thinking++
+			continue
+		}
+		if (e.role === 'tool' && !format.tools) {
+			pending.tools++
+			elided.tools++
+			continue
+		}
+		const want = HEADINGS[e.role]
+		if (want !== heading) {
+			out.push(`## ${want}`)
+			heading = want
+		}
+		flushElisions()
+		out.push(e.role === 'tool' ? toolLine(e) : e.text)
+		kept++
+	}
+	// Anything dropped after the last kept entry still has to be admitted to.
+	flushElisions()
+
+	// Tool rows are a list, so consecutive ones share a paragraph; everything else is
+	// separated by a blank line, which is what makes the markdown render as prose.
+	const text = out
+		.map((line, i) => (line.startsWith('- ') && out[i + 1]?.startsWith('- ') ? `${line}\n` : `${line}\n\n`))
+		.join('')
+		.trim()
+	return { text: `${text}\n`, kept, elided }
+}

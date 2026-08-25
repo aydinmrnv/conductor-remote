@@ -50,13 +50,15 @@
 		"typecheck": "tsc -p tsconfig.json",
 		"lint": "biome check .",
 		"fix": "biome check . --fix",
-		"verify": "yarn typecheck && yarn lint && yarn check:imports && yarn check:applescript && yarn check:nosleep && yarn check:uilock",
+		"verify": "yarn typecheck && yarn lint && yarn check:imports && yarn check:routes && yarn check:attachments && yarn check:applescript && yarn check:nosleep && yarn check:uilock",
 		"release": "semantic-release",
 		"prepack": "yarn build && yarn build:node",
 		"postinstall": "husky || true",
+		"check:attachments": "node scripts/check-attachments.ts",
 		"check:applescript": "node scripts/check-applescript.ts",
 		"check:imports": "node scripts/check-imports.ts",
 		"check:nosleep": "node scripts/check-nosleep.ts",
+		"check:routes": "node scripts/check-routes.ts",
 		"check:uilock": "node scripts/check-uilock.ts"
 	},
 	"devDependencies": {

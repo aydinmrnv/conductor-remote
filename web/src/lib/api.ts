@@ -1,3 +1,7 @@
+// A value import, and one of exactly two the web app may make into `src/` (the other is
+// `src/shared.ts`). `routes.ts` is stdlib-free for precisely this reason, and
+// `scripts/check-imports.ts` keeps it that way.
+import { routes } from '../../../src/routes.ts'
 import type {
 	AgentPatch,
 	AgentResult,
@@ -137,22 +141,21 @@ async function fetchObjectUrl(path: string): Promise<string> {
 }
 
 export const client = {
-	state: () => api<StateResponse>('/api/state'),
+	state: () => api<StateResponse>(routes.state.path()),
 	/** A repo's icon as an object URL, fetched with the auth header (token never rides in the URL). Cached per repo. */
 	repoIcon: (repoName: string): Promise<string> => {
 		let p = objectUrlCache.get(repoName)
 		if (!p) {
-			p = fetchObjectUrl(`/api/repos/${encodeURIComponent(repoName)}/icon`)
+			p = fetchObjectUrl(routes.repoIcon.path(repoName))
 			p.catch(() => objectUrlCache.delete(repoName))
 			objectUrlCache.set(repoName, p)
 		}
 		return p
 	},
-	sessions: (workspaceId: string) =>
-		api<SessionsResponse>(`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`),
+	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
 	messages: (sessionId: string, after: number) =>
-		api<MessagesResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/messages?after=${after}`),
-	diff: (workspaceId: string) => api<WorkspaceDiff>(`/api/workspaces/${encodeURIComponent(workspaceId)}/diff`),
+		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`),
+	diff: (workspaceId: string) => api<WorkspaceDiff>(routes.diff.path(workspaceId)),
 	/**
 	 * The relay retries a failed send itself (and confirms each try against the
 	 * transcript), hence the long budget. `agent` is the staged settings patch,
@@ -161,8 +164,8 @@ export const client = {
 	 */
 	sendPrompt: (sessionId: string, text: string, workspaceId: string, agent?: AgentPatch) =>
 		api<SendResult>(
-			`/api/sessions/${encodeURIComponent(sessionId)}/prompt`,
-			{ method: 'POST', body: JSON.stringify({ text, workspaceId, agent }) },
+			routes.sendPrompt.path(sessionId),
+			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent }) },
 			SEND_TIMEOUT_MS
 		),
 	/**
@@ -173,31 +176,27 @@ export const client = {
 	 */
 	stop: (sessionId: string, workspaceId: string) =>
 		api<StopResult>(
-			`/api/sessions/${encodeURIComponent(sessionId)}/stop`,
-			{ method: 'POST', body: JSON.stringify({ workspaceId }) },
+			routes.stop.path(sessionId),
+			{ method: routes.stop.method, body: JSON.stringify({ workspaceId }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
 	newChat: (workspaceId: string) =>
-		api<NewChatResult>(
-			`/api/workspaces/${encodeURIComponent(workspaceId)}/sessions`,
-			{ method: 'POST' },
-			ACTION_TIMEOUT_MS
-		),
+		api<NewChatResult>(routes.newChat.path(workspaceId), { method: routes.newChat.method }, ACTION_TIMEOUT_MS),
 	/** Repos a new workspace can be created in. */
-	repos: () => api<ReposResponse>('/api/repos'),
+	repos: () => api<ReposResponse>(routes.repos.path()),
 	/**
 	 * Find a workspace by name or by what was said in its chats, archived included.
 	 * The relay answers from a local index, so this is a poll-budget call even though
 	 * it searches every conversation on the Mac.
 	 */
-	search: (q: string) => api<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}`),
+	search: (q: string) => api<SearchResponse>(`${routes.search.path()}?q=${encodeURIComponent(q)}`),
 	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
 	dismissPrompt: (workspaceId: string) =>
-		api<{ ok: boolean }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/prompt`, { method: 'DELETE' }),
+		api<{ ok: boolean }>(routes.dismissFirstPrompt.path(workspaceId), { method: routes.dismissFirstPrompt.method }),
 	/** Drop whatever the relay parked for this chat behind the lock screen. */
 	dismissParked: (sessionId: string) =>
-		api<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, { method: 'DELETE' }),
+		api<{ ok: boolean }>(routes.dismissParkedPrompt.path(sessionId), { method: routes.dismissParkedPrompt.method }),
 	/**
 	 * Create a workspace from a first prompt via Conductor's deep link. Returns as
 	 * soon as the row exists — the worktree may still be setting up, so the caller
@@ -205,21 +204,21 @@ export const client = {
 	 */
 	createWorkspace: (repo: string, prompt: string) =>
 		api<CreateWorkspaceResult>(
-			'/api/workspaces',
-			{ method: 'POST', body: JSON.stringify({ repo, prompt }) },
+			routes.createWorkspace.path(),
+			{ method: routes.createWorkspace.method, body: JSON.stringify({ repo, prompt }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Change a chat's model / effort / plan / fast via Conductor's own composer controls. */
 	setAgent: (sessionId: string, patch: AgentPatch, workspaceId: string) =>
 		api<AgentResult>(
-			`/api/sessions/${encodeURIComponent(sessionId)}/agent`,
-			{ method: 'POST', body: JSON.stringify({ ...patch, workspaceId }) },
+			routes.agent.path(sessionId),
+			{ method: routes.agent.method, body: JSON.stringify({ ...patch, workspaceId }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Model labels read off Conductor's live picker (it briefly opens the menu). */
 	models: (sessionId: string, workspaceId: string) =>
 		api<ModelsResult>(
-			`/api/sessions/${encodeURIComponent(sessionId)}/models?workspaceId=${encodeURIComponent(workspaceId)}`,
+			`${routes.models.path(sessionId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
 			{},
 			ACTION_TIMEOUT_MS
 		),
@@ -229,42 +228,57 @@ export const client = {
 	 * The relay redacts the access token, so what comes back is safe to paste into a bug report.
 	 */
 	logs: (file: string | null, limit = 300) =>
-		api<LogsResponse>(`/api/logs?limit=${limit}${file ? `&file=${encodeURIComponent(file)}` : ''}`),
+		api<LogsResponse>(`${routes.logs.path()}?limit=${limit}${file ? `&file=${encodeURIComponent(file)}` : ''}`),
 	/** VAPID public key to subscribe with, plus the phones already subscribed. */
-	push: () => api<PushConfig>('/api/push'),
+	push: () => api<PushConfig>(routes.push.path()),
 	/** Register this device for push. Idempotent by endpoint — the app re-sends it on every load. */
 	pushSubscribe: (subscription: unknown, label: string) =>
-		api<PushSubscribeResult>('/api/push/subscribe', {
-			method: 'POST',
+		api<PushSubscribeResult>(routes.pushSubscribe.path(), {
+			method: routes.pushSubscribe.method,
 			body: JSON.stringify({ subscription, label })
 		}),
 	pushUnsubscribe: (endpoint: string) =>
-		api<PushSubscribeResult>('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) }),
+		api<PushSubscribeResult>(routes.pushUnsubscribe.path(), {
+			method: routes.pushUnsubscribe.method,
+			body: JSON.stringify({ endpoint })
+		}),
 	/** Push one notification to this device — proves the relay → push service → phone path end to end. */
 	pushTest: (id: string) =>
-		api<PushTestResult>('/api/push/test', { method: 'POST', body: JSON.stringify({ id }) }, ACTION_TIMEOUT_MS),
+		api<PushTestResult>(
+			routes.pushTest.path(),
+			{ method: routes.pushTest.method, body: JSON.stringify({ id }) },
+			ACTION_TIMEOUT_MS
+		),
 	/** Merge the workspace's open PR — `gh pr merge`, like Conductor's Merge button. */
 	merge: (workspaceId: string) =>
-		api<MergeResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, { method: 'POST' }, ACTION_TIMEOUT_MS),
+		api<MergeResult>(routes.merge.path(workspaceId), { method: routes.merge.method }, ACTION_TIMEOUT_MS),
 
 	/** Move the workspace between the sidebar's status groups (Conductor's "Set status"). */
 	setStatus: (workspaceId: string, status: string) =>
 		api<StatusResult>(
-			`/api/workspaces/${encodeURIComponent(workspaceId)}/status`,
-			{ method: 'POST', body: JSON.stringify({ status }) },
+			routes.workspaceStatus.path(workspaceId),
+			{ method: routes.workspaceStatus.method, body: JSON.stringify({ status }) },
 			ACTION_TIMEOUT_MS
 		),
 
 	/** Relay preferences, plus the Wi-Fi networks the Mac already knows and the awake state. */
-	settings: () => api<SettingsResponse>('/api/settings'),
+	settings: () => api<SettingsResponse>(routes.settings.path()),
 	patchSettings: (patch: Partial<RelaySettings>) =>
-		api<{ settings: RelaySettings }>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+		api<{ settings: RelaySettings }>(routes.updateSettings.path(), {
+			method: routes.updateSettings.method,
+			body: JSON.stringify(patch)
+		}),
 	/**
 	 * Hold the Mac awake with the lid shut for `seconds`. The relay waits for the helper
 	 * to confirm it actually applied before answering, and a takeover waits for the
 	 * previous window to restore first, so this is slow by design — hence the action budget.
 	 */
 	armNoSleep: (seconds: number) =>
-		api<NoSleepResult>('/api/nosleep', { method: 'POST', body: JSON.stringify({ seconds }) }, ACTION_TIMEOUT_MS),
-	disarmNoSleep: () => api<NoSleepResult>('/api/nosleep', { method: 'DELETE' }, ACTION_TIMEOUT_MS)
+		api<NoSleepResult>(
+			routes.armNoSleep.path(),
+			{ method: routes.armNoSleep.method, body: JSON.stringify({ seconds }) },
+			ACTION_TIMEOUT_MS
+		),
+	disarmNoSleep: () =>
+		api<NoSleepResult>(routes.disarmNoSleep.path(), { method: routes.disarmNoSleep.method }, ACTION_TIMEOUT_MS)
 }

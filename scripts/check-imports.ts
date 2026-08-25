@@ -16,8 +16,9 @@
  *      `import {} from '…/reads.ts'` under `verbatimModuleSyntax` — a real, side-
  *      effecting runtime import of a module that opens SQLite. It typechecks, it
  *      lints, and it reaches the phone as a blank screen.
- *   2. `src/shared.ts` is the single exception, so it must stay worth being one:
- *      no `node:` import, in it or in anything it pulls in.
+ *   2. The value-importable modules — `src/shared.ts` and `src/routes.ts` — are the
+ *      only exceptions, so each must stay worth being one: no `node:` import, in it or
+ *      in anything it pulls in.
  *
  * `yarn build` might catch rule 1 as a Rollup warning about an externalised builtin,
  * on a good day, at the bottom of a wall of output. This says which line.
@@ -30,7 +31,13 @@ import path from 'node:path'
 const root = path.resolve(import.meta.dirname, '..')
 const webRoot = path.join(root, 'web', 'src')
 const relayRoot = path.join(root, 'src')
-const SHARED = path.join(relayRoot, 'shared.ts')
+/**
+ * The modules `web/src` may import a *value* from. Two, and adding a third should be an
+ * argument rather than an edit: each one is a promise that nothing under it ever reaches
+ * for Node. `shared.ts` holds what both sides must compute identically; `routes.ts` holds
+ * the `/api` paths both sides must agree on.
+ */
+const VALUE_MODULES = [path.join(relayRoot, 'shared.ts'), path.join(relayRoot, 'routes.ts')]
 
 const failures: string[] = []
 function check(label: string, pass: boolean, detail = ''): void {
@@ -103,20 +110,20 @@ for (const file of sources(webRoot)) {
 	for (const ref of imports(text)) {
 		const target = resolveSpec(file, ref.spec)
 		if (!target?.startsWith(relayRoot + path.sep)) continue
-		if (target === SHARED) continue
+		if (VALUE_MODULES.includes(target)) continue
 		if (ref.typeOnly) continue
 		offenders.push(`${rel(file)}:${ref.line} imports ${ref.spec} as a value`)
 	}
 }
-check('web/src imports the relay type-only (src/shared.ts aside)', offenders.length === 0, offenders.join('; '))
+check('web/src imports the relay type-only (the value modules aside)', offenders.length === 0, offenders.join('; '))
 
-// ── rule 2: src/shared.ts stays free of Node ────────────────────────────────────
+// ── rule 2: the value modules stay free of Node ─────────────────────────────────
 
-check('src/shared.ts exists', fs.existsSync(SHARED))
+for (const mod of VALUE_MODULES) check(`${rel(mod)} exists`, fs.existsSync(mod))
 
 const seen = new Set<string>()
 const nodeUsers: string[] = []
-const queue = [SHARED]
+const queue = [...VALUE_MODULES]
 while (queue.length) {
 	const file = queue.shift() as string
 	if (seen.has(file) || !fs.existsSync(file)) continue
@@ -132,7 +139,7 @@ while (queue.length) {
 		if (target) queue.push(target)
 	}
 }
-check('src/shared.ts pulls in no node: builtin', nodeUsers.length === 0, nodeUsers.join('; '))
+check('the value modules pull in no node: builtin', nodeUsers.length === 0, nodeUsers.join('; '))
 
 // ── rule 3: the wire contract has no runtime half ───────────────────────────────
 // `src/wire.ts` says it holds no runtime code, and the whole reason a type may live
