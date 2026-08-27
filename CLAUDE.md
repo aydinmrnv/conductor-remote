@@ -775,9 +775,14 @@ Two asymmetric halves — keep them separate:
   fires long past its schedule is discarded (Node timers don't run while the Mac
   sleeps, so a late fire means someone just *woke* it — sleeping it again is the one
   wrong move), and a pidfile still present at fire time is a takeover, never "sleep
-  anyway". What none of this buys is *delivery*: the lock screen still blocks every
-  UI write, so a lid-closed Mac serves reads and notifications while sends park
-  (`src/parked.ts`).
+  anyway". The helper also owns a process-scoped `caffeinate -d` assertion by default.
+  `ScreenSaverDaemon` checks `PreventUserIdleDisplaySleep` before it starts the idle
+  screen saver, so the 20-minute automatic lock cannot cut off UI writes during an
+  armed window. `PREVENT_SCREEN_LOCK` defaults on and the CLI can opt out through
+  `config set prevent-screen-lock off`; the pidfile's fourth field records the applied mode
+  so the phone warns from fact.
+  The CLI warning names the physical-access cost. A manual lock or lid close can still
+  lock the session, and those sends park (`src/parked.ts`).
 - **The Mac's own Wi-Fi is readable only in the parts that don't matter.** The
   funnel watchdog can move this Mac onto a phone hotspot when its link dies
   (`src/wifi.ts`, opt-in via `src/settings.ts`), and the guards are the design: it

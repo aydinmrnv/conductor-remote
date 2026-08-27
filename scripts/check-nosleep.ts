@@ -22,12 +22,15 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { NOSLEEP_BODY, PIDFILE_PATH } from '../src/nosleep-helper.ts'
+import { preventScreenLockEnabled } from '../src/config.ts'
+import { CAFFEINATE_PATH, NOSLEEP_BODY, PIDFILE_PATH } from '../src/nosleep-helper.ts'
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'check-nosleep-'))
 const statePath = path.join(sandbox, 'pmset-state')
 const pidfile = path.join(sandbox, 'pid')
 const binDir = path.join(sandbox, 'bin')
+const caffeinatePath = path.join(binDir, 'caffeinate')
+const caffeinateLog = path.join(sandbox, 'caffeinate-log')
 const ORIGINAL = 'standby=1\npowernap=1\nsleepdisabled=0\n'
 const FLIPPED = 'standby=0\npowernap=0\nsleepdisabled=1\n'
 
@@ -56,6 +59,17 @@ fs.writeFileSync(
 	].join('\n'),
 	{ mode: 0o755 }
 )
+fs.writeFileSync(
+	caffeinatePath,
+	[
+		'#!/bin/sh',
+		'printf \'start %s\\n\' "$*" >> "$CAFFEINATE_LOG"',
+		`trap 'echo stop >> "$CAFFEINATE_LOG"; exit 0' TERM INT HUP`,
+		'while :; do sleep 0.1; done',
+		''
+	].join('\n'),
+	{ mode: 0o755 }
+)
 
 /**
  * The shipped body, with only its pidfile moved somewhere this test may write. Written to
@@ -64,12 +78,22 @@ fs.writeFileSync(
  * line and runs the rest in the foreground, which quietly tests nothing.
  */
 const helperPath = path.join(sandbox, 'helper')
-fs.writeFileSync(helperPath, `#!/bin/sh\n${NOSLEEP_BODY.replace(PIDFILE_PATH, pidfile)}\n`, { mode: 0o755 })
-const env = { ...process.env, PMSET_STATE: statePath, PATH: `${binDir}:${process.env.PATH ?? ''}` }
+fs.writeFileSync(
+	helperPath,
+	`#!/bin/sh\n${NOSLEEP_BODY.replace(PIDFILE_PATH, pidfile).replace(CAFFEINATE_PATH, caffeinatePath)}\n`,
+	{ mode: 0o755 }
+)
+const env = {
+	...process.env,
+	PMSET_STATE: statePath,
+	CAFFEINATE_LOG: caffeinateLog,
+	PATH: `${binDir}:${process.env.PATH ?? ''}`
+}
 
 function reset(): void {
 	fs.writeFileSync(statePath, ORIGINAL)
 	fs.rmSync(pidfile, { force: true })
+	fs.rmSync(caffeinateLog, { force: true })
 }
 
 function state(): string {
@@ -97,6 +121,9 @@ function check(name: string, ok: boolean, detail: string): void {
 	failures.push(name)
 }
 
+check('screen-lock prevention config defaults on', preventScreenLockEnabled(undefined), 'default was off')
+check('screen-lock prevention config accepts the CLI opt-out', !preventScreenLockEnabled('off'), 'off was ignored')
+
 // --- `--check` is the probe helperReady() runs; it must not touch pmset -----------------
 reset()
 {
@@ -122,8 +149,31 @@ reset()
 {
 	const r = run('1', '1s')
 	check('a 1s window exits clean', r.code === 0, `exit ${r.code}, stderr ${r.stderr.trim()}`)
+	const assertionLog = fs.existsSync(caffeinateLog) ? fs.readFileSync(caffeinateLog, 'utf8') : ''
+	check('screen-lock prevention is on by default', /start -d -w \d+/.test(assertionLog), assertionLog)
+	check('the screen-lock warning is visible', /Anyone with physical access/.test(r.stdout), JSON.stringify(r.stdout))
+	check('the display assertion is released', /stop/.test(assertionLog), assertionLog)
 	check('a finished window restores the captured values', state() === ORIGINAL, state())
 	check('a finished window clears its pidfile', !fs.existsSync(pidfile), 'pidfile still present')
+}
+
+// --- the explicit opt-out leaves macOS's automatic screen lock alone ------------------
+reset()
+{
+	const r = run('1', '1s', '0')
+	check('screen-lock opt-out exits clean', r.code === 0, `exit ${r.code}, stderr ${r.stderr.trim()}`)
+	check('screen-lock opt-out starts no display assertion', !fs.existsSync(caffeinateLog), 'caffeinate ran')
+	check('screen-lock opt-out is named in output', /remains enabled/.test(r.stdout), JSON.stringify(r.stdout))
+	check('screen-lock opt-out still restores power settings', state() === ORIGINAL, state())
+}
+
+// --- only the two documented screen-lock modes reach root actions ---------------------
+reset()
+{
+	const r = run('1', '1s', 'maybe')
+	check('invalid screen-lock mode is refused', r.code === 64, `exit ${r.code}`)
+	check('invalid screen-lock mode leaves power settings alone', state() === ORIGINAL, state())
+	check('invalid screen-lock mode starts no assertion', !fs.existsSync(caffeinateLog), 'caffeinate ran')
 }
 
 // --- takeover from a live incumbent still restores the ORIGINAL values -----------------

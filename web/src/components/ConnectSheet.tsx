@@ -258,8 +258,8 @@ function untilLabel(until: number | null): string {
  * password prompt), and with none installed the relay reports `available: false`, which is
  * what the copy explains instead of a dead button.
  *
- * The honest caveat is in the copy too: awake is not drivable. A locked screen blocks every
- * UI write, so this buys reads, notifications, and sends that park until you unlock.
+ * By default the same window blocks the idle screen saver, because Accessibility writes
+ * need an unlocked session. The Mac CLI owns that configuration.
  */
 function MacRow() {
 	const [data, setData] = useState<SettingsResponse | null>(null)
@@ -346,12 +346,14 @@ function MacRow() {
 				{!data
 					? 'Checking…'
 					: !nosleep?.available
-						? 'Run `conductor-remote nosleep setup` on the Mac once to enable this.'
+						? 'Run `conductor-remote nosleep setup` on the Mac to install or refresh the helper.'
 						: nosleep.armed
-							? `Awake ${untilLabel(nosleep.until)}, lid closed. Sends still park until you unlock.`
+							? nosleep.preventsScreenLock
+								? `Awake ${untilLabel(nosleep.until)}, lid closed. Automatic screen lock is off; anyone at the Mac can use it.`
+								: `Awake ${untilLabel(nosleep.until)}, lid closed. Sends park if macOS locks.`
 							: goingToSleep
 								? 'The lid is shut, so the Mac is going to sleep now — this app will be unreachable until you wake it.'
-								: 'Stops the Mac sleeping when you shut the lid. Reads and notifications keep working; sends park until you unlock.'}
+								: 'Stops system sleep. Screen-lock behavior follows the Mac CLI configuration.'}
 			</p>
 
 			<div className="border-t border-border pt-2.5">

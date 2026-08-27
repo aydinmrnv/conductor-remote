@@ -1,5 +1,5 @@
 // `conductor-remote nosleep [duration | setup | status]` — keep this Mac fully
-// awake, including with the lid closed, so the relay stays reachable and
+// awake and block its automatic screen lock, so the relay stays reachable and
 // AppleScript sends can reach Conductor while you're away from the desk.
 //
 // The lever is `pmset -a disablesleep 1` (root): unlike a `caffeinate` idle
@@ -11,15 +11,14 @@
 // root shell whose EXIT trap restores the captured values, so Ctrl-C, a timeout, or
 // a crash can't leave the Mac unable to sleep.
 //
-// Caveat: awake is necessary but not sufficient for AppleScript *delivery*. A
-// locked screen blocks `activate` outright (#85/#87), so a lid-closed Mac serves
-// reads and notifications while every send parks in `src/parked.ts` until the
-// next unlock — that is the designed path, not a failure. Whether a closed lid
-// with no display *also* leaves the window server undrivable is untested here,
-// and untestable while the lock wall stands in front of it. Strip-clean
+// The helper also owns a process-scoped `caffeinate -d` assertion by default.
+// ScreenSaverDaemon checks that assertion before starting the idle screen saver
+// that locks the session. An explicit lock or lid close can still lock macOS;
+// those sends park in `src/parked.ts` until the next unlock. Strip-clean
 // (plain-node type-stripping), stdlib-only — see CLAUDE.md.
 
 import { spawn } from 'node:child_process'
+import { installedServiceEnvironment, preventScreenLockEnabled } from '../src/config.ts'
 import { HELPER_PATH, helperFile, helperReady, installedHelper, NOSLEEP_BODY } from '../src/nosleep-helper.ts'
 import { setup, status } from './nosleep-setup.ts'
 
@@ -59,18 +58,21 @@ async function main(): Promise<void> {
 	}
 
 	const seconds = parseDuration(arg)
+	const configuredMode = process.env.PREVENT_SCREEN_LOCK ?? installedServiceEnvironment().PREVENT_SCREEN_LOCK
+	const preventScreenLock = preventScreenLockEnabled(configuredMode)
 	// The shared body reads its window from an argument (0 = until killed) rather than
 	// having one interpolated in, because the installed helper is a fixed file the
 	// sudoers rule names — see nosleep-helper.ts. `label` is only echoed back, and the
 	// script re-validates it, so the two paths print the same confirmation.
-	const args = [String(seconds ?? 0), arg ?? '']
+	const args = [String(seconds ?? 0), arg ?? '', preventScreenLock ? '1' : '0']
 
 	console.info('conductor-remote nosleep — keeping this Mac awake (incl. lid-closed system sleep).')
 	console.info(seconds !== null ? `Duration: ${arg} — Ctrl-C to stop early.` : 'Runs until you press Ctrl-C.')
-	// Be honest about the half this doesn't buy: awake is not drivable. A locked screen
-	// blocks every UI write (#85/#87), so a lid-closed Mac serves reads and notifications
-	// while sends park until the next unlock — by design, not by failure.
-	console.info('Note: sleep only — lid-closed *sending* still parks until you unlock.')
+	console.info(
+		preventScreenLock
+			? 'Automatic screen lock: blocked for this window.'
+			: 'Automatic screen lock: allowed by config (prevent-screen-lock=off).'
+	)
 
 	// Prefer the root-owned helper `nosleep setup` installs: same script, no prompt, and
 	// it is the only path a TTY-less caller (the LaunchAgent, and so the phone) can take.
@@ -78,7 +80,8 @@ async function main(): Promise<void> {
 	// experience and asks for a password.
 	const viaHelper = await helperReady()
 	if (viaHelper && installedHelper() !== helperFile()) {
-		console.warn(`⚠ ${HELPER_PATH} is from an older version — re-run \`nosleep setup\` to refresh it.`)
+		console.error(`✗ ${HELPER_PATH} is out of date — run \`conductor-remote nosleep setup\`, then try again.`)
+		process.exit(1)
 	}
 	if (!viaHelper) {
 		console.info('Tip: `conductor-remote nosleep setup` installs this once so it stops asking.')

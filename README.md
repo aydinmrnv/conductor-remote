@@ -41,9 +41,8 @@ Manage the service with `conductor-remote service status|restart|uninstall`.
 
 `conductor-remote config` prints what the daemon is **actually** configured with and
 where each value came from, then cross-checks the configured reachability against what
-Tailscale is really doing. Read-only. Reach for it first when the relay is behaving like
-a setting you thought you changed never took, because the values it reports come from the
-daemon's own environment rather than your shell's.
+Tailscale is doing. Change one value with `conductor-remote config set <setting> <value>`.
+The setter preserves the other values in the LaunchAgent plist and restarts the relay.
 
 **Install flags.** `service install` takes flags for the install-time knobs (each
 also settable via the env var in brackets — the flag wins when both are given).
@@ -55,6 +54,7 @@ Run `conductor-remote --help` for the full list. The common ones:
 | `--port <n>` | `RELAY_PORT` | Listen port (default `8787`) |
 | `--token <secret>` | `RELAY_TOKEN` | Pin the shared secret (default: generated + persisted) |
 | `--write-strategy <s>` | `WRITE_STRATEGY` | `applescript` (default) or `sidecar` |
+| `--prevent-screen-lock on\|off` | `PREVENT_SCREEN_LOCK` | Block the automatic lock during nosleep windows (default `on`) |
 
 **Reachability (`--expose`).** By default the URL is exposed publicly via
 [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) — reachable from any
@@ -164,8 +164,7 @@ Each knob is an env var (honored by `yarn start` and `service install`) and, for
 env. `EXPOSE`/`--expose` is documented under Install above.
 
 `service install` bakes these into the LaunchAgent plist, so that plist is the daemon's
-environment and re-running `service install --<flag> <value>` is how you change one.
-`conductor-remote config` reads them back:
+environment. Use `config set` for later changes. `conductor-remote config` reads them back:
 
 ```
 $ conductor-remote config
@@ -182,12 +181,18 @@ daemon: running  (pid 85882)
   ✓ tailscale agrees: serve only (tailnet)
 ```
 
+```bash
+conductor-remote config set port 9000
+conductor-remote config set write-strategy sidecar
+```
+
 | Var | Flag | Default | Purpose |
 | --- | --- | --- | --- |
 | `RELAY_PORT` | `--port` | `8787` | Listen port |
 | `RELAY_HOST` | `--host` | auto (Tailscale `100.x`, else `127.0.0.1`) | Bind address |
 | `RELAY_TOKEN` | `--token` | persisted (auto-generated, reused across restarts) | Override the shared secret |
 | `WRITE_STRATEGY` | `--write-strategy` | `applescript` | `applescript` (focused session) or `sidecar` (precise per-session — see below) |
+| `PREVENT_SCREEN_LOCK` | `--prevent-screen-lock` | `on` | Block the automatic lock during nosleep windows |
 | `AUTO_UPDATE` | `--auto-update` | `auto` | Self-update mode: `auto` / `check` / `off` |
 | `CONDUCTOR_DB` | `--db` | `~/Library/Application Support/com.conductor.app/conductor.db` | State DB |
 | `CONDUCTOR_WORKSPACES` | `--workspaces` | `~/conductor/workspaces` | Worktree root |
@@ -459,10 +464,11 @@ lives at the root `pmset` layer no assertion can touch. Running those tools with
 no assertion for the standby layer. Closing the lid is the same story one level
 down: it sleeps an Apple Silicon Mac immediately and no assertion stops that
 either, so a keep-awake app plus a shut lid is still a sleeping Mac. The root
-`disablesleep` flag *does* hold it awake lid-closed, which is the lever `nosleep`
-pulls below (in use on an M5 Pro). Awake is not the same as drivable, though: the
-lock screen still blocks every UI write, so a lid-closed Mac serves reads and
-notifications while sends park until you unlock (#87).
+`disablesleep` flag *does* hold it awake lid-closed, which is one lever `nosleep`
+pulls below (in use on an M5 Pro). The other is a bounded `caffeinate -d` display
+assertion. ScreenSaverDaemon checks it before starting the idle screen saver, so
+the automatic screen lock stays off while the window runs. A manual lock or lid
+close can still lock the session; sends then park until you unlock (#87).
 
 **Fix — `conductor-remote nosleep`.** It blocks sleep at the root `pmset` layer (the
 one no assertion reaches) for a bounded window and **auto-reverts** on exit, Ctrl-C, or
@@ -473,7 +479,23 @@ conductor-remote nosleep 2h     # also 90m, 30s, bare seconds; no arg = until Ct
 ```
 
 The confirmation carries the wall-clock **expiry**, measured from when your password lands
-rather than when you typed the command — `✓ Sleep disabled until 21:45 (2h, incl. lid closed).`
+rather than when you typed the command. It also warns that the automatic lock is off:
+
+```text
+✓ Sleep disabled until 21:45 (2h, incl. lid closed). Ctrl-C to restore.
+⚠ Automatic screen lock is disabled for this window. Anyone with physical access can use this Mac.
+```
+
+This is on by default because the AppleScript write path needs an unlocked session. Configure
+it from the Mac CLI. The value applies to terminal and phone-armed windows:
+
+```bash
+conductor-remote config set prevent-screen-lock off
+conductor-remote config  # reports prevent-screen-lock off from the plist
+```
+
+Use `on` to restore the default. `PREVENT_SCREEN_LOCK=off` remains available as an
+environment override for direct relay runs.
 
 Out of the box it prompts for `sudo` and runs in the foreground. Since sending from the
 phone already means manually turning on your hotspot, flipping this on for the session is
@@ -505,7 +527,8 @@ bad `/etc/sudoers.d` entry can cost you `sudo` altogether.
 
 **From the phone.** Once the rule is installed, the Connect sheet grows a **Mac** section:
 tap 1h / 4h / 8h to hold the Mac awake, or "Let it sleep" to end the window early
-(`GET`/`POST`/`DELETE /api/nosleep`, capped at 12h). The armed window is spawned
+(`GET`/`POST`/`DELETE /api/nosleep`, capped at 12h). It reports whether the active
+window blocks the screen lock. The armed window is spawned
 *detached*, because the relay restarts itself on every self-update and a plain child would
 die with it and quietly restore sleep at the worst moment; the relay finds it again after a
 restart by reading `/var/run/conductor-remote-nosleep.pid`. Only one window may be armed —

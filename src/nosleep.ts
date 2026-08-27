@@ -29,13 +29,17 @@
  *    re-`setup` — gated on ioreg's AppleClamshellState: an open lid, or a desktop Mac
  *    that has none, keeps the restore-only behaviour, because forcing sleep on a Mac
  *    someone may be sitting at is worse than the bug.
+ *  - **The same window blocks the idle screen lock by default.** The root helper owns
+ *    a `PreventUserIdleDisplaySleep` assertion through `caffeinate -d`; macOS drops it
+ *    with the process even if the EXIT trap never runs. The pidfile records that mode
+ *    so the phone can warn accurately, and the persisted setting can opt out.
  *
  * Stdlib only, strip-clean — see CLAUDE.md.
  */
 import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { promisify } from 'node:util'
-import { HELPER_PATH, helperReady, PIDFILE_PATH } from './nosleep-helper.ts'
+import { HELPER_PATH, helperFile, helperReady, installedHelper, PIDFILE_PATH } from './nosleep-helper.ts'
 
 const execFileP = promisify(execFile)
 
@@ -49,6 +53,8 @@ export interface NoSleepState {
 	/** Epoch ms the window expires, or null for "until stopped" / not armed. */
 	until: number | null
 	pid: number | null
+	/** True when this window also blocks the idle screen saver that locks the session. */
+	preventsScreenLock: boolean
 }
 
 /**
@@ -64,19 +70,24 @@ function alive(pid: number): boolean {
 	}
 }
 
-/** Parse `<pid> <expiry-epoch-seconds>`; expiry 0 means "until stopped". */
-function readPidfile(): { pid: number; until: number | null } | null {
+/** Parse `<pid> <expiry-epoch-seconds> <start-token> <prevent-lock>`; expiry 0 means "until stopped". */
+function readPidfile(): { pid: number; until: number | null; preventsScreenLock: boolean } | null {
 	let raw: string
 	try {
 		raw = fs.readFileSync(PIDFILE_PATH, 'utf8')
 	} catch {
 		return null
 	}
-	const [pidRaw, untilRaw] = raw.trim().split(/\s+/)
+	const [pidRaw, untilRaw, , preventLockRaw] = raw.trim().split(/\s+/)
 	const pid = Number(pidRaw)
 	if (!Number.isInteger(pid) || pid <= 0) return null
 	const untilSec = Number(untilRaw)
-	return { pid, until: Number.isFinite(untilSec) && untilSec > 0 ? untilSec * 1000 : null }
+	return {
+		pid,
+		until: Number.isFinite(untilSec) && untilSec > 0 ? untilSec * 1000 : null,
+		// Three-field records came from the old helper, which held no display assertion.
+		preventsScreenLock: preventLockRaw === '1'
+	}
 }
 
 /**
@@ -88,13 +99,19 @@ function readPidfile(): { pid: number; until: number | null } | null {
  * a synchronous sudo on every pass — fifty per arm, each one blocking the relay's single
  * thread. The loops already know the grant works; they checked before spawning.
  */
-function armedRecord(): { pid: number; until: number | null } | null {
+function armedRecord(): { pid: number; until: number | null; preventsScreenLock: boolean } | null {
 	const rec = readPidfile()
 	return rec && alive(rec.pid) ? rec : null
 }
 
-function armedState(rec: { pid: number; until: number | null }): NoSleepState {
-	return { available: true, armed: true, until: rec.until, pid: rec.pid }
+function armedState(rec: { pid: number; until: number | null; preventsScreenLock: boolean }): NoSleepState {
+	return {
+		available: true,
+		armed: true,
+		until: rec.until,
+		pid: rec.pid,
+		preventsScreenLock: rec.preventsScreenLock
+	}
 }
 
 /**
@@ -104,7 +121,9 @@ function armedState(rec: { pid: number; until: number | null }): NoSleepState {
 export async function nosleepState(): Promise<NoSleepState> {
 	const rec = armedRecord()
 	if (rec) return armedState(rec)
-	return { available: await helperReady(), armed: false, until: null, pid: null }
+	const ready = await helperReady()
+	const current = installedHelper() === helperFile()
+	return { available: ready && current, armed: false, until: null, pid: null, preventsScreenLock: false }
 }
 
 export interface NoSleepResult {
@@ -171,8 +190,8 @@ function sleepSoon(why: string): void {
 function unavailable(): NoSleepResult {
 	return {
 		ok: false,
-		error: 'Passwordless nosleep isn’t installed. Run `conductor-remote nosleep setup` on the Mac.',
-		state: { available: false, armed: false, until: null, pid: null }
+		error: 'Passwordless nosleep is missing or out of date. Run `conductor-remote nosleep setup` on the Mac.',
+		state: { available: false, armed: false, until: null, pid: null, preventsScreenLock: false }
 	}
 }
 
@@ -181,15 +200,15 @@ function unavailable(): NoSleepResult {
  * rather than stacking — the helper enforces that, and it has to, since two owners would
  * restore each other's flipped values and leave sleep disabled for good.
  */
-export async function armNoSleep(seconds: number): Promise<NoSleepResult> {
-	if (!(await helperReady())) return unavailable()
+export async function armNoSleep(seconds: number, preventScreenLock = true): Promise<NoSleepResult> {
+	if (!(await helperReady()) || installedHelper() !== helperFile()) return unavailable()
 	// Floor of 1, not 0. The helper reads 0 as "until killed", so anything under a second
 	// truncates straight past MAX_SECONDS into a window nothing ever closes — which is the
 	// one thing the cap exists to prevent.
 	const secs = Math.min(MAX_SECONDS, Math.max(1, Math.trunc(seconds)))
 	// Detached, own session, no stdio: it has to survive this relay's own restarts,
 	// which autoupdate performs routinely and without warning.
-	const child = spawn('sudo', ['-n', HELPER_PATH, String(secs), ''], {
+	const child = spawn('sudo', ['-n', HELPER_PATH, String(secs), '', preventScreenLock ? '1' : '0'], {
 		detached: true,
 		stdio: 'ignore'
 	})
@@ -233,7 +252,11 @@ export async function disarmNoSleep(): Promise<NoSleepResult> {
 			const willSleep = (await clamshellClosed()) === true
 			if (willSleep) sleepSoon('the keep-awake window was ended from the phone')
 			else console.info('nosleep: window ended with the lid open (or unreadable) — sleep re-enabled, not forced')
-			return { ok: true, willSleep, state: { available: true, armed: false, until: null, pid: null } }
+			return {
+				ok: true,
+				willSleep,
+				state: { available: true, armed: false, until: null, pid: null, preventsScreenLock: false }
+			}
 		}
 		await new Promise(r => setTimeout(r, 200))
 	}
