@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
+import { Check, ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
@@ -92,9 +92,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
-	const repos = [...new Set(workspaces.map(w => w.repo_name).filter((r): r is string => !!r))].sort()
-	if (view.repo && !repos.includes(view.repo)) repos.push(view.repo)
-	const inRepo = view.repo ? workspaces.filter(w => w.repo_name === view.repo) : workspaces
+	const repos = [
+		...new Set([...workspaces.map(w => w.repo_name).filter((r): r is string => !!r), ...view.repos])
+	].sort()
+	const inRepo = view.repos.length
+		? workspaces.filter(w => !!w.repo_name && view.repos.includes(w.repo_name))
+		: workspaces
 	// The workspace you're *in* is never hidden: the list is the way back to the chat on
 	// screen, and a filter that swallows it reads as the app having lost your place.
 	const shown = view.hideMerged ? inRepo.filter(w => !isMerged(w) || w.id === selectedId) : inRepo
@@ -111,11 +114,16 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 
 	// The dot marks the *setting*; the subtitle only speaks up once a filter actually
 	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
-	const filtered = !!view.repo || view.hideMerged
-	const narrowed = !!view.repo || hiddenMerged > 0
+	const filtered = view.repos.length > 0 || view.hideMerged
+	const narrowed = view.repos.length > 0 || hiddenMerged > 0
+	const repoFilterLabel = view.repos.length === 1 ? view.repos[0] : `${view.repos.length} repos`
 	const subtitle = workspaces.length
 		? narrowed
-			? [`${shown.length} of ${workspaces.length}`, view.repo, hiddenMerged ? `${hiddenMerged} merged hidden` : null]
+			? [
+					`${shown.length} of ${workspaces.length}`,
+					view.repos.length ? repoFilterLabel : null,
+					hiddenMerged ? `${hiddenMerged} merged hidden` : null
+				]
 					.filter(Boolean)
 					.join(' · ')
 			: `${workspaces.length} active`
@@ -181,7 +189,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					<Empty>No active workspaces. Start one in Conductor and it’ll appear here.</Empty>
 				) : shown.length === 0 ? (
 					<Empty>
-						{view.repo ? `No workspaces in ${view.repo}` : 'No workspaces'}
+						{view.repos.length ? `No workspaces in ${repoFilterLabel}` : 'No workspaces'}
 						{hiddenMerged ? ` — ${hiddenMerged} merged ${hiddenMerged === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
 					</Empty>
 				) : (
@@ -285,14 +293,7 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						]}
 					/>
 				</ControlRow>
-				<ControlRow id="view-repo" label="Repo">
-					<ViewSelect
-						id="view-repo"
-						value={view.repo ?? 'all'}
-						onChange={v => setView({ repo: v === 'all' ? null : v })}
-						options={[['all', 'All repos'], ...repos.map((r): [string, string] => [r, r])]}
-					/>
-				</ControlRow>
+				<RepoFilter repos={repos} selected={view.repos} onChange={repos => setView({ repos })} />
 				<ControlRow id="view-sort" label="Sort by">
 					<ViewSelect
 						id="view-sort"
@@ -321,6 +322,68 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 				</p>
 			</div>
 		</>
+	)
+}
+
+function RepoFilter({
+	repos,
+	selected,
+	onChange
+}: {
+	repos: string[]
+	selected: string[]
+	onChange: (repos: string[]) => void
+}) {
+	const [open, setOpen] = useState(false)
+	const selectedAll = selected.length === 0
+	const label = selectedAll ? 'All repos' : selected.length === 1 ? selected[0] : `${selected.length} repos`
+	const toggle = (repo: string) =>
+		onChange(selected.includes(repo) ? selected.filter(r => r !== repo) : [...selected, repo])
+
+	return (
+		<div className="flex flex-col gap-2">
+			<ControlRow id="view-repo" label="Repo">
+				<button
+					id="view-repo"
+					type="button"
+					onClick={() => setOpen(value => !value)}
+					aria-expanded={open}
+					aria-controls="view-repo-options"
+					className="flex max-w-36 items-center gap-1 rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+				>
+					<span className="truncate">{label}</span>
+					<ChevronDown size={14} className={cn('shrink-0 text-faint transition-transform', open && 'rotate-180')} />
+				</button>
+			</ControlRow>
+			{open ? (
+				<div
+					id="view-repo-options"
+					className="flex max-h-48 flex-col overflow-y-auto rounded-lg border border-border bg-surface-2 p-1"
+				>
+					<RepoOption checked={selectedAll} label="All repos" onChange={() => onChange([])} />
+					{repos.map(repo => (
+						<RepoOption key={repo} checked={selected.includes(repo)} label={repo} onChange={() => toggle(repo)} />
+					))}
+				</div>
+			) : null}
+		</div>
+	)
+}
+
+function RepoOption({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) {
+	return (
+		<label className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text active:bg-surface">
+			<input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
+			<span
+				className={cn(
+					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent',
+					checked ? 'border-accent bg-accent text-white' : 'border-faint bg-surface'
+				)}
+			>
+				{checked ? <Check size={12} strokeWidth={3} /> : null}
+			</span>
+			<span className="truncate">{label}</span>
+		</label>
 	)
 }
 

@@ -14,8 +14,8 @@ export type GroupBy = 'status' | 'repo' | 'recent' | 'none'
 export type SortBy = 'updated' | 'created' | 'name'
 export interface ViewPrefs {
 	groupBy: GroupBy
-	/** Repo name to filter to, or null for all repos. */
-	repo: string | null
+	/** Repo names to filter to. An empty list includes every repo. */
+	repos: string[]
 	sortBy: SortBy
 	/**
 	 * Drop workspaces whose PR has landed (see `isMerged`). Off by default — a
@@ -28,7 +28,7 @@ export interface ViewPrefs {
 
 const VIEW_KEY = 'conductor-remote-view'
 const LAST_NEW_WORKSPACE_REPO_KEY = 'conductor-remote-last-new-workspace-repo'
-const defaultView: ViewPrefs = { groupBy: 'status', repo: null, sortBy: 'updated', hideMerged: false, collapsed: [] }
+const defaultView: ViewPrefs = { groupBy: 'status', repos: [], sortBy: 'updated', hideMerged: false, collapsed: [] }
 
 /**
  * A prompt shown optimistically in the transcript before the relay confirms it.
@@ -58,7 +58,15 @@ function prunePatch(patch: AgentPatch): AgentPatch {
 
 function loadView(): ViewPrefs {
 	try {
-		return { ...defaultView, ...JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') }
+		const { repo: legacyRepo, ...saved } = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as Partial<ViewPrefs> & {
+			repo?: unknown
+		}
+		const repos = Array.isArray(saved.repos)
+			? saved.repos.filter((repo): repo is string => typeof repo === 'string')
+			: typeof legacyRepo === 'string'
+				? [legacyRepo]
+				: []
+		return { ...defaultView, ...saved, repos }
 	} catch {
 		return defaultView
 	}
