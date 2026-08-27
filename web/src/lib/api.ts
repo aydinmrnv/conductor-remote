@@ -6,6 +6,7 @@ import type {
 	AgentPatch,
 	AgentResult,
 	CreateWorkspaceResult,
+	FilePreviewResponse,
 	LogsResponse,
 	MergeResult,
 	MessagesResponse,
@@ -153,6 +154,8 @@ export const client = {
 		}
 		return p
 	},
+	/** A bounded source preview for an absolute `path:line` link in chat Markdown. */
+	filePreview: (reference: string) => api<FilePreviewResponse>(routes.filePreview.path(reference)),
 	/** One workspace by id, archived included — how an archived chat is opened for reading. */
 	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),

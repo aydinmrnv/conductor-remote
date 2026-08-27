@@ -67,6 +67,8 @@ export const routes = {
 	search: flat('GET', '/api/search'),
 	repos: flat('GET', '/api/repos'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
+	/** A source-file preview linked from agent Markdown. */
+	filePreview: param('GET', '/api/files/:reference'),
 	logs: flat('GET', '/api/logs'),
 	settings: flat('GET', '/api/settings'),
 	updateSettings: flat('PATCH', '/api/settings'),

@@ -98,6 +98,23 @@ export interface ReposResponse {
 	repos: RepoRow[]
 }
 
+/** GET /api/files/:reference — a bounded source preview for a chat file link. */
+export interface FilePreviewResponse {
+	/** Absolute workspace path from the link. */
+	path: string
+	/** The requested line, clamped to the file's last line. */
+	line: number | null
+	/** The first 1-based line included in `content`. */
+	lineStart: number
+	/** The last 1-based line included in `content`. */
+	lineEnd: number
+	totalLines: number
+	/** Source text for the visible excerpt. */
+	content: string
+	/** The excerpt omits lines before or after it. */
+	truncated: boolean
+}
+
 /**
  * GET /api/workspaces/:id — one workspace by id, in any state.
  *

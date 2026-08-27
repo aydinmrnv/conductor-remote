@@ -7,6 +7,7 @@ import { writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
@@ -459,6 +460,71 @@ const MIME: Record<string, string> = {
 	'.png': 'image/png'
 }
 
+/** A preview stays small enough to render smoothly in the phone's source sheet. */
+const FILE_PREVIEW_MAX_BYTES = 512 * 1024
+const FILE_PREVIEW_CONTEXT_LINES = 100
+const FILE_PREVIEW_FIRST_LINES = 500
+
+/** True only for a descendant. A prefix test would let `/workspaces-old` escape `/workspaces`. */
+function insideDirectory(filePath: string, root: string): boolean {
+	const relative = path.relative(root, filePath)
+	return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
+/**
+ * Serve source that an agent linked in its Markdown. The link format comes from
+ * coding-agent file references, but its path still arrives from an internet-facing
+ * client. Resolve both sides and accept only regular source files below the
+ * configured Conductor workspace root.
+ */
+async function serveFilePreview(req: http.IncomingMessage, res: http.ServerResponse, reference: string): Promise<void> {
+	const target = parseFileReference(reference)
+	if (!target) return json(req, res, 404, { error: 'source file not found' })
+
+	let filePath: string
+	let workspaceRoot: string
+	let size: number
+	try {
+		;[filePath, workspaceRoot] = await Promise.all([
+			fs.promises.realpath(target.path),
+			fs.promises.realpath(cfg.workspacesRoot)
+		])
+		if (!insideDirectory(filePath, workspaceRoot)) return json(req, res, 404, { error: 'source file not found' })
+		const info = await fs.promises.stat(filePath)
+		if (!info.isFile()) return json(req, res, 404, { error: 'source file not found' })
+		size = info.size
+	} catch {
+		return json(req, res, 404, { error: 'source file not found' })
+	}
+	if (size > FILE_PREVIEW_MAX_BYTES) return json(req, res, 413, { error: 'source file is too large to preview' })
+
+	let content: string
+	try {
+		const raw = await fs.promises.readFile(filePath)
+		if (raw.includes(0)) return json(req, res, 415, { error: 'source file is not text' })
+		content = new TextDecoder('utf-8', { fatal: true }).decode(raw)
+	} catch {
+		return json(req, res, 415, { error: 'source file is not text' })
+	}
+
+	const lines = content.split('\n')
+	const focus = target.line === null ? null : Math.min(target.line, lines.length)
+	const start = focus === null ? 0 : Math.max(0, focus - FILE_PREVIEW_CONTEXT_LINES - 1)
+	const end =
+		focus === null
+			? Math.min(lines.length, FILE_PREVIEW_FIRST_LINES)
+			: Math.min(lines.length, focus + FILE_PREVIEW_CONTEXT_LINES)
+	return json(req, res, 200, {
+		path: target.path,
+		line: focus,
+		lineStart: start + 1,
+		lineEnd: end,
+		totalLines: lines.length,
+		content: lines.slice(start, end).join('\n'),
+		truncated: start > 0 || end < lines.length
+	})
+}
+
 /**
  * Successful GETs are conditional + compressed to keep the phone's polling cheap.
  * `no-cache` (not `no-store`) means the browser must revalidate on every tick —
@@ -902,6 +968,11 @@ const server = http.createServer(async (req, res) => {
 					res.end(data)
 				})
 			}
+
+			// GET /api/files/:reference — source linked from an agent reply. The Markdown component
+			// intercepts the browser navigation and fetches this endpoint with its auth header.
+			const fileReference = routeParam(routes.filePreview, req.method, pathname)
+			if (fileReference) return serveFilePreview(req, res, fileReference)
 
 			// GET /api/workspaces/:id — one workspace by id, archived included. `/api/state` lists
 			// only the live ones, so this is what lets the phone open a chat search found in work
