@@ -491,6 +491,23 @@ export interface TranscriptState {
 /**
  * Incremental transcript polling. Keeps a rowid cursor and appends only new
  * rows, so long sessions don't re-transfer on every tick.
+ *
+ * **One request at a time, or the chat grows a second copy of itself.** This is the
+ * only read in the app that *appends* — every other one is a react-query key, which
+ * replaces its data and single-flights per key, so neither hazard exists there. Here
+ * the cursor is read when a tick starts and written when it answers, so two ticks
+ * overlapping that gap both fetch from the same rowid and both append what came back.
+ * The mount is where it bites: the first fetch carries the whole chat (cursor 0), and
+ * every 1s tick that lands before it answers repeats the whole chat. On a chat one
+ * message long — a workspace just created from the phone, its first prompt the only
+ * row — that reads as the prompt having been sent four or six times, the count being
+ * however many ticks the round trip outlasted. Nothing was sent twice; Conductor's DB
+ * holds one row and remounting the view (leaving the chat and coming back) clears it,
+ * which is what the report looked like from the outside.
+ *
+ * Skipping a tick costs nothing: the cursor hasn't moved, so the next fetch carries
+ * everything the skipped one would have. A slow link polls a beat slower and stays
+ * correct, which is the trade this had backwards.
  */
 export function useTranscript(sessionId: string | null, poll = true): TranscriptState {
 	const report = useOnline()
@@ -505,8 +522,11 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 		cursor.current = 0
 		setState({ entries: [], loading: true, error: null })
 		let alive = true
+		let inFlight = false
 
 		const tick = async () => {
+			if (inFlight) return
+			inFlight = true
 			try {
 				const { entries, cursor: next } = await client.messages(sessionId, cursor.current)
 				if (!alive) return
@@ -521,6 +541,8 @@ export function useTranscript(sessionId: string | null, poll = true): Transcript
 				if (!alive) return
 				report(false, err)
 				setState(prev => ({ ...prev, loading: false, error: err instanceof Error ? err.message : String(err) }))
+			} finally {
+				inFlight = false
 			}
 		}
 
@@ -580,7 +602,10 @@ export function useSendPrompt() {
 				// model between mounting the composer and tapping send.
 				const staged = useApp.getState().agentDrafts[sessionId]
 				const agent = staged && Object.keys(staged).length ? staged : undefined
-				const r = await client.sendPrompt(sessionId, text, workspaceId, agent)
+				// `id` goes to the relay as well as into the bubble: it is the send's identity,
+				// so a Retry of this same bubble is answered rather than sent again. Which is
+				// the duplicate the chats here hold — the prompt landed, the answer didn't.
+				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id)
 				if (r.ok || r.parked) {
 					if (agent) {
 						// Applied (ok) or owned by the parked entry now — either way no longer staged.

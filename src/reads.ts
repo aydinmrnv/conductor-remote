@@ -31,7 +31,6 @@ export interface WorkspaceRow {
 	session_status: string | null
 	session_title: string | null
 	model: string | null
-	context_used_percent: number | null
 }
 
 /**
@@ -89,6 +88,13 @@ export interface SessionRow {
 	fast_mode: number | null
 	/** claude | codex | cursor | acp — the agent family `model` belongs to. */
 	agent_type: string | null
+	/**
+	 * How full this chat's context window is, 0-100 (real, null before the first turn).
+	 * It belongs to the chat and to nothing larger: 14 of the 49 live workspaces here
+	 * hold more than one tab, and one of them runs at 28 / 85 / 49 / 29 at the same
+	 * moment. `WorkspaceRow` deliberately no longer carries it — the sidebar could only
+	 * ever show the *active* tab's number, which named the workspace and meant one chat.
+	 */
 	context_used_percent: number | null
 	unread_count: number | null
 	created_at: string
@@ -107,6 +113,20 @@ export interface SessionState {
 	workspaceId: string
 	/** 'working' | 'idle' | 'error' — Conductor's own live agent status. */
 	status: string | null
+	/**
+	 * When this chat's most recent *user-started* turn was dispatched (see `listSessions`).
+	 * Unchanged across a turn an agent started for itself, which is how the notifier tells
+	 * "your agent finished" from a loop's eleventh lap. Null on a chat dormant since before
+	 * `queue_order` existed (May 2026).
+	 */
+	turnStartedAt: string | null
+	/**
+	 * The last thing a person said in this chat, heading a turn or steering one already
+	 * running. `turnStartedAt` misses the second (steering carries no `queue_order`), so
+	 * the notifier watches both — otherwise answering a question mid-turn would read as a
+	 * lap nobody asked for and go unannounced.
+	 */
+	lastUserMessageAt: string | null
 	/** The sidebar title of the owning workspace. */
 	workspaceTitle: string
 	repoName: string | null
@@ -255,8 +275,7 @@ export class Reads {
 			        w.state, w.created_at, w.updated_at, w.pinned_at, w.active_session_id, w.intended_target_branch,
 			        r.name AS repo_name, r.root_path AS repo_root, r.icon AS repo_icon,
 			        r.remote_url AS remote_url, r.default_branch AS default_branch,
-			        s.status AS session_status, s.title AS session_title, s.model AS model,
-			        s.context_used_percent AS context_used_percent
+			        s.status AS session_status, s.title AS session_title, s.model AS model
 			 FROM workspaces w
 			 LEFT JOIN repos r ON r.id = w.repository_id
 			 LEFT JOIN sessions s ON s.id = w.active_session_id
@@ -474,11 +493,21 @@ export class Reads {
 			directory_name: string | null
 			repo_name: string | null
 			tab_count: number
+			turn_started_at: string | null
+			last_user_message_at: string | null
 		}>(
-			`SELECT s.id, s.status, s.title, s.workspace_id,
+			// These two together are the notifier's record of whether a *person* had
+			// anything to do with the turn that just ended. An agent that schedules its own
+			// next turn (a `/loop`) writes no message at all, so both stay put while
+			// `status` cycles working → idle on every lap. Both are needed: `turn_started_at`
+			// only moves for a message that *heads* a turn, so steering into a running one
+			// would look like a lap nobody asked for. See src/notify.ts.
+			`SELECT s.id, s.status, s.title, s.workspace_id, s.last_user_message_at,
 			        w.workspace_name, w.pr_title, w.branch, w.directory_name,
 			        r.name AS repo_name,
-			        (SELECT COUNT(*) FROM sessions t WHERE t.workspace_id = w.id AND COALESCE(t.is_hidden, 0) = 0) AS tab_count
+			        (SELECT COUNT(*) FROM sessions t WHERE t.workspace_id = w.id AND COALESCE(t.is_hidden, 0) = 0) AS tab_count,
+			        (SELECT MAX(m.sent_at) FROM session_messages m
+			          WHERE m.session_id = s.id AND m.queue_order IS NOT NULL AND m.sent_at IS NOT NULL) AS turn_started_at
 			 FROM sessions s
 			 JOIN workspaces w ON w.id = s.workspace_id
 			 LEFT JOIN repos r ON r.id = w.repository_id
@@ -488,6 +517,8 @@ export class Reads {
 			sessionId: r.id,
 			workspaceId: r.workspace_id,
 			status: r.status,
+			turnStartedAt: r.turn_started_at,
+			lastUserMessageAt: r.last_user_message_at,
 			workspaceTitle: workspaceTitle({ ...r, id: r.workspace_id }),
 			repoName: r.repo_name,
 			// A single-tab workspace's chat title is just the workspace again — only name it when it disambiguates.

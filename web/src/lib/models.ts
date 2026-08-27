@@ -1,3 +1,5 @@
+import { modelPickerLabel } from '../../../src/shared.ts'
+
 /**
  * Conductor's model menu, cached across app loads.
  *
@@ -28,13 +30,17 @@ function readAll(): Record<string, CachedModels> {
 	}
 }
 
+function cleanModels(models: string[]): string[] {
+	return [...new Set(models.map(modelPickerLabel).filter(Boolean))]
+}
+
 export function readModelCache(agentType: string): CachedModels | undefined {
 	const hit = readAll()[agentType]
-	return hit?.models?.length ? hit : undefined
+	return hit?.models?.length ? { ...hit, models: cleanModels(hit.models) } : undefined
 }
 
 export function writeModelCache(agentType: string, models: string[], at: number): void {
 	try {
-		localStorage.setItem(KEY, JSON.stringify({ ...readAll(), [agentType]: { models, at } }))
+		localStorage.setItem(KEY, JSON.stringify({ ...readAll(), [agentType]: { models: cleanModels(models), at } }))
 	} catch {}
 }

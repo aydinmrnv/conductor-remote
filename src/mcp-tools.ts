@@ -249,7 +249,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'list_chats',
 			description:
-				'List the chat tabs in a workspace, with each one’s status and when its current turn started. A workspace can hold several conversations; send_prompt and read_chat address one of them.',
+				'List the chat tabs in a workspace with each one’s status, model and how full its context window is. A workspace can hold several conversations, each with its own context; send_prompt and read_chat address one of them.',
 			inputSchema: {
 				type: 'object',
 				properties: { workspace_id: { type: 'string' } },
@@ -259,11 +259,16 @@ export function createTools(call: RelayCall): Tool[] {
 				const id = need(args, 'workspace_id')
 				const data = await call<SessionsResponse>(routes.sessions.path(id))
 				if (!data.sessions.length) return `no chats in workspace ${id}`
+				// Context is per chat and only per chat — the same workspace can hold a tab at 85%
+				// beside one at 28% — so it is printed on every row rather than summarised above.
 				return data.sessions
-					.map(
-						s =>
-							`${s.status === 'working' ? '▶' : '·'} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}\n    session_id: ${s.id}`
-					)
+					.map(s => {
+						const ctx =
+							typeof s.context_used_percent === 'number' && s.context_used_percent > 0
+								? ` · ${Math.round(s.context_used_percent)}% context`
+								: ''
+						return `${s.status === 'working' ? '▶' : '·'} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}${ctx}\n    session_id: ${s.id}`
+					})
 					.join('\n')
 			}
 		},

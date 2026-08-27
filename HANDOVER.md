@@ -12,7 +12,9 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
 
 - **Reads — done and working.** SQLite (`conductor.db`) + `git` per worktree.
   Verified end-to-end against the live app: 47 workspaces with status/model/
-  branch/context %, a 136-message transcript parsed into user/assistant/tool
+  branch (context % belongs to the *chat* and rides on the chat tab, since 14 of
+  the 49 live workspaces here hold several and one runs 28 / 85 / 49 / 29 at
+  once), a 136-message transcript parsed into user/assistant/tool
   entries, diff vs target branch (incl. untracked), token auth (401 without),
   static PWA + SPA deep-link fallback, manifest + service worker + icons.
 - **Writes — two strategies behind the `Actuator` interface:**

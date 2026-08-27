@@ -64,6 +64,15 @@ export function queryTokens(raw: string): string[] {
 }
 
 /**
+ * A temporary `NEW` marker in Conductor's picker is a badge, not part of the
+ * model name. The relay and phone use this value for the visible label and for
+ * a later selection, so both sides must remove it in the same way.
+ */
+export function modelPickerLabel(label: string): string {
+	return label.endsWith(' NEW') ? label.slice(0, -4) : label
+}
+
+/**
  * Markers the relay wraps search hits in (src/search.ts, via FTS5 `snippet()`). They
  * are control characters, so they must never reach the DOM: an unsplit snippet renders
  * as invisible garbage between the words it was meant to emphasise.

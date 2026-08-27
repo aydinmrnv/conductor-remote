@@ -144,6 +144,19 @@ Two asymmetric halves — keep them separate:
   entry to `failed` and it stays, visible the whole way as
   `workspace.parked_prompts` (the same queued bubble as a first prompt, its
   `reason` naming the lock) and dismissible via `DELETE …/sessions/:id/prompt`.
+  **The relay will never unlock the Mac itself, and that is a macOS fact rather
+  than a policy**: there is no unlock API, `loginwindow` turns on secure event
+  input and hides the session from Accessibility, and the one input channel the
+  lock screen still accepts is Apple's own Screen Sharing server — which would
+  mean holding the account password on disk, next to a token, in a daemon that
+  auto-updates itself from npm. "Only with `EXPOSE=tailnet`" doesn't rescue that:
+  `readExposeMode()` falls back to **`public`**, and this posture has already
+  healed itself back onto the open internet once (see the LaunchAgent-plist trap
+  below). So the phone links to the unlock instead of performing it — a parked
+  bubble carries **`vnc://<this host>`** (`Transcript.tsx` ▸ `unlockUrl`, built
+  from `location.hostname`, since the PWA is already served from the Mac's own
+  MagicDNS name), which hands off to whichever VNC client the phone has. Type the
+  password there and the 5s lock poll flushes the queue on its own.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
@@ -311,6 +324,25 @@ Two asymmetric halves — keep them separate:
     Budgets here are measured, not chosen: a send that *worked* took 23.6s against a
     30-workspace sidebar, which is why the 20s per-run ceiling was killing ordinary
     sends. Re-measure rather than re-guess (`SEND_ATTEMPT_MS`).
+
+    **What that confirm cannot see is a copy landed by a *different request*, and that
+    is the duplicate the chats here actually hold** (`src/sendonce.ts`). The cursor is
+    snapshotted when the request starts, so an earlier copy sits behind it. The failure
+    is never the relay fumbling a send — it is the *answer* going missing: stale funnel
+    ingress after a network change, a suspended phone, or the 75s client budget running
+    out while the relay is still inside its own 55s one. The prompt is in Conductor, the
+    phone never hears so, the bubble flips to failed, and Retry is right there. Checked
+    over the whole history: **every retry `deliverPrompt` logged landed exactly once**,
+    and the duplicate pairs carry no retry line at all, which is how the two were told
+    apart. So the phone names the intent instead — `PendingMessage.id`, which Retry
+    already reuses and a fresh send re-rolls, rides along as `clientId` and the relay
+    answers a repeat with the first send's outcome. Keyed on that id and **never on the
+    text**, so saying "yes" twice on purpose is still two prompts. Three properties: a
+    **failure is never remembered** (or Retry does nothing for ten minutes and the
+    prompt is lost rather than doubled, which is the worse half of the trade); a repeat
+    arriving **while the first is still in flight** joins it rather than queueing a
+    second UI run behind it; and **no key means no memo**, so an MCP caller or a PWA
+    cached from before this gets exactly the old behaviour rather than a guess.
 
     The same verified path drives the chat's **agent settings** (`setAgentOptions`,
     `POST /api/sessions/:id/agent`). Their *values* are plain reads — `sessions`
@@ -644,7 +676,27 @@ Two asymmetric halves — keep them separate:
   being a nuisance: a transition must **survive one more tick** before it fires
   (a queued prompt restarting the turn would otherwise buzz for nothing), and the
   first tick after a device subscribes is a **baseline, not a broadcast** (else
-  enabling it fires once per already-idle workspace). Web Push is written out of
+  enabling it fires once per already-idle workspace).
+  - **A third one, because a turn ending is only news if someone asked for it.** An
+    agent that schedules its own next turn — a `/loop` — ends a turn properly every few
+    minutes for as long as it runs, and `status` cycles `working → idle` on each lap.
+    Measured here: one looping chat pushed roughly every 5 minutes from early evening
+    past midnight and again all morning, which was most of what the phone received at
+    all. The tell is in the data rather than in a guess about intent: a turn is headed
+    by a `session_messages` row with `queue_order` set, a lap the agent gave itself
+    writes nothing at all, so what a person last did **sits still while `status` cycles**.
+    So the lap after you type notifies and the ones after it are quiet, until you say the
+    next thing. It takes **both** `turn_started_at` (the same read `listSessions` uses for
+    the elapsed timer, now on `listSessionStates` too) **and `last_user_message_at`**: the
+    first misses steering, because a message typed into a running turn carries no
+    `queue_order`, so answering a question mid-lap would read as a lap nobody asked for
+    and the turn would end unannounced. Two exemptions, both deliberate: `→ error` always
+    fires (a loop that breaks is worth hearing about however it started), and a chat
+    recording **neither** (dormant since before `queue_order` landed in May 2026) notifies
+    every time, because with no evidence either way, silence is the dangerous default. The
+    state machine is `TurnWatcher`, split out of the poll loop so `scripts/check-notify.ts`
+    can drive it a tick at a time.
+  Web Push is written out of
   `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
   tarball's **zero runtime deps** — the traps there are that ES256 needs raw
   `r||s` (`dsaEncoding: 'ieee-p1363'`, not Node's default DER) and that **the
@@ -760,11 +812,13 @@ Two asymmetric halves — keep them separate:
 ## Commands
 
 ```bash
-yarn verify   # typecheck (tsc) + lint (Biome) + imports/routes/attachments/AppleScript/nosleep/uilock — before every commit
+yarn verify   # typecheck (tsc) + lint (Biome) + the nine checks below — before every commit
 yarn fix      # Biome autofix (format + safe lints)
 yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
 yarn check:nosleep     # run NOSLEEP_BODY against a stub pmset in a temp dir (no root, no real pmset)
 yarn check:uilock      # the UI lock's queue: order, priority, release-on-failure, cap
+yarn check:sendonce    # the send memo: Retry never doubles a prompt, a failure stays retryable
+yarn check:notify      # the turn watcher: a loop's own laps stay quiet, yours still buzz
 yarn check:imports     # web/src may only `import type` from src/ (shared.ts/routes.ts aside)
 yarn check:routes      # the /api route table: round-trip, no collisions, method is identity
 yarn check:attachments # the @⟦⟧() token Conductor parses, and a chat title that can't escape the worktree
@@ -776,13 +830,13 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Seven automated tests. Three of them share one reason to exist: **each guards a
+Nine automated tests. Three of them share one reason to exist: **each guards a
 language nothing else in the toolchain reads** — an AppleScript handler, a shell body,
 a syntax another app parses. They live in a string or a sibling file, so `tsc` sees text
 and Biome sees text, and a mistake surfaces for the first time on someone's phone or
-someone's Mac. The other four guard things `tsc` reads fine and still cannot judge:
-control flow (twice over), which side of the Node/browser line an import lands on, and
-whether a URL still addresses the handler that answers it.
+someone's Mac. The other six guard things `tsc` reads fine and still cannot judge:
+control flow (four times over), which side of the Node/browser line an import lands on,
+and whether a URL still addresses the handler that answers it.
 
 - `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
   the way `osascript` will, and every `my handler()` call, in the script *and* in
@@ -818,6 +872,23 @@ whether a URL still addresses the handler that answers it.
   could introduce, and it typechecks either way. `DeliveryDeps` is injected, so this
   needs no Mac, no Conductor and no relay; the delays are real seconds, so it waits on
   the queue's own actions rather than on a stopwatch. Portable, so the ubuntu job runs it.
+
+- `scripts/check-sendonce.ts` — the send memo (`src/sendonce.ts`), which decides whether
+  a prompt is typed into Conductor a second time. Both of its failure modes are pure
+  control flow and both typecheck: remember too little and Retry doubles the prompt,
+  which is the bug it was written for; remember a *failure* and Retry silently does
+  nothing for ten minutes, so the prompt is lost rather than doubled, which is the worse
+  of the two and the easier mistake to make while editing `keep`. Takes a function and a
+  key, so it needs nothing else. Portable, so the ubuntu job runs it.
+
+- `scripts/check-notify.ts` — the notifier's state machine (`src/notify.ts` ▸
+  `TurnWatcher`). Every rule in it is a rule about *not* buzzing a phone, which is why
+  it is worth pinning: too eager is a nuisance you notice, too quiet is a notifier that
+  has stopped and looks exactly like a Mac with nothing to report. Covers the baseline,
+  the confirm-on-the-next-tick, a chat archived mid-turn, and the loop rule from both
+  sides — the lap you asked for still fires, the laps the agent gave itself do not, and
+  a chat with no turn head keeps the old behaviour. Rows are injected, so no push store
+  and no network. Portable, so the ubuntu job runs it.
 
 - `scripts/check-routes.ts` — the `/api` route table (`src/routes.ts`). Every route
   matches the path it builds, the parameter survives encoding verbatim, no route answers
@@ -1035,6 +1106,20 @@ bind trap below), not by unit test.
   one step re-renders the whole backlog. Re-measure with `PerformanceObserver` on
   `longtask` under `Emulation.setCPUThrottlingRate` rather than on a Mac at full
   speed, where the whole thing hides inside one dropped frame.
+  - **And the transcript is the one read that appends, so it must be single-flight**
+    (`hooks.ts` ▸ `useTranscript`). Every other read on the phone is a react-query
+    key, which replaces its data and dedupes per key; this one keeps a rowid cursor
+    read when a tick starts and written when it answers, so two ticks overlapping
+    that gap fetch from the same rowid and append the same rows twice. The mount is
+    where it bites, because the first fetch carries the whole chat at cursor 0 and
+    every 1s tick landing before it repeats the whole chat — on a workspace just
+    created from the phone, whose only row is its first prompt, that renders as the
+    prompt sent four or six times, the count being how many ticks the round trip
+    outlasted (an iOS resume firing queued timers in a burst does it in one go).
+    Nothing is sent twice, `session_messages` holds one row, and leaving the chat
+    and coming back clears it — which is why it reads as a relay bug and is not one.
+    Skipping a tick costs nothing: the cursor hasn't moved, so the next fetch carries
+    what the skipped one would have.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."
