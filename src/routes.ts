@@ -69,6 +69,8 @@ export const routes = {
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
 	/** A temporary image emitted in a chat message, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),
+	/** A source-file preview linked from agent Markdown. */
+	filePreview: param('GET', '/api/files/:reference'),
 	logs: flat('GET', '/api/logs'),
 	settings: flat('GET', '/api/settings'),
 	updateSettings: flat('PATCH', '/api/settings'),

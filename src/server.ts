@@ -8,6 +8,7 @@ import { writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
@@ -291,7 +292,8 @@ async function deliverPrompt(
 	ws: Workspace,
 	sessionId: string,
 	text: string,
-	budgetMs = SEND_BUDGET_MS
+	budgetMs = SEND_BUDGET_MS,
+	queue = false
 ): Promise<SendResult & { attempts: number }> {
 	const located = locateChat(ws, sessionId)
 	if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
@@ -308,7 +310,10 @@ async function deliverPrompt(
 		// write, and only the run knows what was left of the budget when it started. Minus
 		// the confirm, so a caller on a tight budget spends it on the run rather than on
 		// watching — a 25s-era phone gets one full-length attempt, not two too short to finish.
-		last = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, deadline - MIN_CONFIRM_MS)
+		last = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, {
+			deadline: deadline - MIN_CONFIRM_MS,
+			queue
+		})
 		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
 			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
 			return { ok: true, strategy: last.strategy, attempts }
@@ -427,7 +432,7 @@ const parkedPrompts = new ParkedPromptQueue(path.join(stateDir(), 'parked-prompt
 				const applied = await applyAgentPatch(ws, entry.sessionId, entry.agent)
 				if (!applied.ok) return { ok: false, error: applied.error, blocked: lockBlocked(applied.error) }
 			}
-			const result = await deliverPrompt(ws, entry.sessionId, entry.text)
+			const result = await deliverPrompt(ws, entry.sessionId, entry.text, SEND_BUDGET_MS, entry.queue)
 			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
 		}),
 	notify: (entry: ParkedPrompt, error?: string) => {
@@ -500,6 +505,71 @@ async function serveLocalImage(
 	fs.createReadStream(filePath)
 		.once('error', () => res.destroy())
 		.pipe(res)
+}
+
+/** A preview stays small enough to render smoothly in the phone's source sheet. */
+const FILE_PREVIEW_MAX_BYTES = 512 * 1024
+const FILE_PREVIEW_CONTEXT_LINES = 100
+const FILE_PREVIEW_FIRST_LINES = 500
+
+/** True only for a descendant. A prefix test would let `/workspaces-old` escape `/workspaces`. */
+function insideDirectory(filePath: string, root: string): boolean {
+	const relative = path.relative(root, filePath)
+	return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
+/**
+ * Serve source that an agent linked in its Markdown. The link format comes from
+ * coding-agent file references, but its path still arrives from an internet-facing
+ * client. Resolve both sides and accept only regular source files below the
+ * configured Conductor workspace root.
+ */
+async function serveFilePreview(req: http.IncomingMessage, res: http.ServerResponse, reference: string): Promise<void> {
+	const target = parseFileReference(reference)
+	if (!target) return json(req, res, 404, { error: 'source file not found' })
+
+	let filePath: string
+	let workspaceRoot: string
+	let size: number
+	try {
+		;[filePath, workspaceRoot] = await Promise.all([
+			fs.promises.realpath(target.path),
+			fs.promises.realpath(cfg.workspacesRoot)
+		])
+		if (!insideDirectory(filePath, workspaceRoot)) return json(req, res, 404, { error: 'source file not found' })
+		const info = await fs.promises.stat(filePath)
+		if (!info.isFile()) return json(req, res, 404, { error: 'source file not found' })
+		size = info.size
+	} catch {
+		return json(req, res, 404, { error: 'source file not found' })
+	}
+	if (size > FILE_PREVIEW_MAX_BYTES) return json(req, res, 413, { error: 'source file is too large to preview' })
+
+	let content: string
+	try {
+		const raw = await fs.promises.readFile(filePath)
+		if (raw.includes(0)) return json(req, res, 415, { error: 'source file is not text' })
+		content = new TextDecoder('utf-8', { fatal: true }).decode(raw)
+	} catch {
+		return json(req, res, 415, { error: 'source file is not text' })
+	}
+
+	const lines = content.split('\n')
+	const focus = target.line === null ? null : Math.min(target.line, lines.length)
+	const start = focus === null ? 0 : Math.max(0, focus - FILE_PREVIEW_CONTEXT_LINES - 1)
+	const end =
+		focus === null
+			? Math.min(lines.length, FILE_PREVIEW_FIRST_LINES)
+			: Math.min(lines.length, focus + FILE_PREVIEW_CONTEXT_LINES)
+	return json(req, res, 200, {
+		path: target.path,
+		line: focus,
+		lineStart: start + 1,
+		lineEnd: end,
+		totalLines: lines.length,
+		content: lines.slice(start, end).join('\n'),
+		truncated: start > 0 || end < lines.length
+	})
 }
 
 /**
@@ -952,6 +1022,11 @@ const server = http.createServer(async (req, res) => {
 			const localImage = routeParam(routes.localImage, req.method, pathname)
 			if (localImage) return serveLocalImage(req, res, localImage)
 
+			// GET /api/files/:reference — source linked from an agent reply. The Markdown component
+			// intercepts the browser navigation and fetches this endpoint with its auth header.
+			const fileReference = routeParam(routes.filePreview, req.method, pathname)
+			if (fileReference) return serveFilePreview(req, res, fileReference)
+
 			// GET /api/workspaces/:id — one workspace by id, archived included. `/api/state` lists
 			// only the live ones, so this is what lets the phone open a chat search found in work
 			// that has been put away: the worktree is gone, the transcript is not.
@@ -1132,6 +1207,7 @@ const server = http.createServer(async (req, res) => {
 					workspaceId?: string
 					agent?: ParkedAgentPatch
 					clientId?: string
+					queue?: boolean
 				}
 				const text = (body.text ?? '').trim()
 				if (!text) return json(req, res, 400, { error: 'empty prompt' })
@@ -1143,6 +1219,7 @@ const server = http.createServer(async (req, res) => {
 				// rather than extending it past what the phone said it would wait.
 				const deadline = Date.now() + sendBudget(req)
 				const agent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
+				const queue = body.queue === true
 				if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
 					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
 				}
@@ -1160,7 +1237,7 @@ const server = http.createServer(async (req, res) => {
 						const applied = await applyAgentPatch(ws, sessionId, agent)
 						if (!applied.ok) {
 							if (lockBlocked(applied.error)) {
-								const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
+								const queued = parkedPrompts.park(ws.id, sessionId, text, agent, queue)
 								return {
 									status: 202,
 									body: { ok: false, parked: true, queued, strategy: actuator.name, error: PARKED_ERROR }
@@ -1171,7 +1248,7 @@ const server = http.createServer(async (req, res) => {
 					}
 					// Retries live inside deliverPrompt, confirmed against the transcript each time,
 					// and inside the deadline this phone told us it would wait.
-					const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
+					const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now(), queue)
 					if (result.ok) {
 						// Whatever a queue was still holding has now been said by hand — the first
 						// prompt (including a failed entry retried from the chat), and any parked
@@ -1182,7 +1259,7 @@ const server = http.createServer(async (req, res) => {
 					}
 					if (lockBlocked(result.error)) {
 						// Settings (if any) already stuck, so the entry parks without them.
-						const queued = parkedPrompts.park(ws.id, sessionId, text)
+						const queued = parkedPrompts.park(ws.id, sessionId, text, undefined, queue)
 						return {
 							status: 202,
 							body: { ok: false, parked: true, queued, strategy: result.strategy, error: PARKED_ERROR }

@@ -133,7 +133,13 @@ export function Transcript({
 								key={p.id}
 								p={p}
 								onRetry={() =>
-									sendPrompt({ id: p.id, sessionId: p.sessionId, workspaceId: p.workspaceId, text: p.text })
+									sendPrompt({
+										id: p.id,
+										sessionId: p.sessionId,
+										workspaceId: p.workspaceId,
+										text: p.text,
+										queue: p.queue
+									})
 								}
 								onDismiss={() => removePending(p.id)}
 							/>

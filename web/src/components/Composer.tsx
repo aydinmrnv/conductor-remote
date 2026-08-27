@@ -62,10 +62,10 @@ export function Composer({
 
 	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
 	// feedback now, so we clear the box immediately instead of awaiting the send.
-	const send = () => {
+	const send = (queue = false) => {
 		const value = text.trim()
 		if (!value || !sessionId || !online) return
-		void sendPrompt({ sessionId, workspaceId, text: value })
+		void sendPrompt({ sessionId, workspaceId, text: value, queue })
 		setDraft(workspaceId, '')
 	}
 
@@ -138,9 +138,9 @@ export function Composer({
 					className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
 					onChange={e => setDraft(workspaceId, e.target.value)}
 					onKeyDown={e => {
-						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+						if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
 							e.preventDefault()
-							send()
+							send(e.metaKey || e.ctrlKey)
 						}
 					}}
 				/>
@@ -167,7 +167,7 @@ export function Composer({
 					{canStop && !text.trim() ? null : (
 						<button
 							type="button"
-							onClick={send}
+							onClick={() => send()}
 							disabled={disabled || !text.trim() || !online}
 							aria-label="Send"
 							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"

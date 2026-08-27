@@ -6,6 +6,7 @@ import type {
 	AgentPatch,
 	AgentResult,
 	CreateWorkspaceResult,
+	FilePreviewResponse,
 	LogsResponse,
 	MergeResult,
 	MessagesResponse,
@@ -157,6 +158,8 @@ export const client = {
 	repoIcon: (repoName: string): Promise<string> => cachedObjectUrl(routes.repoIcon.path(repoName)),
 	/** A local temporary image from chat Markdown. The relay validates the path before it reads it. */
 	localImage: (filePath: string): Promise<string> => cachedObjectUrl(routes.localImage.path(filePath)),
+	/** A bounded source preview for an absolute `path:line` link in chat Markdown. */
+	filePreview: (reference: string) => api<FilePreviewResponse>(routes.filePreview.path(reference)),
 	/** One workspace by id, archived included — how an archived chat is opened for reading. */
 	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
@@ -175,10 +178,17 @@ export const client = {
 	 * instead of typing again (src/sendonce.ts). Retry reuses the bubble's id, a fresh
 	 * send makes a fresh one, so saying the same thing twice on purpose still does.
 	 */
-	sendPrompt: (sessionId: string, text: string, workspaceId: string, agent?: AgentPatch, clientId?: string) =>
+	sendPrompt: (
+		sessionId: string,
+		text: string,
+		workspaceId: string,
+		agent?: AgentPatch,
+		clientId?: string,
+		queue?: boolean
+	) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
-			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent, clientId }) },
+			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent, clientId, queue }) },
 			SEND_TIMEOUT_MS
 		),
 	/**

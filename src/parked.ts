@@ -42,6 +42,8 @@ export interface ParkedPrompt {
 	text: string
 	/** Applied before the prompt on delivery, exactly as the phone would have. */
 	agent?: ParkedAgentPatch
+	/** Queue behind the current turn when the Mac unlocks. */
+	queue?: boolean
 	status: ParkedStatus
 	/** Real delivery failures with the Mac unlocked — lock re-checks don't count. */
 	attempts: number
@@ -100,7 +102,7 @@ export class ParkedPromptQueue {
 	 * Park a prompt (idempotent per chat + text, so a retap while locked revives
 	 * the entry instead of doubling it) and start watching for the unlock.
 	 */
-	park(workspaceId: string, sessionId: string, text: string, agent?: ParkedAgentPatch): ParkedPrompt {
+	park(workspaceId: string, sessionId: string, text: string, agent?: ParkedAgentPatch, queue = false): ParkedPrompt {
 		const existing = this.entries.find(e => e.sessionId === sessionId && e.text.trim() === text.trim())
 		if (existing) {
 			// A re-park is the user asking again: back to waiting with a clean slate.
@@ -108,6 +110,7 @@ export class ParkedPromptQueue {
 			existing.attempts = 0
 			existing.error = undefined
 			existing.agent = agent ?? existing.agent
+			existing.queue = queue
 			this.save()
 			void this.pump()
 			return existing
@@ -117,6 +120,7 @@ export class ParkedPromptQueue {
 			sessionId,
 			text,
 			agent,
+			queue,
 			status: 'waiting',
 			attempts: 0,
 			createdAt: Date.now(),
