@@ -141,18 +141,22 @@ async function fetchObjectUrl(path: string): Promise<string> {
 	return URL.createObjectURL(await res.blob())
 }
 
+function cachedObjectUrl(path: string): Promise<string> {
+	let result = objectUrlCache.get(path)
+	if (!result) {
+		result = fetchObjectUrl(path)
+		result.catch(() => objectUrlCache.delete(path))
+		objectUrlCache.set(path, result)
+	}
+	return result
+}
+
 export const client = {
 	state: () => api<StateResponse>(routes.state.path()),
 	/** A repo's icon as an object URL, fetched with the auth header (token never rides in the URL). Cached per repo. */
-	repoIcon: (repoName: string): Promise<string> => {
-		let p = objectUrlCache.get(repoName)
-		if (!p) {
-			p = fetchObjectUrl(routes.repoIcon.path(repoName))
-			p.catch(() => objectUrlCache.delete(repoName))
-			objectUrlCache.set(repoName, p)
-		}
-		return p
-	},
+	repoIcon: (repoName: string): Promise<string> => cachedObjectUrl(routes.repoIcon.path(repoName)),
+	/** A local temporary image from chat Markdown. The relay validates the path before it reads it. */
+	localImage: (filePath: string): Promise<string> => cachedObjectUrl(routes.localImage.path(filePath)),
 	/** One workspace by id, archived included — how an archived chat is opened for reading. */
 	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),

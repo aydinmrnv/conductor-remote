@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { writeAttachment } from './attachments.ts'
@@ -455,6 +456,52 @@ const MIME: Record<string, string> = {
 	'.png': 'image/png'
 }
 
+const LOCAL_IMAGE_TYPES: Record<string, string> = {
+	'.avif': 'image/avif',
+	'.gif': 'image/gif',
+	'.jpeg': 'image/jpeg',
+	'.jpg': 'image/jpeg',
+	'.png': 'image/png',
+	'.webp': 'image/webp'
+}
+const LOCAL_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+// `/tmp` is a symlink to `/private/tmp` on macOS. os.tmpdir() also covers tools that use the user's
+// per-login temporary directory instead. Resolve both before checking a requested file's real path.
+const LOCAL_IMAGE_ROOTS = [...new Set([os.tmpdir(), '/tmp'].map(root => fs.realpathSync(root)))]
+
+function insideRoot(filePath: string, root: string): boolean {
+	const rel = path.relative(root, filePath)
+	return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
+}
+
+async function serveLocalImage(
+	req: http.IncomingMessage,
+	res: http.ServerResponse,
+	requestedPath: string
+): Promise<void> {
+	const contentType = LOCAL_IMAGE_TYPES[path.extname(requestedPath).toLowerCase()]
+	if (!contentType || !path.isAbsolute(requestedPath)) return json(req, res, 404, { error: 'image not found' })
+
+	let filePath: string
+	let size: number
+	try {
+		filePath = await fs.promises.realpath(requestedPath)
+		if (!LOCAL_IMAGE_ROOTS.some(root => insideRoot(filePath, root)))
+			return json(req, res, 404, { error: 'image not found' })
+		const info = await fs.promises.stat(filePath)
+		if (!info.isFile()) return json(req, res, 404, { error: 'image not found' })
+		size = info.size
+	} catch {
+		return json(req, res, 404, { error: 'image not found' })
+	}
+	if (size > LOCAL_IMAGE_MAX_BYTES) return json(req, res, 413, { error: 'image is too large' })
+
+	res.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-store' })
+	fs.createReadStream(filePath)
+		.once('error', () => res.destroy())
+		.pipe(res)
+}
+
 /**
  * Successful GETs are conditional + compressed to keep the phone's polling cheap.
  * `no-cache` (not `no-store`) means the browser must revalidate on every tick —
@@ -898,6 +945,12 @@ const server = http.createServer(async (req, res) => {
 					res.end(data)
 				})
 			}
+
+			// GET /api/local-images/:path — temporary images linked from agent Markdown. The browser fetches this
+			// with its Authorization header and turns the reply into an object URL (Markdown.tsx), so the secret
+			// stays out of the image URL. `serveLocalImage` contains access to temporary image files only.
+			const localImage = routeParam(routes.localImage, req.method, pathname)
+			if (localImage) return serveLocalImage(req, res, localImage)
 
 			// GET /api/workspaces/:id — one workspace by id, archived included. `/api/state` lists
 			// only the live ones, so this is what lets the phone open a chat search found in work
