@@ -11,6 +11,27 @@ import { Spinner } from './ui.tsx'
 
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
 const PLUGINS = [remarkGfm, remarkBreaks]
+const TEMP_IMAGE_PREFIX = '/tmp/'
+
+/** Fetch temporary agent output through the relay, where the browser can attach its auth header. */
+function ChatImage({ src, alt, ...props }: React.ComponentProps<'img'>) {
+	const temporaryPath = typeof src === 'string' && src.startsWith(TEMP_IMAGE_PREFIX) ? src : null
+	const [objectUrl, setObjectUrl] = useState<string | null>(null)
+
+	useEffect(() => {
+		if (!temporaryPath) return
+		let disposed = false
+		void client.localImage(temporaryPath).then(url => {
+			if (!disposed) setObjectUrl(url)
+		})
+		return () => {
+			disposed = true
+		}
+	}, [temporaryPath])
+
+	if (temporaryPath) return objectUrl ? <img src={objectUrl} alt={alt ?? ''} {...props} /> : null
+	return <img src={src} alt={alt ?? ''} {...props} />
+}
 
 /** Agent file links are absolute source locations, unlike the PWA's own `/w/:id` routes. */
 function sourceReference(href: string | undefined): string | null {
@@ -160,7 +181,7 @@ function SourceLines({
 	)
 }
 
-const COMPONENTS = { a: ChatLink }
+const COMPONENTS = { a: ChatLink, img: ChatImage }
 
 /**
  * Chat markdown. GFM for tables/strikethrough/task lists, breaks so single
