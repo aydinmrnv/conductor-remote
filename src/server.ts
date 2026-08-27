@@ -525,6 +525,11 @@ async function serveFilePreview(req: http.IncomingMessage, res: http.ServerRespo
 	})
 }
 
+/** Per-file ceiling for a relay exposed through Tailscale Funnel. Large media belongs in a link. */
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+class PayloadTooLargeError extends Error {}
+
 /**
  * Successful GETs are conditional + compressed to keep the phone's polling cheap.
  * `no-cache` (not `no-store`) means the browser must revalidate on every tick —
@@ -573,6 +578,36 @@ async function readBody(req: http.IncomingMessage): Promise<string> {
 	const chunks: Buffer[] = []
 	for await (const c of req) chunks.push(c as Buffer)
 	return Buffer.concat(chunks).toString('utf8')
+}
+
+/** Read one uploaded file without allowing a token holder to fill the relay's memory. */
+async function readAttachmentBody(req: http.IncomingMessage): Promise<Buffer> {
+	const declared = Number(req.headers['content-length'])
+	if (Number.isFinite(declared) && declared > MAX_ATTACHMENT_BYTES) {
+		throw new PayloadTooLargeError(`attachments are limited to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB`)
+	}
+	const chunks: Buffer[] = []
+	let bytes = 0
+	for await (const chunk of req) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+		bytes += buffer.length
+		if (bytes > MAX_ATTACHMENT_BYTES) {
+			req.destroy()
+			throw new PayloadTooLargeError(`attachments are limited to ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB`)
+		}
+		chunks.push(buffer)
+	}
+	return Buffer.concat(chunks, bytes)
+}
+
+function attachmentHeaderName(req: http.IncomingMessage): string | null {
+	const encoded = req.headers['x-attachment-name']
+	if (typeof encoded !== 'string' || !encoded) return null
+	try {
+		return decodeURIComponent(encoded)
+	} catch {
+		return null
+	}
 }
 
 /** Hashed Vite assets are immutable and cache-forever; the shell/SW must never go stale. */
@@ -1143,6 +1178,34 @@ const server = http.createServer(async (req, res) => {
 				})
 			}
 
+			// POST /api/sessions/:id/attachments?workspaceId= — raw bytes from the phone.
+			// Conductor derives an attachment from this on-disk layout plus the composer
+			// token, so its own database stays read-only from this relay's point of view.
+			const uploadTo = routeParam(routes.uploadAttachment, req.method, pathname)
+			if (uploadTo) {
+				const sessionId = uploadTo
+				const ownerId = reads.sessionWorkspaceId(sessionId)
+				const workspaceId = url.searchParams.get('workspaceId') ?? ownerId
+				const ws = workspaceId ? reads.getWorkspace(workspaceId) : null
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				if (!ownerId || ownerId !== ws.id) return json(req, res, 409, { error: 'chat is not in that workspace' })
+				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
+				const name = attachmentHeaderName(req)
+				if (!name) return json(req, res, 400, { error: 'missing attachment name' })
+				const bytes = await readAttachmentBody(req)
+				if (!bytes.length) return json(req, res, 400, { error: 'empty attachment' })
+				const attachment = writeAttachment(ws.worktree, name, bytes)
+				return json(req, res, 200, {
+					ok: true,
+					attachment: {
+						name: attachment.name,
+						path: attachment.relPath,
+						bytes: attachment.bytes,
+						token: attachment.token
+					}
+				})
+			}
+
 			// POST /api/sessions/:id/prompt  { text, agent? } — agent is the phone's staged
 			// settings patch, applied before the prompt so the two can't come apart (and so
 			// both park together when the Mac turns out to be locked).
@@ -1320,6 +1383,7 @@ const server = http.createServer(async (req, res) => {
 
 			return json(req, res, 404, { error: 'no route', pathname })
 		} catch (err) {
+			if (err instanceof PayloadTooLargeError) return json(req, res, 413, { error: err.message })
 			// A refused UI turn is not a server fault and a retry is the right move, so it gets
 			// 503 + Retry-After rather than a 500 that reads as "the relay is broken".
 			if (err instanceof UiBusyError) {

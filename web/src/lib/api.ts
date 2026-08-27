@@ -25,6 +25,7 @@ import type {
 	StateResponse,
 	StatusResult,
 	StopResult,
+	UploadAttachmentResult,
 	WorkspaceDiff,
 	WorkspaceResponse
 } from './types.ts'
@@ -125,6 +126,33 @@ async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIM
 	return res.json() as Promise<T>
 }
 
+/** Uploads use raw bytes so an image does not grow by a third through JSON/base64. */
+async function upload<T>(path: string, file: File): Promise<T> {
+	const token = getToken()
+	let res: Response
+	try {
+		res = await fetch(path, {
+			method: 'POST',
+			body: file,
+			signal: AbortSignal.timeout(ACTION_TIMEOUT_MS),
+			headers: {
+				authorization: `Bearer ${token ?? ''}`,
+				'content-type': file.type || 'application/octet-stream',
+				'x-attachment-name': encodeURIComponent(file.name),
+				'x-client-timeout-ms': String(ACTION_TIMEOUT_MS)
+			}
+		})
+	} catch (err) {
+		if (err instanceof DOMException && err.name === 'TimeoutError') throw new ApiError('Upload timed out', 0)
+		throw err
+	}
+	if (!res.ok) {
+		const body = (await res.json().catch(() => ({}))) as { error?: string }
+		throw new ApiError(body.error || `HTTP ${res.status}`, res.status)
+	}
+	return res.json() as Promise<T>
+}
+
 /**
  * Fetch an image endpoint with the auth header and hand back an object URL — keeps the token out of the
  * image `src` (a `?token=` query string can leak into proxy/Funnel access logs and browser history). One
@@ -161,6 +189,12 @@ export const client = {
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
 	messages: (sessionId: string, after: number) =>
 		api<MessagesResponse>(`${routes.messages.path(sessionId)}?after=${after}`),
+	/** Stage one phone file in the selected workspace, then add its returned token to a prompt. */
+	uploadAttachment: (sessionId: string, workspaceId: string, file: File) =>
+		upload<UploadAttachmentResult>(
+			`${routes.uploadAttachment.path(sessionId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+			file
+		),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(routes.diff.path(workspaceId)),
 	/**
 	 * The relay retries a failed send itself (and confirms each try against the

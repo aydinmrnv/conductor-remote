@@ -53,7 +53,8 @@ check(
 check('separators cannot survive', !/[/\\]/.test(attachmentName('a/b\\c')), attachmentName('a/b\\c'))
 check('a leading dot cannot survive', !attachmentName('../../etc/passwd').startsWith('.'))
 check('a name of nothing but dots still has a name', attachmentName('...') === 'attachment')
-check('a long title is cut to fit a filename', attachmentName('x'.repeat(400)).length <= 120)
+check('a long title is cut to fit a filename', Buffer.byteLength(attachmentName('x'.repeat(400))) <= 120)
+check('a unicode title is cut by bytes', Buffer.byteLength(attachmentName('😀'.repeat(400))) <= 120)
 
 // ── writing one ─────────────────────────────────────────────────────────────────
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-attachments-'))
@@ -78,6 +79,9 @@ try {
 	const second = writeAttachment(root, 'Transcript of Select product colors.md', '# other\n')
 	check('the same name twice does not overwrite', fs.readFileSync(written.absPath, 'utf8') === '# hi\n')
 	check('…because each one gets its own directory', path.dirname(second.absPath) !== path.dirname(written.absPath))
+
+	const image = writeAttachment(root, 'image.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+	check('binary bytes are preserved', fs.readFileSync(image.absPath).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])))
 } finally {
 	fs.rmSync(root, { recursive: true, force: true })
 }
