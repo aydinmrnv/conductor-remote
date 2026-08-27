@@ -25,8 +25,8 @@ const execFileP = promisify(execFile)
 export const HELPER_PATH = '/usr/local/libexec/conductor-remote-nosleep'
 
 /**
- * Where the armed window records itself: `<pid> <expiry-epoch> <start-token>` (expiry
- * 0 = until killed). Written by root, mode 0644, because the relay has to *read* it on
+ * Where the armed window records itself: `<pid> <expiry-epoch> <start-token> <prevent-lock>`
+ * (expiry 0 = until killed). Written by root, mode 0644, because the relay has to *read* it on
  * every status poll and a sudo round-trip per poll would be absurd. It is the lock as
  * well as the record — see the one-owner note on NOSLEEP_BODY.
  *
@@ -36,7 +36,8 @@ export const HELPER_PATH = '/usr/local/libexec/conductor-remote-nosleep'
  * as root — so `kill -0` succeeds against whatever inherited the number, and `--stop`
  * would then SIGTERM an unrelated root process. Readers that only want the pid and the
  * expiry (`src/nosleep.ts` ▸ readPidfile) can ignore it; a two-field file from an older
- * version still parses, and skips the check.
+ * version still parses, and skips the check. The fourth field records whether this
+ * window also holds the display assertion that blocks the automatic screen lock.
  */
 export const PIDFILE_PATH = '/var/run/conductor-remote-nosleep.pid'
 
@@ -46,11 +47,14 @@ export const PIDFILE_PATH = '/var/run/conductor-remote-nosleep.pid'
  * file that reads fine and never takes effect.
  */
 export const SUDOERS_PATH = '/etc/sudoers.d/conductor-remote'
+/** Fixed absolute path because this body runs through a passwordless root helper. */
+export const CAFFEINATE_PATH = '/usr/bin/caffeinate'
 
 /**
  * `$1` = seconds to stay awake, 0 = until killed, or one of `--check` / `--stop`.
  * `$2` = optional display label ("90m") echoed back in the confirmation, validated to
  * the same charset the CLI accepts so nothing arbitrary reaches the terminal.
+ * `$3` = 1 to block the automatic screen lock for the window, 0 to allow it.
  *
  * Restore is on the EXIT trap only; INT/TERM/HUP just `exit`, so a signal can't run
  * the restore twice. The captured values are read *before* anything changes and put
@@ -114,8 +118,10 @@ export const NOSLEEP_BODY = [
 	'fi',
 	'secs=$arg',
 	'label=${2:-}',
+	'preventlock=${3:-1}',
 	"case \"$secs\" in '' | *[!0-9]*) echo 'nosleep: seconds must be digits (0 = until killed)' >&2; exit 64 ;; esac",
 	'case "$label" in *[!0-9smh]*) label=\'\' ;; esac',
+	'case "$preventlock" in 0 | 1) ;; *) echo \'nosleep: prevent-screen-lock must be 0 or 1\' >&2; exit 64 ;; esac',
 	'',
 	'# Take over from any incumbent BEFORE capturing, or we would capture its flipped',
 	'# values and restore those — the one way this leaves a Mac unable to sleep.',
@@ -139,8 +145,10 @@ export const NOSLEEP_BODY = [
 	"ds=$(pmset -g | awk '/SleepDisabled/{print $2;exit}')",
 	'',
 	"sleeper=''",
+	"displaykeeper=''",
 	'cleanup() {',
 	'\tif [ -n "$sleeper" ]; then kill "$sleeper" 2>/dev/null || true; fi',
+	'\tif [ -n "$displaykeeper" ]; then kill "$displaykeeper" 2>/dev/null || true; wait "$displaykeeper" 2>/dev/null || true; fi',
 	'\tpmset -b standby "${sb:-1}" powernap "${pn:-1}"',
 	'\tpmset -a disablesleep "${ds:-0}"',
 	// Only clear the record if it is still ours: a successor that already took over
@@ -155,10 +163,20 @@ export const NOSLEEP_BODY = [
 	'pmset -b standby 0 powernap 0',
 	'pmset -a disablesleep 1',
 	'',
+	'# ScreenSaverDaemon consults PreventUserIdleDisplaySleep before starting the idle',
+	'# screen saver that locks the session. The assertion is process-scoped, so macOS',
+	'# drops it even if the helper is killed before its EXIT trap can run.',
+	'if [ "$preventlock" = 1 ]; then',
+	`\t${CAFFEINATE_PATH} -d -w "$$" &`,
+	'\tdisplaykeeper=$!',
+	'\tsleep 0.1',
+	'\tif ! kill -0 "$displaykeeper" 2>/dev/null; then echo "nosleep: could not block the automatic screen lock" >&2; exit 69; fi',
+	'fi',
+	'',
 	'until=0',
 	'if [ "$secs" -gt 0 ]; then until=$(( $(date +%s) + secs )); fi',
 	// 0644 so the relay can poll the state without a sudo round-trip per tick.
-	'printf \'%s %s %s\\n\' "$$" "$until" "$(procStart $$)" > "$pidfile" && chmod 644 "$pidfile"',
+	'printf \'%s %s %s %s\\n\' "$$" "$until" "$(procStart $$)" "$preventlock" > "$pidfile" && chmod 644 "$pidfile"',
 	'',
 	'# A long window is ambiguous without the weekday: "until 15:45" reads as today.',
 	'clock() {',
@@ -177,6 +195,11 @@ export const NOSLEEP_BODY = [
 	'else',
 	'\techo "✓ Sleep disabled at $(date \'+%H:%M\') (incl. lid closed) — until you press Ctrl-C."',
 	'\tsleep 2147483647 &',
+	'fi',
+	'if [ "$preventlock" = 1 ]; then',
+	'\techo "⚠ Automatic screen lock is disabled for this window. Anyone with physical access can use this Mac."',
+	'else',
+	'\techo "Automatic screen lock remains enabled (prevent-screen-lock=off)."',
 	'fi',
 	'sleeper=$!',
 	'wait "$sleeper"'

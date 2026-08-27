@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -20,8 +21,15 @@ export interface Config {
 	token: string
 	/** Prompt delivery strategy: 'applescript' (default, focused session) or 'sidecar' (precise per-session IPC). */
 	writeStrategy: WriteStrategy
+	/** Block the automatic screen lock during phone-armed nosleep windows. */
+	preventScreenLock: boolean
 	/** Directory of built PWA assets to serve. */
 	publicDir: string
+}
+
+/** The CLI and daemon share one on/off setting. Only `off` opts out. */
+export function preventScreenLockEnabled(raw = process.env.PREVENT_SCREEN_LOCK): boolean {
+	return raw?.trim().toLowerCase() !== 'off'
 }
 
 /**
@@ -30,6 +38,39 @@ export interface Config {
  */
 export function stateDir(): string {
 	return path.join(home, 'Library', 'Application Support', 'conductor-remote')
+}
+
+/** The runtime configuration baked into the installed LaunchAgent, or an empty object. */
+export function installedServiceEnvironment(): Record<string, string> {
+	const plist = path.join(home, 'Library', 'LaunchAgents', 'no.adluna.conductor-remote.plist')
+	try {
+		const out = execFileSync('plutil', ['-convert', 'json', '-o', '-', plist], {
+			encoding: 'utf8',
+			stdio: 'pipe'
+		})
+		const env = JSON.parse(out)?.EnvironmentVariables
+		return env && typeof env === 'object' ? (env as Record<string, string>) : {}
+	} catch {
+		return {}
+	}
+}
+
+/** Build the environment for a one-setting service update without changing its other knobs. */
+export function serviceEnvironmentWithSetting(
+	ambient: NodeJS.ProcessEnv,
+	installed: Record<string, string>,
+	configKeys: Iterable<string>,
+	key: string,
+	value: string
+): NodeJS.ProcessEnv {
+	const next = { ...ambient }
+	const known = new Set(configKeys)
+	for (const configKey of known) delete next[configKey]
+	for (const [installedKey, installedValue] of Object.entries(installed)) {
+		if (known.has(installedKey)) next[installedKey] = installedValue
+	}
+	next[key] = value
+	return next
 }
 
 /** Where a generated token is persisted so a phone's saved URL stays valid across relay restarts. */
@@ -85,6 +126,7 @@ export function loadConfig(): Config {
 		host,
 		token: resolveToken(),
 		writeStrategy,
+		preventScreenLock: preventScreenLockEnabled(),
 		publicDir: resolvePublicDir()
 	}
 }

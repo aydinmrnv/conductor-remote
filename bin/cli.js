@@ -62,11 +62,10 @@ function usage() {
 			'                                           read transcripts and drive workspaces via the relay',
 			'  conductor-remote service <subcommand>    manage the login LaunchAgent',
 			'      install | uninstall | restart | status',
-			'  conductor-remote config                  what the daemon is actually configured with, and',
-			'                                           where each value came from (read-only)',
+			'  conductor-remote config                  show the daemon configuration and each value source',
+			'      config set <setting> <value>          persist one setting and restart the relay',
 			'  conductor-remote logs [-n N] [--no-follow]  tail the running relay’s logs (follows by default)',
-			'  conductor-remote nosleep [duration]      keep this Mac awake (incl. lid-closed) until',
-			'                                           Ctrl-C or the duration (e.g. 1h, 90m)',
+			'  conductor-remote nosleep [duration]      keep this Mac awake until Ctrl-C or the duration',
 			'      nosleep setup [--uninstall]          one-time install so it stops asking for a',
 			'                                           password (root helper + scoped sudoers rule)',
 			'      nosleep status                       what is installed, and is sleep blocked now',
@@ -79,6 +78,7 @@ function usage() {
 			'  --hostname <name>         pin the Tailscale device name so the phone URL never drifts [RELAY_HOSTNAME]',
 			'  --token <secret>          pin the shared secret (default: generated + persisted) [RELAY_TOKEN]',
 			'  --write-strategy <s>      applescript (default) | sidecar                        [WRITE_STRATEGY]',
+			'  --prevent-screen-lock <s> on (default) | off                         [PREVENT_SCREEN_LOCK]',
 			'  --auto-update <mode>      auto (default) | check | off                           [AUTO_UPDATE]',
 			'  --db <path>               Conductor state DB                                     [CONDUCTOR_DB]',
 			'  --workspaces <path>       worktree root                                          [CONDUCTOR_WORKSPACES]',
@@ -109,9 +109,9 @@ switch (cmd) {
 		await import(resolveEntry('../dist-node/scripts/nosleep.js', '../scripts/nosleep.ts'))
 		break
 	case 'config':
-		// Read-only view of the daemon's effective configuration. A service.ts subcommand, re-shaped the
-		// same way `logs` is, because the answer lives in the plist that script writes.
-		process.argv = [process.argv[0], process.argv[1], 'config']
+		// Configuration lives in the LaunchAgent plist managed by service.ts. Pass through
+		// `set <name> <value>` when present so reads and writes use the same source.
+		process.argv = [process.argv[0], process.argv[1], 'config', ...rest]
 		await import(resolveEntry('../dist-node/scripts/service.js', '../scripts/service.ts'))
 		break
 	case 'logs':

@@ -734,7 +734,7 @@ const server = http.createServer(async (req, res) => {
 				// truncates to 0 — an unbounded window from a request that looked bounded.
 				if (!Number.isInteger(seconds) || seconds < 1)
 					return json(req, res, 400, { error: 'need a whole number of seconds >= 1' })
-				const result = await armNoSleep(seconds)
+				const result = await armNoSleep(seconds, cfg.preventScreenLock)
 				return json(req, res, result.ok ? 200 : result.state.available ? 502 : 409, result)
 			}
 

@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { installedServiceEnvironment, serviceEnvironmentWithSetting } from '../src/config.ts'
 import { packageRoot } from '../src/pkg-root.ts'
 import type { ExposeMode } from '../src/tailscale.ts'
 import {
@@ -44,6 +45,7 @@ const FLAG_ENV: Record<string, string> = {
 	'--hostname': 'RELAY_HOSTNAME',
 	'--token': 'RELAY_TOKEN',
 	'--write-strategy': 'WRITE_STRATEGY',
+	'--prevent-screen-lock': 'PREVENT_SCREEN_LOCK',
 	'--auto-update': 'AUTO_UPDATE',
 	'--auto-update-interval': 'AUTO_UPDATE_INTERVAL_MINUTES',
 	'--funnel-watchdog': 'FUNNEL_WATCHDOG',
@@ -66,6 +68,10 @@ function applyFlags(argv: string[]): void {
 		const value = eq === -1 ? argv[++i] : arg.slice(eq + 1)
 		if (value === undefined) {
 			console.error(`flag ${name} needs a value (e.g. ${name} <value>)`)
+			process.exit(1)
+		}
+		if (name === '--prevent-screen-lock' && value !== 'on' && value !== 'off') {
+			console.error(`flag ${name} must be on or off`)
 			process.exit(1)
 		}
 		process.env[envKey] = value
@@ -154,6 +160,7 @@ function buildPlist(): string {
 	// value makes the daemon's own environment the answer, so nothing depends on write ordering.
 	if (process.env.EXPOSE) envEntries.push(['EXPOSE', process.env.EXPOSE])
 	if (process.env.WRITE_STRATEGY) envEntries.push(['WRITE_STRATEGY', process.env.WRITE_STRATEGY])
+	if (process.env.PREVENT_SCREEN_LOCK) envEntries.push(['PREVENT_SCREEN_LOCK', process.env.PREVENT_SCREEN_LOCK])
 	if (process.env.RELAY_HOST) envEntries.push(['RELAY_HOST', process.env.RELAY_HOST])
 	if (process.env.RELAY_PORT) envEntries.push(['RELAY_PORT', process.env.RELAY_PORT])
 	if (process.env.AUTO_UPDATE) envEntries.push(['AUTO_UPDATE', process.env.AUTO_UPDATE])
@@ -447,6 +454,13 @@ function install(): void {
 	fs.mkdirSync(logDir, { recursive: true })
 	fs.writeFileSync(plistPath, buildPlist())
 	reloadAgent()
+	const changedSetting = process.env.CONDUCTOR_REMOTE_CONFIG_SET
+	if (changedSetting) {
+		if (changedSetting === 'expose' || changedSetting === 'port' || changedSetting === 'hostname') ensureTailscale()
+		console.info(`✓ set ${changedSetting}; the relay restarted with the new value.`)
+		console.info('  Check it with: conductor-remote config')
+		return
+	}
 	console.info(`✓ installed LaunchAgent ${LABEL}`)
 	console.info(`  plist: ${plistPath}`)
 	console.info(`  logs:  ${logDir}/relay.log`)
@@ -486,16 +500,7 @@ function restart(): void {
  * believes something else — which is exactly the bug that made EXPOSE a plist entry.
  */
 function readPlistEnv(): Record<string, string> {
-	try {
-		const out = execFileSync('plutil', ['-convert', 'json', '-o', '-', plistPath], {
-			encoding: 'utf8',
-			stdio: 'pipe'
-		})
-		const env = JSON.parse(out)?.EnvironmentVariables
-		return env && typeof env === 'object' ? (env as Record<string, string>) : {}
-	} catch {
-		return {}
-	}
+	return installedServiceEnvironment()
 }
 
 interface Knob {
@@ -507,6 +512,8 @@ interface Knob {
 	/** Where `fallback` came from, when it is not a plain default. */
 	fallbackSource?: (env: Record<string, string>) => string
 }
+
+const CONFIG_KEYS = new Map(Object.entries(FLAG_ENV).map(([flag, env]) => [flag.slice(2), env]))
 
 const HOME = os.homedir()
 const tilde = (p: string): string => (p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p)
@@ -530,6 +537,7 @@ const KNOBS: Knob[] = [
 	{ name: 'port', env: 'RELAY_PORT', fallback: () => '8787' },
 	{ name: 'host', env: 'RELAY_HOST', fallback: () => '127.0.0.1' },
 	{ name: 'write-strategy', env: 'WRITE_STRATEGY', fallback: () => 'applescript' },
+	{ name: 'prevent-screen-lock', env: 'PREVENT_SCREEN_LOCK', fallback: () => 'on' },
 	{ name: 'auto-update', env: 'AUTO_UPDATE', fallback: () => 'auto' },
 	{ name: 'auto-update-interval', env: 'AUTO_UPDATE_INTERVAL_MINUTES', fallback: () => '5 (minutes)' },
 	{
@@ -552,15 +560,48 @@ const KNOBS: Knob[] = [
 	}
 ]
 
-/**
- * What is this daemon actually configured with, and where did each value come from.
- *
- * Read-only on purpose. Every knob is written by `service install`, and a second write path for the
- * same state is how the plist and the `expose` file came to disagree in the first place. What was
- * missing was the ability to *see* the disagreement, so that is what this adds — including a live
- * cross-check of the Tailscale posture against the configured one.
- */
+/** Set one daemon knob while preserving every other value already baked into the plist. */
+function setConfig(args: string[]): void {
+	const [name, value, ...extra] = args
+	const envKey = name ? CONFIG_KEYS.get(name) : undefined
+	if (!name || value === undefined || extra.length > 0) {
+		console.error('usage: conductor-remote config set <setting> <value>')
+		process.exit(1)
+	}
+	if (!envKey) {
+		console.error(`config set: unknown setting "${name}"\n  known: ${[...CONFIG_KEYS.keys()].join(', ')}`)
+		process.exit(1)
+	}
+	if (name === 'prevent-screen-lock' && value !== 'on' && value !== 'off') {
+		console.error('config set: prevent-screen-lock must be on or off')
+		process.exit(1)
+	}
+	if (!fs.existsSync(plistPath)) {
+		console.error('config set: the service is not installed. Run `conductor-remote service install` first.')
+		process.exit(1)
+	}
+
+	// Re-run install in a fresh process so module-level values such as RELAY_PORT see
+	// the new environment. Start from the plist, which protects unrelated settings
+	// from ambient shell variables and from being reset to defaults.
+	const childEnv = serviceEnvironmentWithSetting(process.env, readPlistEnv(), CONFIG_KEYS.values(), envKey, value)
+	childEnv.CONDUCTOR_REMOTE_CONFIG_SET = name
+	const cli = path.join(projectDir, 'bin', 'cli.js')
+	const result = spawnSync(process.execPath, [cli, 'service', 'install'], { env: childEnv, stdio: 'inherit' })
+	if (result.error) console.error(`config set: could not restart the service (${result.error.message})`)
+	process.exit(result.status ?? 1)
+}
+
+/** What the daemon is configured with, where values came from, and an optional setter. */
 function config(): void {
+	if (process.argv[3] === 'set') {
+		setConfig(process.argv.slice(4))
+		return
+	}
+	if (process.argv[3] !== undefined) {
+		console.error('usage: conductor-remote config [set <setting> <value>]')
+		process.exit(1)
+	}
 	if (!fs.existsSync(plistPath)) {
 		console.info(`plist:  (not installed)\n\nRun \`conductor-remote service install\` first.`)
 		return
@@ -603,7 +644,7 @@ function config(): void {
 		console.info(`  ${r.name.padEnd(width)}  ${r.value.padEnd(valueWidth)}  ${r.source}`)
 	}
 	console.info('\n  (values come from the daemon\u2019s own plist environment, not this shell\u2019s)')
-	console.info('  change one with: conductor-remote service install --<setting> <value>')
+	console.info('  change one with: conductor-remote config set <setting> <value>')
 
 	// The cross-check worth having. A posture the relay believes and a Tailscale that is doing something
 	// else is invisible in every other command, and it is self-healing in the wrong direction: the funnel
