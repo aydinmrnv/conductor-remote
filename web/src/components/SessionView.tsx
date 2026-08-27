@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Plus, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 import { useAnyWorkspace, useSessions, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -195,6 +195,16 @@ function SessionTabs({
 	onNewChat: () => void
 	creating: boolean
 }) {
+	const activeTab = useRef<HTMLButtonElement>(null)
+
+	// Opening a workspace can restore a session near the end of a long tab row. Keep its
+	// selected tab visible on first paint and after each tab change, without moving the
+	// transcript or the rest of the page.
+	useLayoutEffect(() => {
+		if (!activeId) return
+		activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+	}, [activeId])
+
 	return (
 		<nav className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg px-3 py-2">
 			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
@@ -202,6 +212,7 @@ function SessionTabs({
 					<button
 						type="button"
 						key={s.id}
+						ref={s.id === activeId ? activeTab : undefined}
 						onClick={() => onSelect(s.id)}
 						className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
 					>

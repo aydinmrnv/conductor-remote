@@ -234,10 +234,11 @@ function NotificationsRow() {
 	)
 }
 
-const AWAKE_CHOICES: { label: string; seconds: number }[] = [
+const AWAKE_CHOICES: { label: string; seconds: number; className?: string }[] = [
 	{ label: '1h', seconds: 3600 },
-	{ label: '4h', seconds: 4 * 3600 },
-	{ label: '8h', seconds: 8 * 3600 }
+	{ label: '4h', seconds: 4 * 3600, className: 'hidden min-[400px]:block' },
+	{ label: '8h', seconds: 8 * 3600 },
+	{ label: '16h', seconds: 16 * 3600 }
 ]
 
 /** "until 21:45", weekday-prefixed when the window crosses midnight — same rule the CLI prints. */
@@ -334,7 +335,10 @@ function MacRow() {
 										return client.armNoSleep(c.seconds)
 									})
 								}
-								className="rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-40"
+								className={cn(
+									'rounded-lg border border-border px-2.5 py-1 text-xs active:bg-surface disabled:opacity-40',
+									c.className
+								)}
 							>
 								{c.label}
 							</button>
