@@ -141,7 +141,20 @@ export function Transcript({
 						{showQueued ? (
 							<QueuedEntry
 								queued={showQueued}
-								onRetry={sessionId ? () => sendPrompt({ sessionId, workspaceId, text: showQueued.text }) : undefined}
+								// Keyed on the entry being retried, not re-rolled per tap, so a Retry whose
+								// answer goes missing can be tapped again without sending twice — the same
+								// identity a failed bubble gets from its own id (web/src/lib/api.ts).
+								onRetry={
+									sessionId
+										? () =>
+												sendPrompt({
+													id: `queued:${showQueued.sessionId ?? showQueued.workspaceId}:${showQueued.createdAt}`,
+													sessionId,
+													workspaceId,
+													text: showQueued.text
+												})
+										: undefined
+								}
 								onDismiss={() => dismiss(showQueued)}
 							/>
 						) : null}

@@ -165,10 +165,16 @@ export const client = {
 	 * riding in the same request so the relay applies it first and the prompt only
 	 * goes if it stuck — and so a locked Mac parks the two together.
 	 */
-	sendPrompt: (sessionId: string, text: string, workspaceId: string, agent?: AgentPatch) =>
+	/**
+	 * `clientId` is the pending bubble's own id, and it is what stops Retry doubling a
+	 * prompt: the relay answers a repeat of the same id with the first send's outcome
+	 * instead of typing again (src/sendonce.ts). Retry reuses the bubble's id, a fresh
+	 * send makes a fresh one, so saying the same thing twice on purpose still does.
+	 */
+	sendPrompt: (sessionId: string, text: string, workspaceId: string, agent?: AgentPatch, clientId?: string) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
-			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent }) },
+			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent, clientId }) },
 			SEND_TIMEOUT_MS
 		),
 	/**

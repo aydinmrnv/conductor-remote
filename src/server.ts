@@ -43,6 +43,7 @@ import { attachPrStatus } from './pr.ts'
 import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
+import { SendOnce } from './sendonce.ts'
 import { readSettings, writeSettings } from './settings.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
 import { renderTranscript } from './transcript.ts'
@@ -390,6 +391,17 @@ async function applyAgentPatch(
 	}
 	return { ok: true }
 }
+
+/**
+ * One prompt per tap, however many requests carry it (src/sendonce.ts). Keyed on the
+ * phone's own `PendingMessage.id`, which Retry reuses and a fresh send re-rolls, so a
+ * repeat someone meant still goes twice. Only an answer the phone would treat as final
+ * is remembered: a real failure has to stay retryable, or Retry does nothing for ten
+ * minutes and the prompt is lost for good rather than merely doubled.
+ */
+const sendOnce = new SendOnce<{ status: number; body: SendResult }>({
+	keep: answer => answer.status === 200 || answer.status === 202
+})
 
 /** What the phone is told when its prompt is parked instead of failed. */
 const PARKED_ERROR = 'The Mac is locked — the relay parked the prompt and will send it when the Mac is unlocked.'
@@ -1066,6 +1078,7 @@ const server = http.createServer(async (req, res) => {
 					text?: string
 					workspaceId?: string
 					agent?: ParkedAgentPatch
+					clientId?: string
 				}
 				const text = (body.text ?? '').trim()
 				if (!text) return json(req, res, 400, { error: 'empty prompt' })
@@ -1080,45 +1093,51 @@ const server = http.createServer(async (req, res) => {
 				if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
 					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
 				}
-				if (agent) {
-					const applied = await applyAgentPatch(ws, sessionId, agent)
-					if (!applied.ok) {
-						if (lockBlocked(applied.error)) {
-							const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
-							return json(req, res, 202, {
-								ok: false,
-								parked: true,
-								queued,
-								strategy: actuator.name,
-								error: PARKED_ERROR
-							})
+				// One prompt per intent (src/sendonce.ts). Everything that can *say something
+				// to Conductor* sits inside, so an answer the phone never heard is replayed
+				// rather than re-performed — including the parked branches, since parking the
+				// same intent twice queues the same prompt twice for the unlock.
+				if (body.clientId && sendOnce.recall(body.clientId)) {
+					console.info(
+						`[relay] send to ${ws.branch ?? ws.id} already delivered for this tap — answering, not resending`
+					)
+				}
+				const answer = await sendOnce.run(body.clientId, async () => {
+					if (agent) {
+						const applied = await applyAgentPatch(ws, sessionId, agent)
+						if (!applied.ok) {
+							if (lockBlocked(applied.error)) {
+								const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
+								return {
+									status: 202,
+									body: { ok: false, parked: true, queued, strategy: actuator.name, error: PARKED_ERROR }
+								}
+							}
+							return { status: 502, body: { ok: false, strategy: actuator.name, error: applied.error } }
 						}
-						return json(req, res, 502, { ok: false, strategy: actuator.name, error: applied.error })
 					}
-				}
-				// Retries live inside deliverPrompt, confirmed against the transcript each time,
-				// and inside the deadline this phone told us it would wait.
-				const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
-				if (result.ok) {
-					// Whatever a queue was still holding has now been said by hand — the first
-					// prompt (including a failed entry retried from the chat), and any parked
-					// copy of this exact text, which delivering again would double.
-					firstPrompts.forget(ws.id)
-					parkedPrompts.forgetDelivered(sessionId, text)
-					return json(req, res, 200, result)
-				}
-				if (lockBlocked(result.error)) {
-					// Settings (if any) already stuck, so the entry parks without them.
-					const queued = parkedPrompts.park(ws.id, sessionId, text)
-					return json(req, res, 202, {
-						ok: false,
-						parked: true,
-						queued,
-						strategy: result.strategy,
-						error: PARKED_ERROR
-					})
-				}
-				return json(req, res, 502, result)
+					// Retries live inside deliverPrompt, confirmed against the transcript each time,
+					// and inside the deadline this phone told us it would wait.
+					const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
+					if (result.ok) {
+						// Whatever a queue was still holding has now been said by hand — the first
+						// prompt (including a failed entry retried from the chat), and any parked
+						// copy of this exact text, which delivering again would double.
+						firstPrompts.forget(ws.id)
+						parkedPrompts.forgetDelivered(sessionId, text)
+						return { status: 200, body: result }
+					}
+					if (lockBlocked(result.error)) {
+						// Settings (if any) already stuck, so the entry parks without them.
+						const queued = parkedPrompts.park(ws.id, sessionId, text)
+						return {
+							status: 202,
+							body: { ok: false, parked: true, queued, strategy: result.strategy, error: PARKED_ERROR }
+						}
+					}
+					return { status: 502, body: result }
+				})
+				return json(req, res, answer.status, answer.body)
 			}
 
 			// POST /api/sessions/:id/split { prompt?, includeThinking?, includeTools? }

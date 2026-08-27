@@ -29,7 +29,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { stateDir } from './config.ts'
-import type { Reads } from './reads.ts'
+import type { Reads, SessionState } from './reads.ts'
 import type { PushSubscription, VapidKeys } from './webpush.ts'
 import { generateVapidKeys, MAX_PAYLOAD_BYTES, sendPush } from './webpush.ts'
 
@@ -293,49 +293,133 @@ function oneLine(text: string): string {
 
 // --- the watcher ---
 
-/** Last seen status per session. Null means "re-baseline on the next tick" (nobody was subscribed). */
-let previous: Map<string, string | null> | null = null
-/** Transitions seen once and awaiting a second tick's confirmation. */
-const armed = new Map<string, 'done' | 'error'>()
+/**
+ * Everything this chat records about a person having asked for something, as one
+ * comparable string — the turn head *and* the last user message, because steering a
+ * running turn moves only the second (`queue_order` is null on a steering message, see
+ * reads.ts). Empty when the chat records neither, which is what `selfScheduled` reads
+ * as "no evidence" rather than as "nobody asked".
+ */
+function askedBy(state: { turnStartedAt: string | null; lastUserMessageAt: string | null }): string {
+	if (!state.turnStartedAt && !state.lastUserMessageAt) return ''
+	return `${state.turnStartedAt ?? ''}|${state.lastUserMessageAt ?? ''}`
+}
+
+/** A chat whose transition has been confirmed and is worth a notification. */
+export interface DueNotification {
+	state: SessionState
+	kind: 'done' | 'error'
+}
+
+/**
+ * The status state machine, kept apart from the store and the network so it can be
+ * driven a tick at a time by `scripts/check-notify.ts`. Every rule in it is a rule
+ * about *not* notifying, and each one is a nuisance or a silence that nothing in the
+ * type system can catch.
+ */
+export class TurnWatcher {
+	/** Last seen status per chat. Null means "re-baseline on the next step" (nobody was subscribed). */
+	private previous: Map<string, string | null> | null = null
+	/** Transitions seen once and awaiting a second step's confirmation. */
+	private readonly armed = new Map<string, 'done' | 'error'>()
+	/**
+	 * Who-asked, as of the last turn we said "done" about, per chat — what makes a
+	 * self-scheduled turn quiet.
+	 *
+	 * `working → idle` is still the only signal Conductor gives, and it is still the right
+	 * one for a turn *someone asked for*. It is the wrong one for a turn the agent
+	 * scheduled itself: a `/loop` starts a fresh turn every few minutes for as long as it
+	 * runs, each one ends properly, and each one is news to nobody. Measured on this Mac —
+	 * one looping chat pushed roughly every five minutes from early evening until past
+	 * midnight, and again all morning, which was most of the notifications the phone got
+	 * at all.
+	 *
+	 * The tell is in the data rather than in a guess about intent. A turn is headed by a
+	 * `session_messages` row with `queue_order` set and a loop's next lap writes nothing
+	 * at all, so `askedBy` below sits still while `status` cycles. The first lap after you
+	 * type something notifies. Every lap the agent gave itself is quiet, until you say the
+	 * next thing. An `error` is exempt — a loop that breaks is worth hearing about however
+	 * it started.
+	 *
+	 * A chat with nothing to compare (no turn head *and* no user message — dormant since
+	 * before `queue_order` landed in May 2026) notifies every time, which is the old
+	 * behaviour: with no evidence either way, silence is the dangerous default.
+	 */
+	private readonly notifiedTurn = new Map<string, string>()
+
+	/**
+	 * Nobody is subscribed. Forget the snapshot so re-enabling starts from the world as
+	 * it is then, rather than replaying every turn that ended while nobody listened.
+	 */
+	reset(): void {
+		this.previous = null
+		this.armed.clear()
+		this.notifiedTurn.clear()
+	}
+
+	/** One poll of every live chat, in; the notifications it earned, out. */
+	step(states: SessionState[]): DueNotification[] {
+		const current = new Map(states.map(s => [s.sessionId, s.status ?? null]))
+		if (this.previous === null) {
+			this.previous = current
+			return []
+		}
+		const baseline = this.previous
+		const due: DueNotification[] = []
+		for (const state of states) {
+			const now = state.status ?? null
+			const before = baseline.get(state.sessionId)
+			const pendingKind = this.armed.get(state.sessionId)
+			if (pendingKind) {
+				this.armed.delete(state.sessionId)
+				// Confirmed only if the new status held for a second step; a flap just drops the arm.
+				const held = (pendingKind === 'done' && now === 'idle') || (pendingKind === 'error' && now === 'error')
+				if (held && !(pendingKind === 'done' && this.selfScheduled(state))) {
+					const asked = askedBy(state)
+					if (pendingKind === 'done' && asked) this.notifiedTurn.set(state.sessionId, asked)
+					due.push({ state, kind: pendingKind })
+				}
+				continue
+			}
+			// A chat we've never seen (a new one, or the first step after re-baselining)
+			// contributes its status to the snapshot but is never itself news.
+			if (before === undefined) continue
+			if (before === 'working' && now === 'idle') this.armed.set(state.sessionId, 'done')
+			else if (before !== 'error' && now === 'error') this.armed.set(state.sessionId, 'error')
+		}
+		// A chat armed on the last step can vanish before this one (its workspace was
+		// archived mid-turn). Nothing above touches it, so drop it here rather than keep
+		// the key forever — and never notify about a workspace that no longer exists.
+		for (const sessionId of this.armed.keys()) if (!current.has(sessionId)) this.armed.delete(sessionId)
+		for (const sessionId of this.notifiedTurn.keys()) if (!current.has(sessionId)) this.notifiedTurn.delete(sessionId)
+		this.previous = current
+		return due
+	}
+
+	/**
+	 * Did this chat end a turn nobody asked for? See `notifiedTurn`.
+	 *
+	 * The first `working → idle` a chat shows us always notifies, whatever started it: the
+	 * relay may have only just come up, or the phone only just subscribed, and staying
+	 * quiet about a turn we have no history for would lose the one notification that
+	 * mattered. It is the *repeat* on an unchanged turn head that is the loop.
+	 */
+	private selfScheduled(state: SessionState): boolean {
+		const asked = askedBy(state)
+		if (!asked) return false
+		const last = this.notifiedTurn.get(state.sessionId)
+		return last !== undefined && last === asked
+	}
+}
+
+const watcher = new TurnWatcher()
 
 function tick(reads: Reads): void {
 	if (deviceCount() === 0) {
-		// Nothing to notify. Forget the snapshot so re-enabling starts from the world as
-		// it is then, rather than replaying every turn that ended while nobody listened.
-		previous = null
-		armed.clear()
+		watcher.reset()
 		return
 	}
-	const states = reads.listSessionStates()
-	const current = new Map(states.map(s => [s.sessionId, s.status ?? null]))
-	if (previous === null) {
-		previous = current
-		return
-	}
-	const baseline = previous
-	for (const state of states) {
-		const now = state.status ?? null
-		const before = baseline.get(state.sessionId)
-		const pendingKind = armed.get(state.sessionId)
-		if (pendingKind) {
-			armed.delete(state.sessionId)
-			// Confirmed only if the new status held for a second tick; a flap just drops the arm.
-			if ((pendingKind === 'done' && now === 'idle') || (pendingKind === 'error' && now === 'error')) {
-				void fire(reads, state.sessionId, pendingKind, state)
-			}
-			continue
-		}
-		// A session we've never seen (a new chat, or the first tick after re-baselining)
-		// contributes its status to the snapshot but is never itself news.
-		if (before === undefined) continue
-		if (before === 'working' && now === 'idle') armed.set(state.sessionId, 'done')
-		else if (before !== 'error' && now === 'error') armed.set(state.sessionId, 'error')
-	}
-	// A session armed on the last tick can vanish before this one (its workspace was
-	// archived mid-turn). Nothing above touches it, so drop it here rather than keep
-	// the key forever — and never notify about a workspace that no longer exists.
-	for (const sessionId of armed.keys()) if (!current.has(sessionId)) armed.delete(sessionId)
-	previous = current
+	for (const due of watcher.step(reads.listSessionStates())) void fire(reads, due.state.sessionId, due.kind, due.state)
 }
 
 async function fire(
