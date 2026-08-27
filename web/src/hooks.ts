@@ -591,12 +591,18 @@ export function useSendPrompt() {
 	const clearAgentDraft = useApp(s => s.clearAgentDraft)
 
 	return useCallback(
-		async (opts: { id?: string; sessionId: string; workspaceId: string; text: string }): Promise<boolean> => {
+		async (opts: {
+			id?: string
+			sessionId: string
+			workspaceId: string
+			text: string
+			queue?: boolean
+		}): Promise<boolean> => {
 			const text = opts.text.trim()
 			if (!text) return false
 			const id = opts.id ?? crypto.randomUUID()
 			const { sessionId, workspaceId } = opts
-			addPending({ id, sessionId, workspaceId, text })
+			addPending({ id, sessionId, workspaceId, text, queue: opts.queue })
 			try {
 				// Read at send time, not through the closure: the user may have changed the
 				// model between mounting the composer and tapping send.
@@ -605,7 +611,7 @@ export function useSendPrompt() {
 				// `id` goes to the relay as well as into the bubble: it is the send's identity,
 				// so a Retry of this same bubble is answered rather than sent again. Which is
 				// the duplicate the chats here hold — the prompt landed, the answer didn't.
-				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id)
+				const r = await client.sendPrompt(sessionId, text, workspaceId, agent, id, opts.queue)
 				if (r.ok || r.parked) {
 					if (agent) {
 						// Applied (ok) or owned by the parked entry now — either way no longer staged.

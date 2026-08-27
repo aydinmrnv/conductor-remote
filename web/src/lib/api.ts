@@ -171,10 +171,17 @@ export const client = {
 	 * instead of typing again (src/sendonce.ts). Retry reuses the bubble's id, a fresh
 	 * send makes a fresh one, so saying the same thing twice on purpose still does.
 	 */
-	sendPrompt: (sessionId: string, text: string, workspaceId: string, agent?: AgentPatch, clientId?: string) =>
+	sendPrompt: (
+		sessionId: string,
+		text: string,
+		workspaceId: string,
+		agent?: AgentPatch,
+		clientId?: string,
+		queue?: boolean
+	) =>
 		api<SendResult>(
 			routes.sendPrompt.path(sessionId),
-			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent, clientId }) },
+			{ method: routes.sendPrompt.method, body: JSON.stringify({ text, workspaceId, agent, clientId, queue }) },
 			SEND_TIMEOUT_MS
 		),
 	/**
