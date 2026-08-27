@@ -908,6 +908,20 @@ on firstLine(s)
 	return item 1 of parts
 end firstLine
 
+on pickerShowsModel(popup, wanted)
+	set pickerLabel to my tabLabel(popup)
+	if pickerLabel contains ("(" & wanted & ")") then return true
+	-- The menu can label a newly released model "Opus 5 NEW", while the
+	-- composer deliberately drops that temporary badge and says "Opus 5".
+	-- Treat that exact display form as the same choice; the surrounding
+	-- parentheses keep "Opus 5" distinct from a longer model name.
+	if wanted ends with " NEW" then
+		set baseName to text 1 thru -5 of wanted
+		if pickerLabel contains ("(" & baseName & ")") then return true
+	end if
+	return false
+end pickerShowsModel
+
 on setModel(wanted)
 	set popup to missing value
 	repeat with entry in my composerControls()
@@ -915,13 +929,14 @@ on setModel(wanted)
 		if my tabLabel(c) contains "Change agent" then set popup to c
 	end repeat
 	if popup is missing value then error "couldn't find the model picker"
-	if (my tabLabel(popup)) contains ("(" & wanted & ")") then return
+	if my pickerShowsModel(popup, wanted) then return
 	tell application "System Events" to tell process "Conductor"
 		perform action "AXPress" of popup
 	end tell
 	delay 1.0
-	-- Menu labels carry badges ("Opus 5 NEW"), so an exact match is preferred but a
-	-- prefix match is accepted — except when it is ambiguous ("Sonnet 4.6" would
+	-- The relay removes a temporary `NEW` badge before it sends this label back,
+	-- so a prefix match resolves that menu item. It is accepted only when unique:
+	-- "Sonnet 4.6" would
 	-- otherwise also match "Sonnet 4.6 1M"), which must fail rather than guess.
 	set chosen to missing value
 	set loose to {}
@@ -954,7 +969,7 @@ on setModel(wanted)
 		if my tabLabel(c) contains "Change agent" then set popup to c
 	end repeat
 	if popup is missing value then error "the model picker vanished"
-	if (my tabLabel(popup)) does not contain ("(" & wanted & ")") then error "the model didn't switch to " & wanted
+	if not my pickerShowsModel(popup, wanted) then error "the model didn't switch to " & wanted
 end setModel
 
 on listModels()

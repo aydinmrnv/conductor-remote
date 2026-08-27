@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Workspace } from './reads.ts'
+import { modelPickerLabel } from './shared.ts'
 import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
 
 const exec = promisify(execFile)
@@ -728,8 +729,9 @@ return my listModels()`.trim()
 		const models = stdout
 			.split('\n')
 			.map(s => s.trim())
+			.map(modelPickerLabel)
 			.filter(Boolean)
-		return { ok: true, models }
+		return { ok: true, models: [...new Set(models)] }
 	} catch (err) {
 		return { ok: false, error: osaError(err) }
 	}
