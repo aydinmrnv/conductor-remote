@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router'
 import { useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { useApp } from '../store.ts'
 import { RepoAvatar } from './ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
@@ -47,7 +48,9 @@ function saveSendNow(on: boolean): void {
  */
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
-	const [repo, setRepo] = useState<string>('')
+	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
+	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
+	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
 	const [prompt, setPrompt] = useState('')
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
@@ -58,10 +61,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 
 	const repos = data?.repos ?? []
 	const selected = repos.find(r => r.name === repo)
-	// Default to the first repo so "path" is always explicit — an unmatched or
-	// missing path silently lands the workspace in whichever repo Conductor lists first.
+	// Use the last choice when it still exists. Otherwise pick the first repo so
+	// "path" is always explicit — an unmatched or missing path silently lands the
+	// workspace in whichever repo Conductor lists first.
 	useEffect(() => {
-		if (!repo && repos.length) setRepo(repos[0].name)
+		if (repos.length && !repos.some(r => r.name === repo)) setRepo(repos[0].name)
 	}, [repo, repos])
 
 	const create = async () => {
@@ -124,6 +128,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 										type="button"
 										onClick={() => {
 											setRepo(r.name)
+											setLastNewWorkspaceRepo(r.name)
 											setPickerOpen(false)
 										}}
 										className="flex w-full items-center gap-3 px-3 py-2 text-left active:bg-surface-2"

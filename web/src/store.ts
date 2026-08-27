@@ -27,6 +27,7 @@ export interface ViewPrefs {
 }
 
 const VIEW_KEY = 'conductor-remote-view'
+const LAST_NEW_WORKSPACE_REPO_KEY = 'conductor-remote-last-new-workspace-repo'
 const defaultView: ViewPrefs = { groupBy: 'status', repo: null, sortBy: 'updated', hideMerged: false, collapsed: [] }
 
 /**
@@ -60,6 +61,14 @@ function loadView(): ViewPrefs {
 		return { ...defaultView, ...JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') }
 	} catch {
 		return defaultView
+	}
+}
+
+function loadLastNewWorkspaceRepo(): string {
+	try {
+		return localStorage.getItem(LAST_NEW_WORKSPACE_REPO_KEY) ?? ''
+	} catch {
+		return ''
 	}
 }
 
@@ -110,6 +119,8 @@ interface AppState {
 	push: { deviceId: string | null; devices: number }
 	/** Mobile workspace drawer. On md+ the sidebar is static and this is ignored. */
 	sidebarOpen: boolean
+	/** Repo most recently selected in the New workspace sheet on this device. */
+	lastNewWorkspaceRepo: string
 	view: ViewPrefs
 	setToken: (token: string | null) => void
 	setOnline: (online: boolean) => void
@@ -134,6 +145,7 @@ interface AppState {
 	markRead: (sessionId: string, at: string) => void
 	setPush: (push: { deviceId: string | null; devices: number }) => void
 	setSidebarOpen: (open: boolean) => void
+	setLastNewWorkspaceRepo: (repo: string) => void
 	setView: (patch: Partial<ViewPrefs>) => void
 	toggleGroup: (key: string) => void
 }
@@ -156,6 +168,7 @@ export const useApp = create<AppState>((set, get) => {
 		push: { deviceId: null, devices: 0 },
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
+		lastNewWorkspaceRepo: loadLastNewWorkspaceRepo(),
 		view: loadView(),
 		// Keep localStorage in sync so a paste survives reload and a 401 doesn't re-load a dead token.
 		setToken: token => {
@@ -211,6 +224,12 @@ export const useApp = create<AppState>((set, get) => {
 		},
 		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
+		setLastNewWorkspaceRepo: repo => {
+			try {
+				localStorage.setItem(LAST_NEW_WORKSPACE_REPO_KEY, repo)
+			} catch {}
+			set({ lastNewWorkspaceRepo: repo })
+		},
 		setView: patch => saveView({ ...get().view, ...patch }),
 		toggleGroup: key => {
 			const { collapsed } = get().view
