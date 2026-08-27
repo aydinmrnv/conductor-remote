@@ -203,6 +203,23 @@ export interface SendResult extends ActuatorSendResult {
 	queued?: PendingPrompt
 }
 
+/** One file written in Conductor's own attachment layout, ready to add to a prompt. */
+export interface Attachment {
+	/** Safe file name shown by Conductor's attachment chip. */
+	name: string
+	/** Worktree-relative path for the agent to read. */
+	path: string
+	bytes: number
+	/** Conductor's `@⟦…⟧(…)` composer token. */
+	token: string
+}
+
+/** POST /api/sessions/:id/attachments — a file from the phone, ready to send. */
+export interface UploadAttachmentResult {
+	ok: true
+	attachment: Attachment
+}
+
 /** POST /api/sessions/:id/stop — Conductor's "Cancel agent" for one chat. */
 export interface StopResult {
 	ok: boolean

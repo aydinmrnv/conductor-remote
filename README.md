@@ -225,6 +225,9 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
     target `sessionId` over Conductor's dispatch socket — precise per-workspace
     targeting, no focus needed. Speaks a private, versioned IPC (see FINDINGS ▸
     Writes), so it's the more fragile of the two.
+- ✅ **Attach images and files** — tap the paperclip or paste an image into the
+  composer. Files up to 25 MB are stored in Conductor's own attachment layout
+  before the prompt is sent.
 - ✅ **Push notifications** when an agent finishes its turn or hits an error —
   see below.
 

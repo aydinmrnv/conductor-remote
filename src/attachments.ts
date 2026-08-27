@@ -54,8 +54,15 @@ export function attachmentName(name: string): string {
 		// A leading dot hides the file, and two of them climb out of the directory.
 		.replace(/^\.+/, '')
 		.trim()
-	// 255 bytes is the filesystem's limit and a title can be long; leave room for `.md`.
-	return (flat.length > 120 ? flat.slice(0, 120).trim() : flat) || 'attachment'
+	// 255 bytes is the filesystem's limit and a title can be long. Count bytes rather
+	// than JS code units: 120 emoji fit the latter but not the former. The lower cap
+	// leaves room for an extension and works on every filesystem Conductor supports.
+	let clipped = ''
+	for (const char of flat) {
+		if (Buffer.byteLength(clipped + char) > 120) break
+		clipped += char
+	}
+	return clipped.trim() || 'attachment'
 }
 
 /** The composer's own syntax for an attached file. `encodeURIComponent` matches it exactly, `/` included. */
@@ -80,7 +87,7 @@ export interface WrittenAttachment {
  * Each attachment gets its own directory, exactly as Conductor does it, so two files
  * with the same name never collide and the id stays out of the visible name.
  */
-export function writeAttachment(worktree: string, name: string, body: string): WrittenAttachment {
+export function writeAttachment(worktree: string, name: string, body: string | Uint8Array): WrittenAttachment {
 	const safe = attachmentName(name)
 	let id = attachmentId()
 	let dir = path.join(worktree, ATTACHMENT_DIR, id)
@@ -92,7 +99,7 @@ export function writeAttachment(worktree: string, name: string, body: string): W
 	}
 	fs.mkdirSync(dir, { recursive: true })
 	const absPath = path.join(dir, safe)
-	fs.writeFileSync(absPath, body, 'utf8')
+	fs.writeFileSync(absPath, body)
 	const relPath = path.join(ATTACHMENT_DIR, id, safe)
 	return { name: safe, relPath, absPath, bytes: Buffer.byteLength(body), token: attachmentToken(safe, relPath) }
 }

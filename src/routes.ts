@@ -100,6 +100,8 @@ export const routes = {
 	agent: param('POST', '/api/sessions/:sessionId/agent'),
 	stop: param('POST', '/api/sessions/:sessionId/stop'),
 	sendPrompt: param('POST', '/api/sessions/:sessionId/prompt'),
+	/** Write a phone-selected file into Conductor's attachment layout for this chat's workspace. */
+	uploadAttachment: param('POST', '/api/sessions/:sessionId/attachments'),
 	/** Copy a chat into a fresh tab beside it, as a Conductor attachment (src/attachments.ts). */
 	splitChat: param('POST', '/api/sessions/:sessionId/split'),
 	/** Dismiss a prompt parked behind the lock screen (src/parked.ts). */
