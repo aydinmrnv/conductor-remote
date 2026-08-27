@@ -32,6 +32,8 @@ import path from 'node:path'
 const SOCKET_PREFIX = 'conductor-sidecar-v2-'
 const LOCAL_AUTH = { userId: 'local', auth: 'local' } as const
 
+export type SidecarDeliveryMode = 'default' | 'queue'
+
 /** Candidate sidecar socket paths in `$TMPDIR`, newest mtime first. */
 function listSidecarSockets(): string[] {
 	const dir = os.tmpdir()
@@ -173,7 +175,11 @@ export async function sidecarAvailable(): Promise<boolean> {
  * Deliver a prompt to a specific session — the real send path, precisely
  * targeted. Resolves once the sidecar has accepted (queued/sent) the message.
  */
-export async function sidecarSendUserMessage(sessionId: string, text: string): Promise<void> {
+export async function sidecarSendUserMessage(
+	sessionId: string,
+	text: string,
+	deliveryMode: SidecarDeliveryMode = 'default'
+): Promise<void> {
 	await rpc('query', {
 		type: 'sendUserMessageRequest',
 		...LOCAL_AUTH,
@@ -181,7 +187,7 @@ export async function sidecarSendUserMessage(sessionId: string, text: string): P
 		id: randomUUID(),
 		message: text,
 		agentMessage: text,
-		deliveryMode: 'default'
+		deliveryMode
 	})
 }
 

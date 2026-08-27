@@ -176,6 +176,14 @@ export interface ActuatorInfo {
 	available: boolean
 }
 
+/** How a submitted prompt behaves when its chat is already working. */
+export interface PromptSendOptions {
+	/** Queue the prompt behind the current turn instead of using the default follow-up behavior. */
+	queue?: boolean
+	/** Epoch ms when the caller stops waiting for this delivery attempt. */
+	deadline?: number
+}
+
 export interface Actuator {
 	readonly name: string
 	/** Human-readable note about this strategy's limits, surfaced in the UI. */
@@ -183,12 +191,12 @@ export interface Actuator {
 	/** True when delivery is addressed to a specific session (no window-focus dependency). */
 	readonly precise: boolean
 	/**
-	 * `deadline` (epoch ms) is when the caller stops waiting, so a caller retrying
+	 * `deadline` is when the caller stops waiting, so a caller retrying
 	 * inside one request bounds every attempt with the *same* number. A deadline
 	 * rather than a duration because `uiTurn` may queue this run: only the run itself
 	 * knows how much of the budget was still left when it finally started.
 	 */
-	send: (target: SendTarget, text: string, deadline?: number) => Promise<SendResult>
+	send: (target: SendTarget, text: string, options?: PromptSendOptions) => Promise<SendResult>
 	/** Runtime availability check (e.g. the sidecar socket must be reachable). */
 	available?: () => Promise<boolean>
 }
@@ -309,11 +317,11 @@ export class SidecarActuator implements Actuator {
 	}
 
 	/** `deadline` is ignored — the sidecar is one socket write, with no UI to wait on. */
-	async send(target: SendTarget, text: string, _deadline?: number): Promise<SendResult> {
+	async send(target: SendTarget, text: string, options: PromptSendOptions = {}): Promise<SendResult> {
 		const sessionId = target.sessionId ?? target.workspace.active_session_id
 		if (!sessionId) return { ok: false, strategy: this.name, error: 'no session id to target' }
 		try {
-			await sidecarSendUserMessage(sessionId, text)
+			await sidecarSendUserMessage(sessionId, text, options.queue ? 'queue' : 'default')
 			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return { ok: false, strategy: this.name, error: err instanceof Error ? err.message : String(err) }
@@ -469,7 +477,8 @@ export class AppleScriptActuator implements Actuator {
 	readonly caveat = "Opens the target workspace's own Conductor link, then confirms the chat tab before sending."
 	readonly precise = true
 
-	async send(target: SendTarget, text: string, deadline = Date.now() + SEND_ATTEMPT_MS): Promise<SendResult> {
+	async send(target: SendTarget, text: string, options: PromptSendOptions = {}): Promise<SendResult> {
+		const deadline = options.deadline ?? Date.now() + SEND_ATTEMPT_MS
 		// Open the target workspace's own link, confirm its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
@@ -487,7 +496,11 @@ if not (my fillComposer(promptText)) then
 	set the clipboard to savedClipboard
 end if
 tell application "System Events"
-	key code 36
+	if (system attribute "RELAY_QUEUE_PROMPT") is "1" then
+		key code 36 using {command down}
+	else
+		key code 36
+	end if
 end tell
 `.trim()
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
@@ -499,7 +512,12 @@ end tell
 		try {
 			await uiTurn(() =>
 				exec('osascript', ['-e', script], {
-					env: { ...process.env, RELAY_PROMPT_FILE: tmp, ...targetEnv(target) },
+					env: {
+						...process.env,
+						RELAY_PROMPT_FILE: tmp,
+						RELAY_QUEUE_PROMPT: options.queue ? '1' : '',
+						...targetEnv(target)
+					},
 					timeout: runCeiling(deadline)
 				})
 			)

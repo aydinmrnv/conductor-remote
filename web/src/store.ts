@@ -41,6 +41,8 @@ export interface PendingMessage {
 	sessionId: string
 	workspaceId: string
 	text: string
+	/** Keep a retry in Conductor's follow-up queue. */
+	queue?: boolean
 	status: 'sending' | 'error'
 	error?: string
 	createdAt: number
@@ -141,7 +143,7 @@ interface AppState {
 	 */
 	clearWorking: (sessionId: string) => void
 	/** Add (or reset, by id — used by Retry) an optimistic prompt in the `sending` state. */
-	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string }) => void
+	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string; queue?: boolean }) => void
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
 	setDraft: (workspaceId: string, text: string) => void

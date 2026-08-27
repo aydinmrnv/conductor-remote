@@ -290,7 +290,8 @@ async function deliverPrompt(
 	ws: Workspace,
 	sessionId: string,
 	text: string,
-	budgetMs = SEND_BUDGET_MS
+	budgetMs = SEND_BUDGET_MS,
+	queue = false
 ): Promise<SendResult & { attempts: number }> {
 	const located = locateChat(ws, sessionId)
 	if ('error' in located) return { ok: false, strategy: actuator.name, attempts: 0, error: located.error }
@@ -307,7 +308,10 @@ async function deliverPrompt(
 		// write, and only the run knows what was left of the budget when it started. Minus
 		// the confirm, so a caller on a tight budget spends it on the run rather than on
 		// watching — a 25s-era phone gets one full-length attempt, not two too short to finish.
-		last = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, deadline - MIN_CONFIRM_MS)
+		last = await actuator.send({ workspace: ws, sessionId, tab: located.tab }, text, {
+			deadline: deadline - MIN_CONFIRM_MS,
+			queue
+		})
 		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
 			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
 			return { ok: true, strategy: last.strategy, attempts }
@@ -426,7 +430,7 @@ const parkedPrompts = new ParkedPromptQueue(path.join(stateDir(), 'parked-prompt
 				const applied = await applyAgentPatch(ws, entry.sessionId, entry.agent)
 				if (!applied.ok) return { ok: false, error: applied.error, blocked: lockBlocked(applied.error) }
 			}
-			const result = await deliverPrompt(ws, entry.sessionId, entry.text)
+			const result = await deliverPrompt(ws, entry.sessionId, entry.text, SEND_BUDGET_MS, entry.queue)
 			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
 		}),
 	notify: (entry: ParkedPrompt, error?: string) => {
@@ -1079,6 +1083,7 @@ const server = http.createServer(async (req, res) => {
 					workspaceId?: string
 					agent?: ParkedAgentPatch
 					clientId?: string
+					queue?: boolean
 				}
 				const text = (body.text ?? '').trim()
 				if (!text) return json(req, res, 400, { error: 'empty prompt' })
@@ -1090,6 +1095,7 @@ const server = http.createServer(async (req, res) => {
 				// rather than extending it past what the phone said it would wait.
 				const deadline = Date.now() + sendBudget(req)
 				const agent = body.agent && Object.keys(body.agent).length ? body.agent : undefined
+				const queue = body.queue === true
 				if (agent?.effort && !EFFORT_LABELS[agent.effort]) {
 					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
 				}
@@ -1107,7 +1113,7 @@ const server = http.createServer(async (req, res) => {
 						const applied = await applyAgentPatch(ws, sessionId, agent)
 						if (!applied.ok) {
 							if (lockBlocked(applied.error)) {
-								const queued = parkedPrompts.park(ws.id, sessionId, text, agent)
+								const queued = parkedPrompts.park(ws.id, sessionId, text, agent, queue)
 								return {
 									status: 202,
 									body: { ok: false, parked: true, queued, strategy: actuator.name, error: PARKED_ERROR }
@@ -1118,7 +1124,7 @@ const server = http.createServer(async (req, res) => {
 					}
 					// Retries live inside deliverPrompt, confirmed against the transcript each time,
 					// and inside the deadline this phone told us it would wait.
-					const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now())
+					const result = await deliverPrompt(ws, sessionId, text, deadline - Date.now(), queue)
 					if (result.ok) {
 						// Whatever a queue was still holding has now been said by hand — the first
 						// prompt (including a failed entry retried from the chat), and any parked
@@ -1129,7 +1135,7 @@ const server = http.createServer(async (req, res) => {
 					}
 					if (lockBlocked(result.error)) {
 						// Settings (if any) already stuck, so the entry parks without them.
-						const queued = parkedPrompts.park(ws.id, sessionId, text)
+						const queued = parkedPrompts.park(ws.id, sessionId, text, undefined, queue)
 						return {
 							status: 202,
 							body: { ok: false, parked: true, queued, strategy: result.strategy, error: PARKED_ERROR }
