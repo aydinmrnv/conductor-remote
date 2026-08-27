@@ -5,7 +5,6 @@ import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	isMerged,
-	isSettingUp,
 	RECENT_BUCKETS,
 	recentBucket,
 	recentBucketLabel,
@@ -479,11 +478,6 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 					>
 						{workspaceTitle(w)}
 					</span>
-					{isSettingUp(w) ? (
-						<span className="shrink-0 rounded-md bg-working/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-working">
-							Setting up
-						</span>
-					) : null}
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
 					{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
 					    dot says it; the count only appears once several chats here have news. */}

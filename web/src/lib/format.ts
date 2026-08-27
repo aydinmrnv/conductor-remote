@@ -50,7 +50,7 @@ export function repoMonogram(w: Workspace): string {
  * A workspace Conductor is still provisioning (creating the worktree / running the
  * setup command). Its session may already be idle, but the desktop app dims it and
  * labels it "setting up" — mirror that so a workspace stranded in this state (a known
- * Conductor stuck-state) stays visible here with an honest badge instead of vanishing.
+ * Conductor stuck-state) stays visible here with an honest spinner instead of vanishing.
  */
 export function isSettingUp(w: Workspace): boolean {
 	return w.state === 'setting_up'
@@ -81,10 +81,11 @@ const PR_DOT_COLORS: Record<NonNullable<Workspace['pr_status']>, string> = {
 
 /**
  * The workspace dot: PR state drives the colour (merged/draft/conflicts/mergeable),
- * everything else falls back to the accent. While the agent is working the dot is
- * drawn as a spinner in that colour instead (`StatusDot`).
+ * everything else falls back to the accent. Setup uses a muted spinner. An active
+ * agent uses a spinner in its status colour (`StatusDot`).
  */
 export function statusDot(w: Workspace): { color: string; working: boolean } {
+	if (isSettingUp(w)) return { color: 'var(--color-muted)', working: true }
 	const color = (w.pr_status && PR_DOT_COLORS[w.pr_status]) || 'var(--color-accent)'
 	return { color, working: w.session_status === 'working' }
 }
@@ -189,7 +190,7 @@ export const STATUS_COLORS: Record<string, string> = {
 	done: 'var(--color-done)',
 	'in-review': 'var(--color-idle)',
 	'in-progress': 'var(--color-working)',
-	'setting-up': 'var(--color-working)'
+	'setting-up': 'var(--color-muted)'
 }
 
 /** Compact model name: strip the `claude-`/date noise for the phone. */
