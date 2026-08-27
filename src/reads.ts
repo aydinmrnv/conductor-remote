@@ -31,7 +31,6 @@ export interface WorkspaceRow {
 	session_status: string | null
 	session_title: string | null
 	model: string | null
-	context_used_percent: number | null
 }
 
 /**
@@ -89,6 +88,13 @@ export interface SessionRow {
 	fast_mode: number | null
 	/** claude | codex | cursor | acp — the agent family `model` belongs to. */
 	agent_type: string | null
+	/**
+	 * How full this chat's context window is, 0-100 (real, null before the first turn).
+	 * It belongs to the chat and to nothing larger: 14 of the 49 live workspaces here
+	 * hold more than one tab, and one of them runs at 28 / 85 / 49 / 29 at the same
+	 * moment. `WorkspaceRow` deliberately no longer carries it — the sidebar could only
+	 * ever show the *active* tab's number, which named the workspace and meant one chat.
+	 */
 	context_used_percent: number | null
 	unread_count: number | null
 	created_at: string
@@ -255,8 +261,7 @@ export class Reads {
 			        w.state, w.created_at, w.updated_at, w.pinned_at, w.active_session_id, w.intended_target_branch,
 			        r.name AS repo_name, r.root_path AS repo_root, r.icon AS repo_icon,
 			        r.remote_url AS remote_url, r.default_branch AS default_branch,
-			        s.status AS session_status, s.title AS session_title, s.model AS model,
-			        s.context_used_percent AS context_used_percent
+			        s.status AS session_status, s.title AS session_title, s.model AS model
 			 FROM workspaces w
 			 LEFT JOIN repos r ON r.id = w.repository_id
 			 LEFT JOIN sessions s ON s.id = w.active_session_id
