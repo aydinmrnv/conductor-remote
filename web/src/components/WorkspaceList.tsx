@@ -398,7 +398,6 @@ function ViewSelect({
 
 function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; selected: boolean }) {
 	const model = shortModel(w.model)
-	const ctx = w.context_used_percent
 	return (
 		<>
 			<div className="relative shrink-0 self-start">
@@ -427,16 +426,16 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 					    dot says it; the count only appears once several chats here have news. */}
 					{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
 				</div>
-				{/* Row 1: repo + branch (branch flexes to fill and truncates). Row 2: model · ctx · time. */}
+				{/* Row 1: repo + branch (branch flexes to fill and truncates). Row 2: model · time.
+				    Context usage is *not* here: a workspace holds several chats and this card can only
+				    speak for the active one, so the number read as the workspace's. It lives on the
+				    chat tab that owns it (components/SessionView.tsx ▸ SessionTabs). */}
 				<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">
 					{w.repo_name ? <span className="shrink-0 font-mono text-faint">{w.repo_name}</span> : null}
 					{w.branch ? <Chip className="min-w-0 flex-1 truncate">{w.branch}</Chip> : null}
 				</div>
 				<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">
 					{model ? <Chip>{model}</Chip> : null}
-					{typeof ctx === 'number' && ctx > 0 ? (
-						<span className="shrink-0 text-faint">{Math.round(ctx)}% ctx</span>
-					) : null}
 					<span className="ml-auto shrink-0 pl-2 text-[11px] text-faint">{relativeTime(w.updated_at)}</span>
 				</div>
 			</div>

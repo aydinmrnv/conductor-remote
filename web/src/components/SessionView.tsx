@@ -207,6 +207,7 @@ function SessionTabs({
 					>
 						{s.status === 'working' ? <span className="dot-spinner size-3" /> : null}
 						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
+						<ContextPercent used={s.context_used_percent} />
 						{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
 						{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
 					</button>
@@ -222,6 +223,23 @@ function SessionTabs({
 				<Plus size={18} />
 			</button>
 		</nav>
+	)
+}
+
+/**
+ * How full this chat's context window is, on the tab that owns it.
+ *
+ * It sits here rather than on the workspace card because a workspace holds several
+ * chats and the card could only ever print the *active* one's number, which then read
+ * as the workspace's: one workspace here runs four tabs at 28 / 85 / 49 / 29 at once.
+ * Amber from 80 on, where compaction is close enough to be worth reading.
+ */
+function ContextPercent({ used }: { used: number | null }) {
+	if (typeof used !== 'number' || used <= 0) return null
+	return (
+		<span className={cn('shrink-0 text-[11px] tabular-nums', used >= 80 ? 'text-working' : 'text-faint')}>
+			{Math.round(used)}%
+		</span>
 	)
 }
 
