@@ -243,6 +243,9 @@ function QueuedEntry({
 	onDismiss: () => void
 }) {
 	const failed = queued.status === 'failed'
+	// A parked entry names its chat, a first prompt carries no `sessionId` (src/wire.ts) — and only
+	// the parked one is held by the lock screen, only for as long as it hasn't given up.
+	const unlock = !failed && queued.sessionId ? unlockUrl() : null
 	return (
 		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(queued.text)} data-msg-state="queued">
 			<Bubble className={cn('max-w-[85%] bg-accent-soft text-text opacity-60', failed && 'border border-del/40')}>
@@ -265,10 +268,30 @@ function QueuedEntry({
 				<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
 					<Loader2 size={11} className="animate-spin" />
 					{queued.reason ?? 'The relay is sending this'}
+					{unlock ? (
+						<a href={unlock} className="ml-1 font-semibold text-accent underline underline-offset-2">
+							Unlock the Mac
+						</a>
+					) : null}
 				</span>
 			)}
 		</div>
 	)
+}
+
+/**
+ * Screen Sharing on the relay's Mac, addressed the way this phone already reaches it: the PWA is
+ * served from that Mac's own MagicDNS name, so `location.hostname` is the host to unlock and no
+ * relay round trip is needed to learn it. `vnc://` is the scheme the iOS clients register (Screens,
+ * RealVNC, Jump), and it is the only remote path there is: macOS exposes no unlock API, the lock
+ * screen refuses synthetic keystrokes, and Apple's own Screen Sharing server is the one input
+ * channel it still accepts. So the button carries you to the password prompt; it doesn't answer it.
+ * Loopback returns null because a dev checkout serves this same UI from 127.0.0.1.
+ */
+function unlockUrl(): string | null {
+	const host = location.hostname
+	if (!host || host === 'localhost' || host.startsWith('127.')) return null
+	return `vnc://${host}`
 }
 
 /** An optimistic user prompt: greyed while `sending`, or a red bubble with Retry/Dismiss on failure. */

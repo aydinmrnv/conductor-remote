@@ -144,6 +144,19 @@ Two asymmetric halves — keep them separate:
   entry to `failed` and it stays, visible the whole way as
   `workspace.parked_prompts` (the same queued bubble as a first prompt, its
   `reason` naming the lock) and dismissible via `DELETE …/sessions/:id/prompt`.
+  **The relay will never unlock the Mac itself, and that is a macOS fact rather
+  than a policy**: there is no unlock API, `loginwindow` turns on secure event
+  input and hides the session from Accessibility, and the one input channel the
+  lock screen still accepts is Apple's own Screen Sharing server — which would
+  mean holding the account password on disk, next to a token, in a daemon that
+  auto-updates itself from npm. "Only with `EXPOSE=tailnet`" doesn't rescue that:
+  `readExposeMode()` falls back to **`public`**, and this posture has already
+  healed itself back onto the open internet once (see the LaunchAgent-plist trap
+  below). So the phone links to the unlock instead of performing it — a parked
+  bubble carries **`vnc://<this host>`** (`Transcript.tsx` ▸ `unlockUrl`, built
+  from `location.hostname`, since the PWA is already served from the Mac's own
+  MagicDNS name), which hands off to whichever VNC client the phone has. Type the
+  password there and the 5s lock poll flushes the queue on its own.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
