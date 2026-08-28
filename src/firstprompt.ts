@@ -53,9 +53,19 @@ export type FirstPromptStatus = 'waiting' | 'failed'
  */
 export type WorkspacePhase = 'setting_up' | 'ready'
 
+export interface FirstPromptTarget {
+	phase: WorkspacePhase
+	sessionId: string | null
+	alreadySent: boolean
+	/** Null until the new workspace has a safe location for its staged files. */
+	worktree?: string | null
+}
+
 export interface FirstPrompt {
 	workspaceId: string
 	text: string
+	/** Files staged before this workspace had a worktree. They must land before `text` is sent. */
+	attachmentIds?: string[]
 	status: FirstPromptStatus
 	/** Sends already spent on it *after* the worktree turned ready — the budget that counts. */
 	attempts: number
@@ -81,7 +91,7 @@ export interface DeliveryDeps {
 	 * The DB's current view of a target. `null` means no such workspace row *yet* —
 	 * which is normal for a beat after creation, so it is not a reason to give up.
 	 */
-	inspect: (workspaceId: string) => { phase: WorkspacePhase; sessionId: string | null; alreadySent: boolean } | null
+	inspect: (workspaceId: string) => FirstPromptTarget | null
 	/**
 	 * Drive the actual UI send, read-back included. `blocked` = the send was shut
 	 * out by something delivery can't fix and waiting can (the lock screen) — the
@@ -92,6 +102,14 @@ export interface DeliveryDeps {
 		sessionId: string,
 		text: string
 	) => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
+	/** Put staged phone files into their new worktree before the attachment token is sent. */
+	materialize?: (
+		workspaceId: string,
+		worktree: string,
+		attachmentIds: string[]
+	) => Promise<{ ok: boolean; error?: string }>
+	/** Remove files that belonged to a prompt the user dismissed before it was sent. */
+	discard?: (attachmentIds: string[]) => void | Promise<void>
 	/**
 	 * Is a send even worth starting? `false` = hold everything, spend nothing —
 	 * neither attempts nor the age budget. The server wires this to the lock-screen
@@ -153,10 +171,23 @@ export class FirstPromptQueue {
 	 * prompt lands (`null`) or is given up on (the failed entry) — awaited by API
 	 * callers that asked to block, ignored by the phone.
 	 */
-	enqueue(workspaceId: string, text: string, sendImmediately = true): Promise<FirstPrompt | null> {
+	enqueue(
+		workspaceId: string,
+		text: string,
+		sendImmediately = true,
+		attachmentIds: string[] = []
+	): Promise<FirstPrompt | null> {
 		this.entries = [
 			...this.entries.filter(e => e.workspaceId !== workspaceId),
-			{ workspaceId, text, status: 'waiting', attempts: 0, createdAt: Date.now(), sendImmediately }
+			{
+				workspaceId,
+				text,
+				...(attachmentIds.length ? { attachmentIds } : {}),
+				status: 'waiting',
+				attempts: 0,
+				createdAt: Date.now(),
+				sendImmediately
+			}
 		]
 		this.save()
 		const settled = new Promise<FirstPrompt | null>(resolve => {
@@ -170,9 +201,11 @@ export class FirstPromptQueue {
 
 	/** Drop an entry — dismissed from the phone, or superseded by a send the user made themselves. */
 	forget(workspaceId: string): boolean {
-		if (!this.entries.some(e => e.workspaceId === workspaceId)) return false
-		this.entries = this.entries.filter(e => e.workspaceId !== workspaceId)
+		const entry = this.entries.find(e => e.workspaceId === workspaceId)
+		if (!entry) return false
+		this.entries = this.entries.filter(e => e !== entry)
 		this.save()
+		this.discard(entry)
 		this.settle(workspaceId, null)
 		return true
 	}
@@ -218,6 +251,16 @@ export class FirstPromptQueue {
 		const sendable = target?.phase === 'ready' && !!target.sessionId
 		if (!sendable && Date.now() - entry.createdAt > MAX_AGE_MS) {
 			return this.fail(entry, 'the workspace never finished setting up')
+		}
+		if (entry.attachmentIds?.length) {
+			if (!target?.worktree) return
+			if (!this.deps.materialize) return this.fail(entry, 'the relay cannot place the attached files')
+			const attachmentIds = entry.attachmentIds
+			const materialized = await this.deps.materialize(entry.workspaceId, target.worktree, attachmentIds)
+			if (!materialized.ok) return this.fail(entry, materialized.error ?? 'the attached files could not be copied')
+			entry.attachmentIds = []
+			this.save()
+			this.discardIds(attachmentIds)
 		}
 		if (!target?.sessionId) return
 		// It already went — the user sent it from the Mac, where the deep link left it
@@ -268,6 +311,7 @@ export class FirstPromptQueue {
 	private delivered(entry: FirstPrompt): void {
 		this.entries = this.entries.filter(e => e !== entry)
 		this.save()
+		this.discard(entry)
 		this.settle(entry.workspaceId, null)
 	}
 
@@ -277,6 +321,17 @@ export class FirstPromptQueue {
 		entry.error = error
 		this.save()
 		this.settle(entry.workspaceId, entry)
+	}
+
+	private discard(entry: FirstPrompt): void {
+		if (entry.attachmentIds?.length) this.discardIds(entry.attachmentIds)
+	}
+
+	private discardIds(attachmentIds: string[]): void {
+		if (!attachmentIds.length || !this.deps.discard) return
+		void Promise.resolve(this.deps.discard(attachmentIds)).catch(err => {
+			console.warn(`[relay] could not discard staged attachments: ${err instanceof Error ? err.message : err}`)
+		})
 	}
 
 	private settle(workspaceId: string, result: FirstPrompt | null): void {
@@ -296,12 +351,19 @@ export class FirstPromptQueue {
 		try {
 			const parsed = JSON.parse(raw) as FirstPrompt[]
 			if (!Array.isArray(parsed)) return []
-			return parsed.filter(
-				e =>
-					typeof e?.workspaceId === 'string' &&
-					typeof e.text === 'string' &&
-					Date.now() - (e.createdAt ?? 0) < KEEP_FAILED_MS
-			)
+			return parsed
+				.filter(
+					e =>
+						typeof e?.workspaceId === 'string' &&
+						typeof e.text === 'string' &&
+						Date.now() - (e.createdAt ?? 0) < KEEP_FAILED_MS
+				)
+				.map(e => ({
+					...e,
+					attachmentIds: Array.isArray(e.attachmentIds)
+						? e.attachmentIds.filter((id): id is string => typeof id === 'string')
+						: undefined
+				}))
 		} catch (err) {
 			console.warn(`[relay] ignoring unreadable ${this.file}: ${err instanceof Error ? err.message : err}`)
 			return []

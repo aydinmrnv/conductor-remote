@@ -144,6 +144,34 @@ function scenario(name: string, initial: Partial<Fake> = {}): { queue: FirstProm
 	queue.forget('ws-6')
 }
 
+// A new-workspace attachment is written only after Conductor has made the worktree,
+// and that write must finish before the token can reach the agent.
+{
+	let worktree: string | null = null
+	const materialized: string[][] = []
+	const sends: string[] = []
+	const queue = new FirstPromptQueue(path.join(dir, 'attachments.json'), {
+		inspect: () => ({ phase: 'setting_up', sessionId: 'chat-attachments', alreadySent: false, worktree }),
+		materialize: async (_workspaceId, _worktree, attachmentIds) => {
+			materialized.push(attachmentIds)
+			return { ok: true }
+		},
+		send: async (_workspaceId, _sessionId, text) => {
+			sends.push(text)
+			return { ok: true }
+		}
+	})
+	void queue.enqueue('ws-attachments', 'hello', true, ['stage-1'])
+	await sleep(100)
+	check('an attached first prompt waits for its worktree', materialized.length === 0 && sends.length === 0)
+	worktree = '/tmp/new-worktree'
+	await waitFor(() => sends.length === 1)
+	check(
+		'the staged files are placed before the first prompt sends',
+		materialized[0]?.[0] === 'stage-1' && sends[0] === 'hello'
+	)
+}
+
 // Past `ready` the old rules hold: failures count, and the third one gives up in public.
 {
 	const { queue, state } = scenario('ready-fail', { phase: 'ready' })

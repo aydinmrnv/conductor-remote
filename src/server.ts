@@ -47,6 +47,12 @@ import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { SendOnce } from './sendonce.ts'
 import { readSettings, writeSettings } from './settings.ts'
+import {
+	discardStagedAttachment,
+	materializeStagedAttachments,
+	stageAttachment,
+	stagedAttachments
+} from './staged-attachments.ts'
 import { driftWarningLines, tailscaleBin } from './tailscale.ts'
 import { renderTranscript } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
@@ -81,6 +87,7 @@ const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
+const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
 
 // Full-text index over the chat prose, in the relay's own sidecar DB — never in
 // Conductor's (see src/search.ts). It backfills in the background and is disposable:
@@ -356,7 +363,8 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 		return {
 			phase: ws.state === 'ready' ? 'ready' : 'setting_up',
 			sessionId: session?.id ?? null,
-			alreadySent: !!session?.last_user_message_at
+			alreadySent: !!session?.last_user_message_at,
+			worktree: ws.worktree
 		}
 	},
 	// The queue fires on its own schedule, so it must never make a human tap wait.
@@ -367,6 +375,17 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 			const result = await deliverPrompt(ws, sessionId, text)
 			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
 		}),
+	materialize: async (_workspaceId, worktree, attachmentIds) => {
+		try {
+			materializeStagedAttachments(STAGED_ATTACHMENTS_DIR, worktree, attachmentIds)
+			return { ok: true }
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : 'the attached files could not be copied' }
+		}
+	},
+	discard: attachmentIds => {
+		for (const id of attachmentIds) discardStagedAttachment(STAGED_ATTACHMENTS_DIR, id)
+	},
 	// A locked Mac holds first prompts whole — no attempts spent, no aging — instead
 	// of burning all three sends into a lock screen nobody is there to see.
 	gate: async () => (await screenLocked()) !== true
@@ -985,6 +1004,23 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, result.ok ? 200 : 502, result)
 			}
 
+			// POST /api/attachments — hold one phone file until its new workspace has a worktree.
+			if (isRoute(routes.stageAttachment, req.method, pathname)) {
+				const name = attachmentHeaderName(req)
+				if (!name) return json(req, res, 400, { error: 'missing attachment name' })
+				const bytes = await readAttachmentBody(req)
+				if (!bytes.length) return json(req, res, 400, { error: 'empty attachment' })
+				const attachment = stageAttachment(STAGED_ATTACHMENTS_DIR, name, bytes)
+				return json(req, res, 201, { ok: true, attachment })
+			}
+
+			// DELETE /api/attachments/:id — a file removed from the new-workspace sheet.
+			const stagedAttachment = routeParam(routes.discardStagedAttachment, req.method, pathname)
+			if (stagedAttachment)
+				return json(req, res, discardStagedAttachment(STAGED_ATTACHMENTS_DIR, stagedAttachment) ? 200 : 404, {
+					ok: true
+				})
+
 			// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
 			if (isRoute(routes.createWorkspace, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as {
@@ -992,10 +1028,18 @@ const server = http.createServer(async (req, res) => {
 					prompt?: string
 					send?: boolean
 					sendImmediately?: boolean
+					attachmentIds?: string[]
 				}
+				const attachmentIds = body.attachmentIds ?? []
+				if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string'))
+					return json(req, res, 400, { error: 'attachment ids must be a list of strings' })
+				const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
+				if (!attachments) return json(req, res, 409, { error: 'an attached file is no longer available; add it again' })
 				// The prompt is optional — a bare `path=` opens an empty workspace, like
 				// Conductor's own New workspace — but *something* has to say where it goes.
-				const prompt = (body.prompt ?? '').trim()
+				const prompt = [...attachments.map(attachment => attachment.token), (body.prompt ?? '').trim()]
+					.filter(Boolean)
+					.join('\n')
 				if (!prompt && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
 				// Resolve the repo to a real path: an unmatched `path` would silently land
 				// the workspace in whichever repo Conductor happens to list first.
@@ -1025,7 +1069,9 @@ const server = http.createServer(async (req, res) => {
 				// its own schedule and the phone watches it in /api/state; `send:true` opts API
 				// callers into waiting.
 				// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-				const settled = prompt ? firstPrompts.enqueue(created.id, prompt, body.sendImmediately !== false) : null
+				const settled = prompt
+					? firstPrompts.enqueue(created.id, prompt, body.sendImmediately !== false, attachmentIds)
+					: null
 				const failed = settled && body.send === true ? await settled : null
 				settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
 				return json(req, res, 200, {
@@ -1296,6 +1342,29 @@ const server = http.createServer(async (req, res) => {
 					)
 				}
 				const answer = await sendOnce.run(body.clientId, async () => {
+					// A failed first-prompt entry offers the same Retry button as an ordinary
+					// prompt. If staging had been the failure, put its files in place before
+					// that retry reaches the attachment tokens.
+					const first = firstPrompts.get(ws.id)
+					if (first?.attachmentIds?.length && first.text === text) {
+						if (!ws.worktree)
+							return {
+								status: 409,
+								body: { ok: false, strategy: actuator.name, error: 'worktree path unresolved' }
+							}
+						try {
+							materializeStagedAttachments(STAGED_ATTACHMENTS_DIR, ws.worktree, first.attachmentIds)
+						} catch (err) {
+							return {
+								status: 409,
+								body: {
+									ok: false,
+									strategy: actuator.name,
+									error: err instanceof Error ? err.message : 'the attached files could not be copied'
+								}
+							}
+						}
+					}
 					if (agent) {
 						const applied = await applyAgentPatch(ws, sessionId, agent)
 						if (!applied.ok) {

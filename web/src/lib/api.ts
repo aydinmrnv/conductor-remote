@@ -23,6 +23,7 @@ import type {
 	SessionsResponse,
 	SettingsResponse,
 	SplitChatResult,
+	StageAttachmentResult,
 	StateResponse,
 	StatusResult,
 	StopResult,
@@ -189,6 +190,13 @@ export const client = {
 	localImage: (filePath: string): Promise<string> => cachedObjectUrl(routes.localImage.path(filePath)),
 	/** A bounded source preview for an absolute `path:line` link in chat Markdown. */
 	filePreview: (reference: string) => api<FilePreviewResponse>(routes.filePreview.path(reference)),
+	/** Keep a file on the relay until the workspace it belongs to exists. */
+	stageAttachment: (file: File) => upload<StageAttachmentResult>(routes.stageAttachment.path(), file),
+	/** Remove a staged file when it is taken off the new-workspace prompt. */
+	discardStagedAttachment: (stageId: string) =>
+		api<{ ok: boolean }>(routes.discardStagedAttachment.path(stageId), {
+			method: routes.discardStagedAttachment.method
+		}),
 	/** One workspace by id, archived included — how an archived chat is opened for reading. */
 	workspace: (workspaceId: string) => api<WorkspaceResponse>(routes.workspace.path(workspaceId)),
 	sessions: (workspaceId: string) => api<SessionsResponse>(routes.sessions.path(workspaceId)),
@@ -274,10 +282,10 @@ export const client = {
 	 * sends the prompt itself from there (src/firstprompt.ts). `sendImmediately: false`
 	 * holds that send until the worktree is built instead.
 	 */
-	createWorkspace: (repo: string, prompt: string, sendImmediately = true) =>
+	createWorkspace: (repo: string, prompt: string, sendImmediately = true, attachmentIds: string[] = []) =>
 		api<CreateWorkspaceResult>(
 			routes.createWorkspace.path(),
-			{ method: routes.createWorkspace.method, body: JSON.stringify({ repo, prompt, sendImmediately }) },
+			{ method: routes.createWorkspace.method, body: JSON.stringify({ repo, prompt, sendImmediately, attachmentIds }) },
 			ACTION_TIMEOUT_MS
 		),
 	/** Change a chat's model / effort / plan / fast via Conductor's own composer controls. */

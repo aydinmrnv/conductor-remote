@@ -71,6 +71,10 @@ export const routes = {
 	localImage: param('GET', '/api/local-images/:path'),
 	/** A source-file preview linked from agent Markdown. */
 	filePreview: param('GET', '/api/files/:reference'),
+	/** Temporarily hold a file while the phone creates the workspace it will belong to. */
+	stageAttachment: flat('POST', '/api/attachments'),
+	/** Drop a staged file the user removed before creating its workspace. */
+	discardStagedAttachment: param('DELETE', '/api/attachments/:attachmentId'),
 	logs: flat('GET', '/api/logs'),
 	settings: flat('GET', '/api/settings'),
 	updateSettings: flat('PATCH', '/api/settings'),

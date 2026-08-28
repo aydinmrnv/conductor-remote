@@ -21,6 +21,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { attachmentName, attachmentToken, writeAttachment } from '../src/attachments.ts'
+import { attachmentTokens } from '../src/shared.ts'
+import {
+	discardStagedAttachment,
+	materializeStagedAttachments,
+	stageAttachment,
+	stagedAttachments
+} from '../src/staged-attachments.ts'
 
 const failures: string[] = []
 function check(label: string, pass: boolean, detail = ''): void {
@@ -44,6 +51,20 @@ check(
 	attachmentToken('Transcript of Approve plan.md', '.context/attachments/kuB8pt/Transcript of Approve plan.md') ===
 		'@⟦Transcript of Approve plan.md⟧(.context%2Fattachments%2FkuB8pt%2FTranscript%20of%20Approve%20plan.md)'
 )
+const parenthesized = '@⟦diagram (old).png⟧(.context%2Fattachments%2FjOTeCX%2Fdiagram%20(old).png)'
+check(
+	'a token with parentheses in its file name is found whole',
+	JSON.stringify(attachmentTokens(parenthesized)) ===
+		JSON.stringify([
+			{
+				start: 0,
+				end: parenthesized.length,
+				name: 'diagram (old).png',
+				path: '.context/attachments/jOTeCX/diagram (old).png'
+			}
+		])
+)
+check('ordinary text that resembles a token stays ordinary', attachmentTokens('@⟦file.md⟧(example.md)').length === 0)
 
 // ── the name ────────────────────────────────────────────────────────────────────
 check(
@@ -82,6 +103,29 @@ try {
 
 	const image = writeAttachment(root, 'image.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]))
 	check('binary bytes are preserved', fs.readFileSync(image.absPath).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])))
+
+	const staging = path.join(root, 'staging')
+	const worktree = path.join(root, 'worktree')
+	const staged = stageAttachment(staging, 'ship plans (final).md', Buffer.from('# Power circuits\n'))
+	check(
+		'a staged attachment exposes the token it will send',
+		staged.token === attachmentToken(staged.name, staged.path)
+	)
+	check(
+		'a staged attachment survives a disk read',
+		stagedAttachments(staging, [staged.stageId])?.[0]?.name === staged.name
+	)
+	materializeStagedAttachments(staging, worktree, [staged.stageId])
+	check(
+		'a staged attachment reaches its token path in the new worktree',
+		fs.readFileSync(path.join(worktree, staged.path), 'utf8') === '# Power circuits\n'
+	)
+	check(
+		'a staged attachment remains available until delivery is durable',
+		stagedAttachments(staging, [staged.stageId]) !== null
+	)
+	discardStagedAttachment(staging, staged.stageId)
+	check('a delivered attachment leaves no staged copy', stagedAttachments(staging, [staged.stageId]) === null)
 } finally {
 	fs.rmSync(root, { recursive: true, force: true })
 }
