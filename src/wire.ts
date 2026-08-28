@@ -193,6 +193,18 @@ export interface CreateWorkspaceResult {
 	error?: string
 }
 
+/** A file held by the relay until the new workspace has a worktree. */
+export interface StagedAttachment extends Attachment {
+	/** Opaque id accepted by `POST /api/workspaces` as an initial attachment. */
+	stageId: string
+}
+
+/** POST /api/attachments — stage one phone file before its workspace exists. */
+export interface StageAttachmentResult {
+	ok: true
+	attachment: StagedAttachment
+}
+
 /** POST /api/sessions/:id/prompt — the relay retries inside the request, hence `attempts`. */
 export interface SendResult extends ActuatorSendResult {
 	/** Runs the relay needed to land the prompt (it retries a failed send itself). */

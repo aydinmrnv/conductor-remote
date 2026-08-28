@@ -79,3 +79,65 @@ export function modelPickerLabel(label: string): string {
  */
 export const HIT_OPEN = '\u0001'
 export const HIT_CLOSE = '\u0002'
+
+/** One attachment token in Conductor's prompt syntax. */
+export interface AttachmentToken {
+	/** Character offsets in the prompt, with `end` immediately after the closing parenthesis. */
+	start: number
+	end: number
+	/** The file name shown on Conductor's attachment chip. */
+	name: string
+	/** The worktree-relative file path the token points to. */
+	path: string
+}
+
+const ATTACHMENT_PREFIX = '.context/attachments/'
+
+/**
+ * Read Conductor attachment tokens from prompt text.
+ *
+ * `encodeURIComponent` intentionally leaves parentheses alone. Looking for the first
+ * closing parenthesis would therefore break an ordinary file such as `diagram (old).png`.
+ * Match a candidate only once its decoded path has Conductor's attachment layout and
+ * its basename equals the visible name.
+ */
+export function attachmentTokens(text: string): AttachmentToken[] {
+	const tokens: AttachmentToken[] = []
+	let offset = 0
+	while (offset < text.length) {
+		const start = text.indexOf('@⟦', offset)
+		if (start < 0) break
+		const labelEnd = text.indexOf('⟧(', start + 2)
+		if (labelEnd < 0 || /[\r\n]/.test(text.slice(start, labelEnd))) {
+			offset = start + 2
+			continue
+		}
+		const name = text.slice(start + 2, labelEnd)
+		const pathStart = labelEnd + 2
+		let close = pathStart
+		let found = false
+		while (!found) {
+			close = text.indexOf(')', close)
+			if (close < 0) break
+			const encoded = text.slice(pathStart, close)
+			try {
+				const filePath = decodeURIComponent(encoded)
+				const suffix = filePath.startsWith(ATTACHMENT_PREFIX) ? filePath.slice(ATTACHMENT_PREFIX.length) : ''
+				const slash = suffix.indexOf('/')
+				const id = slash < 0 ? '' : suffix.slice(0, slash)
+				const fileName = slash < 0 ? '' : suffix.slice(slash + 1)
+				if (/^[A-Za-z0-9]{6}$/.test(id) && fileName === name && !fileName.includes('/')) {
+					tokens.push({ start, end: close + 1, name, path: filePath })
+					offset = close + 1
+					found = true
+					continue
+				}
+			} catch {
+				// Try a later parenthesis. It can be part of an otherwise valid file name.
+			}
+			close += 1
+		}
+		if (!found) offset = start + 2
+	}
+	return tokens
+}

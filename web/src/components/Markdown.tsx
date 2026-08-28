@@ -1,9 +1,10 @@
-import { X } from 'lucide-react'
+import { Paperclip, X } from 'lucide-react'
 import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
+import { attachmentTokens } from '../../../src/shared.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
@@ -12,6 +13,31 @@ import { Spinner } from './ui.tsx'
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
 const PLUGINS = [remarkGfm, remarkBreaks]
 const TEMP_IMAGE_PREFIX = '/tmp/'
+const ATTACHMENT_HOST = 'conductor-attachment.invalid'
+
+/** Turn a Conductor token into a Markdown link that `ChatLink` renders as a file chip. */
+function withAttachmentPills(text: string): string {
+	const tokens = attachmentTokens(text)
+	if (!tokens.length) return text
+	let markdown = ''
+	let offset = 0
+	for (const token of tokens) {
+		const label = token.name.replace(/[\\`*_[\]<>]/g, '\\$&')
+		markdown += `${text.slice(offset, token.start)}[${label}](https://${ATTACHMENT_HOST}/?path=${encodeURIComponent(token.path)})`
+		offset = token.end
+	}
+	return markdown + text.slice(offset)
+}
+
+function attachmentPath(href: string | undefined): string | null {
+	if (!href) return null
+	try {
+		const url = new URL(href)
+		return url.hostname === ATTACHMENT_HOST ? url.searchParams.get('path') : null
+	} catch {
+		return null
+	}
+}
 
 /** Fetch temporary agent output through the relay, where the browser can attach its auth header. */
 function ChatImage({ src, alt, ...props }: React.ComponentProps<'img'>) {
@@ -44,8 +70,20 @@ function sourceReference(href: string | undefined): string | null {
  * Intercept coding-agent locations and show a relay-backed source preview instead.
  */
 function ChatLink({ href, children, onClick, ...props }: React.ComponentProps<'a'>) {
+	const attachment = attachmentPath(href)
 	const reference = sourceReference(href)
 	const [previewing, setPreviewing] = useState(false)
+	if (attachment) {
+		return (
+			<span
+				title={attachment}
+				className="inline-flex max-w-full items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 align-baseline text-[0.9em] font-medium text-muted"
+			>
+				<Paperclip size={12} className="shrink-0" />
+				<span className="truncate">{children}</span>
+			</span>
+		)
+	}
 	return (
 		<>
 			<a
@@ -199,7 +237,7 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
 	return (
 		<div className="md">
 			<ReactMarkdown remarkPlugins={PLUGINS} components={COMPONENTS}>
-				{children}
+				{withAttachmentPills(children)}
 			</ReactMarkdown>
 		</div>
 	)

@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useRepos } from '../hooks.ts'
@@ -11,6 +11,14 @@ import { RepoAvatar } from './ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
 const SEND_NOW_KEY = 'conductor-remote-send-immediately'
+
+type PendingAttachment = {
+	id: string
+	name: string
+	stageId?: string
+	status: 'uploading' | 'ready' | 'error'
+	error?: string
+}
 
 function loadSendNow(): boolean {
 	try {
@@ -41,10 +49,11 @@ function saveSendNow(on: boolean): void {
  *
  * **Send immediately** is that delivery's one dial, and it is on because Conductor
  * is: its own New workspace box starts the agent 4-9s after the row exists, with the
- * setup script still running. Turning it off holds the prompt until the worktree is
- * built, which is worth it only where the agent's first move needs what setup
- * installs. Kept in localStorage rather than on the relay — it is this phone's habit,
- * and it has to survive the relay updating itself underneath the app.
+ * setup script still running. An attached prompt waits only until there is a worktree
+ * to hold its files. Turning it off holds every prompt until the worktree is built,
+ * which is worth it only where the agent's first move needs what setup installs. Kept
+ * in localStorage rather than on the relay — it is this phone's habit, and it has to
+ * survive the relay updating itself underneath the app.
  */
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
@@ -56,8 +65,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	const fileInput = useRef<HTMLInputElement>(null)
+	const cancelledUploads = useRef(new Set<string>())
+	const dragDepth = useRef(0)
+	const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+	const [draggingFiles, setDraggingFiles] = useState(false)
 	const navigate = useNavigate()
 	const queryClient = useQueryClient()
+	const online = useApp(s => s.online)
 
 	const repos = data?.repos ?? []
 	const selected = repos.find(r => r.name === repo)
@@ -68,13 +83,114 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		if (repos.length && !repos.some(r => r.name === repo)) setRepo(repos[0].name)
 	}, [repo, repos])
 
+	const readyAttachments = attachments.filter(attachment => attachment.status === 'ready' && attachment.stageId)
+	const uploading = attachments.some(attachment => attachment.status === 'uploading')
+	const attachmentError = attachments.some(attachment => attachment.status === 'error')
+	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
+
+	const discardAttachment = (stageId: string | undefined) => {
+		if (stageId) void client.discardStagedAttachment(stageId).catch(() => undefined)
+	}
+
+	const removeAttachment = (id: string) => {
+		const attachment = attachments.find(current => current.id === id)
+		cancelledUploads.current.add(id)
+		discardAttachment(attachment?.stageId)
+		setAttachments(current => current.filter(attachment => attachment.id !== id))
+	}
+
+	const addFiles = async (picked: FileList | File[]) => {
+		if (!online) return
+		for (const file of Array.from(picked)) {
+			const id = crypto.randomUUID()
+			setAttachments(current => [...current, { id, name: file.name || 'attachment', status: 'uploading' }])
+			try {
+				const uploaded = await client.stageAttachment(file)
+				if (cancelledUploads.current.delete(id)) {
+					discardAttachment(uploaded.attachment.stageId)
+					continue
+				}
+				setAttachments(current =>
+					current.map(attachment =>
+						attachment.id === id
+							? {
+									...attachment,
+									name: uploaded.attachment.name,
+									stageId: uploaded.attachment.stageId,
+									status: 'ready'
+								}
+							: attachment
+					)
+				)
+			} catch (err) {
+				if (cancelledUploads.current.delete(id)) continue
+				setAttachments(current =>
+					current.map(attachment =>
+						attachment.id === id
+							? { ...attachment, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
+							: attachment
+					)
+				)
+			}
+		}
+	}
+
+	const chooseFiles = (files: FileList | null) => {
+		if (files?.length) void addFiles(files)
+	}
+
+	const isFileDrag = (event: React.DragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes('Files')
+
+	const dragEnter = (event: React.DragEvent<HTMLElement>) => {
+		if (!isFileDrag(event)) return
+		event.preventDefault()
+		dragDepth.current += 1
+		setDraggingFiles(true)
+	}
+
+	const dragLeave = (event: React.DragEvent<HTMLElement>) => {
+		if (!isFileDrag(event)) return
+		dragDepth.current -= 1
+		if (dragDepth.current <= 0) {
+			dragDepth.current = 0
+			setDraggingFiles(false)
+		}
+	}
+
+	const dragOver = (event: React.DragEvent<HTMLElement>) => {
+		if (!isFileDrag(event)) return
+		event.preventDefault()
+		event.dataTransfer.dropEffect = 'copy'
+	}
+
+	const drop = (event: React.DragEvent<HTMLElement>) => {
+		if (!isFileDrag(event)) return
+		event.preventDefault()
+		dragDepth.current = 0
+		setDraggingFiles(false)
+		chooseFiles(event.dataTransfer.files)
+	}
+
+	const close = () => {
+		for (const attachment of attachments) {
+			cancelledUploads.current.add(attachment.id)
+			discardAttachment(attachment.stageId)
+		}
+		onClose()
+	}
+
 	const create = async () => {
 		const text = prompt.trim()
-		if (!repo || busy) return
+		if (!repo || busy || uploading || attachmentError || !online) return
 		setBusy(true)
 		setError(null)
 		try {
-			const r = await client.createWorkspace(repo, text, sendNow)
+			const r = await client.createWorkspace(
+				repo,
+				text,
+				sendNow,
+				readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : []))
+			)
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
 				return
@@ -99,7 +215,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				<span className="flex-1 text-[15px] font-semibold">New workspace</span>
 				<button
 					type="button"
-					onClick={onClose}
+					onClick={close}
 					aria-label="Close"
 					className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 				>
@@ -142,29 +258,100 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 						</ul>
 					) : null}
 				</div>
-				<textarea
-					value={prompt}
-					onChange={e => setPrompt(e.target.value)}
-					placeholder="What should the agent do? (optional)"
-					rows={6}
-					// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
-					autoFocus
-					// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
-					className="w-full resize-none rounded-2xl border border-border bg-surface px-4 py-3 text-base outline-none placeholder:text-faint"
-				/>
+				<fieldset
+					aria-label="First message"
+					onDragEnter={dragEnter}
+					onDragLeave={dragLeave}
+					onDragOver={dragOver}
+					onDrop={drop}
+					className={cn(
+						'relative m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60',
+						draggingFiles && 'border-accent bg-accent-soft'
+					)}
+				>
+					<input
+						ref={fileInput}
+						type="file"
+						multiple
+						className="hidden"
+						onChange={event => {
+							chooseFiles(event.target.files)
+							event.target.value = ''
+						}}
+					/>
+					{attachments.length ? (
+						<div className="flex flex-wrap gap-1 px-2 pb-1">
+							{attachments.map(attachment => (
+								<div
+									key={attachment.id}
+									title={attachment.error ?? attachment.name}
+									className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted"
+								>
+									{attachment.status === 'uploading' ? (
+										<LoaderCircle size={12} className="shrink-0 animate-spin" />
+									) : null}
+									<span className="truncate">
+										{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
+									</span>
+									<button
+										type="button"
+										onClick={() => removeAttachment(attachment.id)}
+										aria-label={`Remove ${attachment.name}`}
+										className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
+									>
+										<X size={13} />
+									</button>
+								</div>
+							))}
+						</div>
+					) : null}
+					<textarea
+						value={prompt}
+						onChange={e => setPrompt(e.target.value)}
+						placeholder="What should the agent do? (optional)"
+						rows={6}
+						// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
+						autoFocus
+						// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
+						className="block w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint"
+						onPaste={event => {
+							const files = event.clipboardData.files
+							if (!files.length) return
+							event.preventDefault()
+							chooseFiles(files)
+						}}
+					/>
+					<div className="flex items-center px-1 pt-1">
+						<button
+							type="button"
+							onClick={() => fileInput.current?.click()}
+							disabled={!online}
+							className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-muted transition active:bg-surface-2 disabled:text-faint"
+						>
+							<Paperclip size={15} />
+							Attach files
+						</button>
+						<span className="ml-auto pr-1 text-[11px] text-faint">Drop files here</span>
+					</div>
+					{draggingFiles ? (
+						<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">
+							Drop files to attach
+						</div>
+					) : null}
+				</fieldset>
 				{/* A real checkbox behind a drawn one: the whole row is the tap target, and the
-				    box keeps its keyboard and VoiceOver behaviour. Disabled with no prompt
+				    box keeps its keyboard and VoiceOver behaviour. Disabled with no first message
 				    rather than hidden, or it would reflow the sheet under your thumb as you type. */}
 				<label
 					className={cn(
 						'flex items-start gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 transition active:bg-surface-2',
-						!prompt.trim() && 'opacity-40'
+						!hasInitialPrompt && 'opacity-40'
 					)}
 				>
 					<input
 						type="checkbox"
 						checked={sendNow}
-						disabled={!prompt.trim()}
+						disabled={!hasInitialPrompt}
 						onChange={e => {
 							setSendNow(e.target.checked)
 							saveSendNow(e.target.checked)
@@ -183,7 +370,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 						<span className="block text-[15px] font-medium">Send immediately</span>
 						<span className="block text-xs text-muted">
 							{sendNow
-								? 'The prompt goes as soon as the chat exists, without waiting for setup.'
+								? 'The prompt goes as soon as the chat and attached files are ready, without waiting for setup.'
 								: 'The prompt waits until the worktree has finished setting up.'}
 						</span>
 					</span>
@@ -195,10 +382,10 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				<button
 					type="button"
 					onClick={create}
-					disabled={!repo || busy}
+					disabled={!repo || busy || uploading || attachmentError || !online}
 					className="w-full rounded-2xl bg-accent px-4 py-3 text-[15px] font-semibold text-bg transition active:scale-[0.985] disabled:opacity-40"
 				>
-					{busy ? 'Creating…' : prompt.trim() ? 'Create & start' : 'Create empty workspace'}
+					{busy ? 'Creating…' : hasInitialPrompt ? 'Create & start' : 'Create empty workspace'}
 				</button>
 			</div>
 		</div>,

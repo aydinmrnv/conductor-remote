@@ -71,6 +71,8 @@ export function attachmentToken(name: string, relPath: string): string {
 }
 
 export interface WrittenAttachment {
+	/** The six-character directory id Conductor keeps out of the visible file name. */
+	id: string
 	/** The file name as the chip shows it. */
 	name: string
 	/** Worktree-relative, which is how the token spells it and how an agent should read it. */
@@ -101,5 +103,5 @@ export function writeAttachment(worktree: string, name: string, body: string | U
 	const absPath = path.join(dir, safe)
 	fs.writeFileSync(absPath, body)
 	const relPath = path.join(ATTACHMENT_DIR, id, safe)
-	return { name: safe, relPath, absPath, bytes: Buffer.byteLength(body), token: attachmentToken(safe, relPath) }
+	return { id, name: safe, relPath, absPath, bytes: Buffer.byteLength(body), token: attachmentToken(safe, relPath) }
 }
