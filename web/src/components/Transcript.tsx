@@ -147,8 +147,6 @@ export function Transcript({
 									e={row.e}
 									showChatActions={row.key === lastAssistantKey}
 									onFork={row.key === lastAssistantKey ? onFork : undefined}
-									working={row.key === lastAssistantKey && working}
-									workingSince={workingSince}
 								/>
 							)
 						)}
@@ -188,7 +186,10 @@ export function Transcript({
 								onDismiss={() => dismiss(showQueued)}
 							/>
 						) : null}
-						{working && !lastAssistantKey ? <WorkingIndicator since={workingSince} /> : null}
+						{/* The agent can publish a short update, then carry on with tools. Keep its
+					    live indicator after every transcript row so activity always reads as the
+					    newest item, rather than attaching it to that earlier update. */}
+						{working ? <WorkingIndicator since={workingSince} /> : null}
 					</div>
 				)}
 			</div>
@@ -375,15 +376,11 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 const Entry = memo(function Entry({
 	e,
 	showChatActions = false,
-	onFork,
-	working = false,
-	workingSince
+	onFork
 }: {
 	e: TranscriptEntry
 	showChatActions?: boolean
 	onFork?: (format: SplitFormat) => Promise<void>
-	working?: boolean
-	workingSince?: number | null
 }) {
 	if (e.role === 'user') {
 		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
@@ -443,25 +440,13 @@ const Entry = memo(function Entry({
 			<Bubble className="max-w-[92%] px-0.5">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
-			{showChatActions ? (
-				<ChatActions text={e.text} onFork={onFork} working={working} workingSince={workingSince} />
-			) : null}
+			{showChatActions ? <ChatActions text={e.text} onFork={onFork} /> : null}
 		</div>
 	)
 })
 
 /** Copy the latest response, or branch the whole chat from a transcript attachment. */
-function ChatActions({
-	text,
-	onFork,
-	working = false,
-	workingSince
-}: {
-	text: string
-	onFork?: (format: SplitFormat) => Promise<void>
-	working?: boolean
-	workingSince?: number | null
-}) {
+function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFormat) => Promise<void> }) {
 	const [copied, setCopied] = useState(false)
 	const [menuOpen, setMenuOpen] = useState(false)
 	const [forking, setForking] = useState(false)
@@ -494,7 +479,6 @@ function ChatActions({
 	return (
 		<div className="mt-1.5 flex max-w-full flex-col items-start gap-1">
 			<div className="flex items-center gap-3">
-				{working ? <WorkingIndicator since={workingSince} /> : null}
 				<div className="relative">
 					<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
 						<button
