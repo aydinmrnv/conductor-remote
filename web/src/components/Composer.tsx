@@ -15,10 +15,9 @@ type StagedAttachment = Attachment & {
 }
 
 /**
- * The draft lives in the store (persisted per workspace — see lib/draft.ts), not
- * in local state: a first prompt that couldn't be delivered is stashed straight
- * into it, and the box has to show that the moment it lands rather than on the
- * next remount.
+ * The draft lives in the store (persisted per chat — see lib/draft.ts), not in
+ * local state. A fork stages its transcript attachment in the new chat before
+ * this component mounts, so the box has to show it without waiting for a remount.
  *
  * The agent controls live *inside* the card, under the text and sharing the send
  * button's row — one border, one left edge (card padding 8px + control padding
@@ -46,8 +45,10 @@ export function Composer({
 	working: boolean
 	actuator?: ActuatorInfo
 }) {
-	const text = useApp(s => s.drafts[workspaceId] ?? '')
+	const draftKey = sessionId ?? workspaceId
+	const text = useApp(s => s.drafts[draftKey] ?? '')
 	const setDraft = useApp(s => s.setDraft)
+	const moveDraft = useApp(s => s.moveDraft)
 	const online = useApp(s => s.online)
 	const clearWorking = useApp(s => s.clearWorking)
 	const sendPrompt = useSendPrompt()
@@ -63,6 +64,12 @@ export function Composer({
 	const activeAttachments = attachments.filter(attachment => attachment.sessionId === sessionId)
 	const readyAttachments = activeAttachments.filter(attachment => attachment.status === 'ready')
 	const uploading = activeAttachments.some(attachment => attachment.status === 'uploading')
+
+	// Before chats had tabs, drafts used their workspace id. Move one across when
+	// that workspace first opens a chat, so an upgrade keeps text the user had typed.
+	useEffect(() => {
+		if (sessionId) moveDraft(workspaceId, sessionId)
+	}, [workspaceId, sessionId, moveDraft])
 
 	const autosize = () => {
 		const el = ref.current
@@ -81,7 +88,7 @@ export function Composer({
 		const value = [...readyAttachments.map(attachment => attachment.token), text.trim()].filter(Boolean).join('\n')
 		if (!value || uploading || !sessionId || !online) return
 		void sendPrompt({ sessionId, workspaceId, text: value, queue })
-		setDraft(workspaceId, '')
+		setDraft(draftKey, '')
 		setAttachments(current => current.filter(attachment => attachment.sessionId !== sessionId))
 	}
 
@@ -279,7 +286,7 @@ export function Composer({
 					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
 					// takes focus, and never zooms back out on blur.
 					className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
-					onChange={e => setDraft(workspaceId, e.target.value)}
+					onChange={e => setDraft(draftKey, e.target.value)}
 					onPaste={event => {
 						const files = event.clipboardData.files
 						if (!files.length) return

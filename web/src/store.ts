@@ -101,7 +101,7 @@ interface AppState {
 	workingHints: Record<string, number>
 	/** Prompts awaiting confirmation, rendered as optimistic in-chat bubbles. */
 	pending: PendingMessage[]
-	/** Unsent composer text per workspace, mirrored to localStorage (see lib/draft.ts). */
+	/** Unsent composer text per chat, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
 	/**
 	 * Agent settings chosen on the phone but not yet pushed into Conductor, per
@@ -146,7 +146,9 @@ interface AppState {
 	addPending: (m: { id: string; sessionId: string; workspaceId: string; text: string; queue?: boolean }) => void
 	failPending: (id: string, error: string) => void
 	removePending: (id: string) => void
-	setDraft: (workspaceId: string, text: string) => void
+	setDraft: (chatId: string, text: string) => void
+	/** Move a legacy workspace-keyed draft to its first opened chat. */
+	moveDraft: (fromId: string, toId: string) => void
 	/** Stage an agent change for the next send. A key set to `undefined` unstages it. */
 	stageAgent: (sessionId: string, patch: AgentPatch) => void
 	/** Drop the staged keys a send just applied — anything staged since survives. */
@@ -203,9 +205,18 @@ export const useApp = create<AppState>((set, get) => {
 		failPending: (id, error) =>
 			set({ pending: get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p)) }),
 		removePending: id => set({ pending: get().pending.filter(p => p.id !== id) }),
-		setDraft: (workspaceId, text) => {
-			writeDraft(workspaceId, text)
-			set({ drafts: { ...get().drafts, [workspaceId]: text } })
+		setDraft: (chatId, text) => {
+			writeDraft(chatId, text)
+			set({ drafts: { ...get().drafts, [chatId]: text } })
+		},
+		moveDraft: (fromId, toId) => {
+			const drafts = get().drafts
+			const text = drafts[fromId]
+			if (!text || fromId === toId || drafts[toId] !== undefined) return
+			writeDraft(fromId, '')
+			writeDraft(toId, text)
+			const { [fromId]: _moved, ...rest } = drafts
+			set({ drafts: { ...rest, [toId]: text } })
 		},
 		markRead: (sessionId, at) => {
 			// The session poll re-fires this every couple of seconds while a chat is open;
