@@ -33,6 +33,7 @@ import type {
 	CreateWorkspaceResult,
 	LogsResponse,
 	MessagesResponse,
+	ModelCatalogResponse,
 	ModelsResult,
 	NoSleepResult,
 	NoSleepStatus,
@@ -61,7 +62,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace, dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, list_models and set_workspace_status drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; a requested model and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, a live list_models call and set_workspace_status drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -302,12 +303,17 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'create_workspace',
 			description:
-				'Start a new Conductor workspace in a repo, optionally with a first prompt. This is the one write that touches no UI: it opens a Conductor deep link, so it needs no Accessibility and steals no focus. Returns as soon as the workspace row exists (~2s), before the worktree is built; the relay delivers the first prompt itself, normally within seconds, and Conductor runs it once setup finishes. Creating several in a row is fine — do not resend a prompt list_workspaces still shows as pending.',
+				'Start a new Conductor workspace in a repo, optionally with a first prompt and model. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies a requested model through Conductor’s UI after it creates the first chat and before it delivers the prompt. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
 			inputSchema: {
 				type: 'object',
 				properties: {
 					repo: { type: 'string', description: 'Exact name from list_repos.' },
 					prompt: { type: 'string', description: 'First prompt for the new agent. Omit to open an empty workspace.' },
+					model: {
+						type: 'string',
+						description:
+							'Picker label from list_models with no session_id. The relay applies it before the first prompt, or configures an empty workspace once its chat exists.'
+					},
 					wait_for_send: {
 						type: 'boolean',
 						description:
@@ -324,12 +330,13 @@ export function createTools(call: RelayCall): Tool[] {
 			run: async args => {
 				const repo = need(args, 'repo')
 				const prompt = str(args.prompt)
+				const model = str(args.model)
 				const send = args.wait_for_send === true
 				// Default on, matching the relay: an omitted flag must never mean "wait".
 				const sendImmediately = args.send_immediately !== false
 				const data = await call<CreateWorkspaceResult>(routes.createWorkspace.path(), {
 					method: routes.createWorkspace.method,
-					body: { repo, prompt, send, sendImmediately },
+					body: { repo, prompt, model, send, sendImmediately },
 					timeoutMs: send ? WRITE_TIMEOUT_MS : 30_000
 				})
 				const lines = [
@@ -340,6 +347,7 @@ export function createTools(call: RelayCall): Tool[] {
 				else if (data.pendingPrompt && !data.sent)
 					lines.push('the first prompt is queued — the relay delivers it, so do not send it again')
 				else if (data.sent) lines.push('the first prompt was delivered')
+				if (data.model) lines.push(data.configured ? `model applied: ${data.model}` : `model queued: ${data.model}`)
 				return lines.join('\n')
 			}
 		},
@@ -472,17 +480,30 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'list_models',
 			description:
-				'The models this chat can be switched to, read live off Conductor’s own picker rather than a hard-coded list that would rot. This DRIVES THE REAL UI — it focuses the workspace and opens the menu — so it costs a few seconds of stolen focus, same as a send. Call it before set_agent_options when you do not already know the exact label.',
+				'The model labels the relay knows. With no session_id this returns its stored picker labels, grouped by harness; use it before create_workspace. With a session_id it reads that chat’s live Conductor picker and refreshes the stored labels. A live read DRIVES THE REAL UI — it focuses the workspace and opens the menu — so it costs a few seconds of stolen focus.',
 			inputSchema: {
 				type: 'object',
 				properties: {
-					session_id: { type: 'string' },
-					workspace_id: { type: 'string', description: 'Required: the relay locates the chat inside it.' }
-				},
-				required: ['session_id', 'workspace_id']
+					session_id: {
+						type: 'string',
+						description: 'The chat whose live picker to read. Omit to use the relay cache.'
+					},
+					workspace_id: {
+						type: 'string',
+						description: 'Workspace holding session_id. Required when session_id is set.'
+					}
+				}
 			},
 			run: async args => {
-				const sessionId = need(args, 'session_id')
+				const sessionId = str(args.session_id)
+				if (!sessionId) {
+					const data = await call<ModelCatalogResponse>(routes.modelCatalog.path())
+					if (!data.groups.length)
+						return 'no models are cached yet — read a chat’s live picker with session_id and workspace_id'
+					return data.groups
+						.map(group => `## ${group.agentType}\n${group.models.map(model => `- ${model}`).join('\n')}`)
+						.join('\n\n')
+				}
 				const workspaceId = need(args, 'workspace_id')
 				const data = await call<ModelsResult>(
 					`${routes.models.path(sessionId)}?workspaceId=${encodeURIComponent(workspaceId)}`,

@@ -1,10 +1,11 @@
-import { Check, ChevronDown, RefreshCw, Zap } from 'lucide-react'
+import { Zap } from 'lucide-react'
 import { useState } from 'react'
-import { useModels } from '../hooks.ts'
+import { useModelCatalog, useModels } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel } from '../lib/format.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { ModelPicker } from './ModelPicker.tsx'
 
 /**
  * Conductor's own composer controls, mirrored for the phone — and rendered
@@ -27,6 +28,8 @@ const EFFORT_LABELS: Record<string, string> = {
 	ultracode: 'Ultracode'
 }
 const EFFORT_ORDER = Object.keys(EFFORT_LABELS)
+/** Keep the relay cache useful without leaving a Conductor menu stale all day. */
+const MODEL_CATALOG_STALE_MS = 10 * 60 * 1000
 
 /** Nothing staged — a stable identity so the selector can't loop. */
 const NOTHING: AgentPatch = {}
@@ -55,7 +58,11 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	// through it — anything changed mid-send simply stages for the next one, which
 	// the store's key-wise `clearAgentDraft` is what makes safe.
 	const sending = useApp(s => s.pending.some(p => p.sessionId === session.id && p.status === 'sending'))
-	const { data: models, isFetching, isError } = useModels(session, workspaceId, picking)
+	const modelCatalog = useModelCatalog()
+	const cachedGroup = modelCatalog.data?.groups.find(group => group.agentType === (session.agent_type ?? 'unknown'))
+	const cacheFresh = !!cachedGroup && Date.now() - cachedGroup.updatedAt < MODEL_CATALOG_STALE_MS
+	const liveModels = useModels(session, workspaceId, picking && !cacheFresh)
+	const models = liveModels.data ?? cachedGroup?.models ?? []
 
 	const stage = (patch: AgentPatch) => stageAgent(session.id, patch)
 
@@ -73,59 +80,16 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	return (
 		<div className="min-w-0 flex-1">
 			<div className="flex flex-wrap items-center gap-0.5">
-				<div className="relative">
-					{/* Not gated on `online`: picking is local, and the cached list means the
-					    picker still works with the relay down — the change goes when the send does. */}
-					<button
-						type="button"
-						onClick={() => setPicking(p => !p)}
-						className={cn('ctl flex max-w-40 items-center gap-1', staged.model && 'ctl-staged')}
-					>
-						<span className="truncate">{staged.model ?? modelPill(session)}</span>
-						<ChevronDown size={13} className="shrink-0" />
-					</button>
-					{picking ? (
-						<>
-							{/* Tap-anywhere-else dismiss — a phone has no blur to lean on. */}
-							<button
-								type="button"
-								aria-label="Close model picker"
-								onClick={() => setPicking(false)}
-								className="fixed inset-0 z-30 cursor-default"
-							/>
-							<div className="absolute bottom-full left-0 z-40 mb-2 max-h-64 w-56 overflow-y-auto rounded-xl border border-border bg-surface-2 py-1 shadow-xl shadow-black/40">
-								<div className="flex items-center gap-1.5 px-3 py-1 text-[11px] text-faint">
-									Model
-									{isFetching ? <RefreshCw size={10} className="animate-spin" /> : null}
-								</div>
-								{models?.length ? (
-									models.map(m => (
-										<button
-											type="button"
-											key={m}
-											onClick={() => {
-												setPicking(false)
-												stage({ model: change(m, staged.model) })
-											}}
-											className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm active:bg-surface"
-										>
-											<span className="min-w-0 flex-1 truncate">{m}</span>
-											<Check size={13} className={cn('shrink-0 text-accent', staged.model !== m && 'invisible')} />
-										</button>
-									))
-								) : (
-									<div className="px-3 py-2 text-sm text-muted">
-										{isError ? 'Couldn’t read the model list.' : 'Reading Conductor’s model list…'}
-									</div>
-								)}
-								{/* A refresh that failed on top of a cached list: say so, keep the list usable. */}
-								{isError && models?.length ? (
-									<div className="px-3 py-1.5 text-[11px] text-del">Couldn’t refresh — showing the last list.</div>
-								) : null}
-							</div>
-						</>
-					) : null}
-				</div>
+				{/* Not gated on `online`: a cached choice can still stage locally and apply on send. */}
+				<ModelPicker
+					value={staged.model ?? modelPill(session)}
+					models={models}
+					open={picking}
+					onOpenChange={setPicking}
+					isFetching={liveModels.isFetching || modelCatalog.isFetching}
+					isError={liveModels.isError}
+					onSelect={model => stage({ model: change(model, staged.model) })}
+				/>
 				{effort ? (
 					<button
 						type="button"

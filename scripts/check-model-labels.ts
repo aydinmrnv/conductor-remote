@@ -3,7 +3,7 @@
  * the composer and the phone use the stable model name. Guard the shared
  * conversion so the relay cannot show a badge as part of a model choice again.
  */
-import { modelPickerLabel } from '../src/shared.ts'
+import { groupModelPickerLabels, modelPickerLabel } from '../src/shared.ts'
 
 const cases = [
 	['Opus 5 NEW', 'Opus 5'],
@@ -21,6 +21,17 @@ for (const [input, expected] of cases) {
 		console.error(`  FAIL  ${input} → ${actual}; expected ${expected}`)
 		failures++
 	}
+}
+
+const groups = groupModelPickerLabels(['Opus 5', 'Opus 5 1M', 'Sonnet 4.6', 'openai/gpt-5.4'])
+const opus = groups.find(group => group.label === 'Opus')?.models.join(',')
+const sonnet = groups.find(group => group.label === 'Sonnet')?.models.join(',')
+const openai = groups.find(group => group.label === 'openai')?.models.join(',')
+if (opus === 'Opus 5,Opus 5 1M' && sonnet === 'Sonnet 4.6' && openai === 'openai/gpt-5.4') {
+	console.info('  ok    groups model families')
+} else {
+	console.error(`  FAIL  groups model families; got ${JSON.stringify(groups)}`)
+	failures++
 }
 
 if (failures) process.exit(1)

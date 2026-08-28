@@ -3,10 +3,9 @@ import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ApiError, client } from './lib/api.ts'
-import { readModelCache, writeModelCache } from './lib/models.ts'
 import type { PushSupport } from './lib/push.ts'
 import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
-import type { Session, TranscriptEntry } from './lib/types.ts'
+import type { ModelCatalogResponse, Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
 
 /**
@@ -446,37 +445,40 @@ export function useLogs(file: string | null, enabled: boolean) {
 	})
 }
 
-/** How long a cached model list is served without asking Conductor again. */
-const MODELS_STALE_MS = 10 * 60 * 1000
+/**
+ * Picker labels already read from Conductor, kept by the relay rather than this
+ * browser. A new workspace has no session to inspect, so it reads this catalog.
+ */
+export function useModelCatalog() {
+	return useQuery<ModelCatalogResponse>({
+		queryKey: ['model-catalog'],
+		queryFn: client.modelCatalog,
+		staleTime: 60_000,
+		gcTime: Number.POSITIVE_INFINITY,
+		retry: false
+	})
+}
 
 /**
- * Conductor's model list, stale-while-revalidate.
+ * Conductor's live model list, stale-while-revalidate through the relay cache.
  *
  * Reading it live opens the real picker on the Mac (AppleScript, seconds, stolen
- * focus), so the last list is cached in localStorage per `agent_type` and handed
- * over the moment the picker opens; a list past `MODELS_STALE_MS` refetches
- * behind the rendered one and swaps in when it lands. `enabled` is the picker's
- * open state — a closed picker never touches the desktop.
- *
- * A failed refresh deliberately keeps the cached list on screen (React Query
- * holds the last data): a stale list you can pick from beats an empty one, and
- * the picker says the refresh failed. Retries are off — each one is another
- * Conductor activation.
+ * focus), so this only runs while the picker is open. A successful read updates
+ * the persisted relay cache, which serves the next browser and new workspace.
  */
 export function useModels(session: Session | undefined, workspaceId: string, enabled: boolean) {
 	const agentType = session?.agent_type ?? 'claude'
+	const queryClient = useQueryClient()
 	return useQuery({
 		queryKey: ['models', agentType],
 		queryFn: async () => {
 			const r = await client.models((session as Session).id, workspaceId)
 			if (!r.ok || !r.models?.length) throw new Error(r.error ?? 'could not read the model list')
-			writeModelCache(agentType, r.models, Date.now())
+			await queryClient.invalidateQueries({ queryKey: ['model-catalog'] })
 			return r.models
 		},
 		enabled: enabled && !!session,
-		initialData: () => readModelCache(agentType)?.models,
-		initialDataUpdatedAt: () => readModelCache(agentType)?.at,
-		staleTime: MODELS_STALE_MS,
+		staleTime: 0,
 		gcTime: Number.POSITIVE_INFINITY,
 		retry: false
 	})

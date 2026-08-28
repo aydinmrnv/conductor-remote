@@ -64,6 +64,8 @@ export interface FirstPromptTarget {
 export interface FirstPrompt {
 	workspaceId: string
 	text: string
+	/** Picker label selected while the workspace was being created. */
+	model?: string
 	/** Files staged before this workspace had a worktree. They must land before `text` is sent. */
 	attachmentIds?: string[]
 	status: FirstPromptStatus
@@ -101,6 +103,12 @@ export interface DeliveryDeps {
 		workspaceId: string,
 		sessionId: string,
 		text: string
+	) => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
+	/** Apply a selected model before the first prompt enters the chat. */
+	setModel?: (
+		workspaceId: string,
+		sessionId: string,
+		model: string
 	) => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
 	/** Put staged phone files into their new worktree before the attachment token is sent. */
 	materialize?: (
@@ -175,13 +183,15 @@ export class FirstPromptQueue {
 		workspaceId: string,
 		text: string,
 		sendImmediately = true,
-		attachmentIds: string[] = []
+		attachmentIds: string[] = [],
+		model?: string
 	): Promise<FirstPrompt | null> {
 		this.entries = [
 			...this.entries.filter(e => e.workspaceId !== workspaceId),
 			{
 				workspaceId,
 				text,
+				...(model?.trim() ? { model: model.trim() } : {}),
 				...(attachmentIds.length ? { attachmentIds } : {}),
 				status: 'waiting',
 				attempts: 0,
@@ -264,7 +274,8 @@ export class FirstPromptQueue {
 		}
 		if (!target?.sessionId) return
 		// It already went — the user sent it from the Mac, where the deep link left it
-		// pre-filled in the composer. Sending again would double it.
+		// pre-filled in the composer. Sending again would double it, and changing the
+		// model now would affect a later turn instead of the first one they chose it for.
 		if (target.alreadySent) return this.delivered(entry)
 
 		// Before `ready`, a send is worth trying and not worth judging: Conductor may not
@@ -284,7 +295,11 @@ export class FirstPromptQueue {
 		else entry.attempts += 1
 		this.save()
 
-		const result = await this.deps.send(entry.workspaceId, target.sessionId, entry.text)
+		const result = entry.model
+			? await this.setModel(entry, target.sessionId)
+			: entry.text.trim()
+				? await this.deps.send(entry.workspaceId, target.sessionId, entry.text)
+				: { ok: true }
 		if (result.ok) return this.delivered(entry)
 		if (result.blocked) {
 			// The gate closed between the check above and the send: hand the attempt back.
@@ -305,6 +320,24 @@ export class FirstPromptQueue {
 		console.warn(`[relay] first prompt for ${entry.workspaceId} failed (attempt ${entry.attempts}): ${error}`)
 		if (entry.attempts >= MAX_ATTEMPTS) return this.fail(entry, error)
 		this.save()
+	}
+
+	/**
+	 * Keep a model choice in the same attempt as its prompt. A successful picker
+	 * change is persisted before the send starts, so a send retry cannot toggle a
+	 * model back and forth. A workspace with no prompt settles after this step.
+	 */
+	private async setModel(
+		entry: FirstPrompt,
+		sessionId: string
+	): Promise<{ ok: boolean; error?: string; blocked?: boolean }> {
+		if (!entry.model) return { ok: true }
+		if (!this.deps.setModel) return { ok: false, error: 'the relay cannot set a model for a new workspace' }
+		const result = await this.deps.setModel(entry.workspaceId, sessionId, entry.model)
+		if (!result.ok) return result
+		entry.model = undefined
+		this.save()
+		return entry.text.trim() ? this.deps.send(entry.workspaceId, sessionId, entry.text) : { ok: true }
 	}
 
 	/** Delivered: the entry's job is done, so it stops existing. */

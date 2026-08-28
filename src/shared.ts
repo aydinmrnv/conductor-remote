@@ -72,6 +72,43 @@ export function modelPickerLabel(label: string): string {
 	return label.endsWith(' NEW') ? label.slice(0, -4) : label
 }
 
+/** A labelled section in a model picker. */
+export interface ModelPickerGroup {
+	label: string
+	models: string[]
+}
+
+/**
+ * Group picker labels by model family rather than by a maintained list of model
+ * names. The labels come from Conductor at run time, including provider-qualified
+ * OpenCode names, so a hard-coded catalog would age badly.
+ */
+function modelFamily(model: string): string {
+	const label = modelPickerLabel(model).trim()
+	const slash = label.indexOf('/')
+	if (slash > 0) return label.slice(0, slash)
+	const words = label.split(/[\s-]+/).filter(Boolean)
+	if (!words.length) return 'Other'
+	if (words[0].toLowerCase() === 'claude' && words[1]) return words[1]
+	return words[0]
+}
+
+/** Stable, case-insensitive grouping shared by every model selector. */
+export function groupModelPickerLabels(models: string[]): ModelPickerGroup[] {
+	const grouped = new Map<string, string[]>()
+	for (const raw of models) {
+		const model = modelPickerLabel(raw).trim()
+		if (!model) continue
+		const family = modelFamily(model)
+		const entries = grouped.get(family) ?? []
+		if (!entries.includes(model)) entries.push(model)
+		grouped.set(family, entries)
+	}
+	return [...grouped]
+		.map(([label, entries]) => ({ label, models: entries.sort((a, b) => a.localeCompare(b)) }))
+		.sort((a, b) => a.label.localeCompare(b.label))
+}
+
 /**
  * Markers the relay wraps search hits in (src/search.ts, via FTS5 `snippet()`). They
  * are control characters, so they must never reach the DOM: an unsplit snippet renders

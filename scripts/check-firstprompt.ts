@@ -90,6 +90,37 @@ function scenario(name: string, initial: Partial<Fake> = {}): { queue: FirstProm
 	check('the caller waiting on it is told it landed', settled === null)
 }
 
+// A model selected at creation must land before the first prompt. The queue owns
+// both steps, so a sleeping phone cannot send early on the default model.
+{
+	const steps: string[] = []
+	const queue = new FirstPromptQueue(path.join(dir, 'model.json'), {
+		inspect: () => ({ phase: 'setting_up', sessionId: 'chat-model', alreadySent: false }),
+		setModel: async (_workspaceId, _sessionId, model) => {
+			steps.push(`model:${model}`)
+			return { ok: true }
+		},
+		send: async (_workspaceId, _sessionId, text) => {
+			steps.push(`prompt:${text}`)
+			return { ok: true }
+		}
+	})
+	await queue.enqueue('ws-model', 'hello', true, [], 'Opus 5')
+	check(
+		'a selected model applies before the first prompt',
+		steps.join(',') === 'model:Opus 5,prompt:hello',
+		steps.join(',')
+	)
+	check('a completed model selection clears its queued entry', queue.get('ws-model') === null)
+	steps.length = 0
+	await queue.enqueue('ws-model-only', '', true, [], 'Sonnet 4.6')
+	check(
+		'an empty workspace can still receive its selected model',
+		steps.join(',') === 'model:Sonnet 4.6',
+		steps.join(',')
+	)
+}
+
 // The failure that early sending introduces — Conductor hasn't drawn the pane — must
 // cost nothing that a later, real send would have needed.
 {

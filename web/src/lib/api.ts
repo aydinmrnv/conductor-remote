@@ -10,6 +10,7 @@ import type {
 	LogsResponse,
 	MergeResult,
 	MessagesResponse,
+	ModelCatalogResponse,
 	ModelsResult,
 	NewChatResult,
 	NoSleepResult,
@@ -264,6 +265,8 @@ export const client = {
 		),
 	/** Repos a new workspace can be created in. */
 	repos: () => api<ReposResponse>(routes.repos.path()),
+	/** Model-picker labels the relay has already read from Conductor. This never opens the desktop UI. */
+	modelCatalog: () => api<ModelCatalogResponse>(routes.modelCatalog.path()),
 	/**
 	 * Find a workspace by name or by what was said in its chats, archived included.
 	 * The relay answers from a local index, so this is a poll-budget call even though
@@ -282,10 +285,19 @@ export const client = {
 	 * sends the prompt itself from there (src/firstprompt.ts). `sendImmediately: false`
 	 * holds that send until the worktree is built instead.
 	 */
-	createWorkspace: (repo: string, prompt: string, sendImmediately = true, attachmentIds: string[] = []) =>
+	createWorkspace: (
+		repo: string,
+		prompt: string,
+		sendImmediately = true,
+		attachmentIds: string[] = [],
+		model?: string
+	) =>
 		api<CreateWorkspaceResult>(
 			routes.createWorkspace.path(),
-			{ method: routes.createWorkspace.method, body: JSON.stringify({ repo, prompt, sendImmediately, attachmentIds }) },
+			{
+				method: routes.createWorkspace.method,
+				body: JSON.stringify({ repo, prompt, sendImmediately, attachmentIds, model })
+			},
 			ACTION_TIMEOUT_MS
 		),
 	/** Change a chat's model / effort / plan / fast via Conductor's own composer controls. */

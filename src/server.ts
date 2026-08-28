@@ -24,6 +24,7 @@ import {
 } from './logbuf.ts'
 import { type CallOptions, createTools, handleRpc, READ_TIMEOUT_MS, type RpcRequest } from './mcp-tools.ts'
 import { mergePr } from './merge.ts'
+import { ModelCache } from './model-cache.ts'
 import {
 	armNoSleep,
 	disarmNoSleep,
@@ -88,6 +89,10 @@ const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
 const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
+// Picker labels cannot be reconstructed from `sessions.model`, so they belong to
+// relay state alongside the prompt queues. This lets a brand-new workspace choose
+// from a list before Conductor has created its first chat.
+const modelCache = new ModelCache(path.join(stateDir(), 'model-cache.json'))
 
 // Full-text index over the chat prose, in the relay's own sidecar DB — never in
 // Conductor's (see src/search.ts). It backfills in the background and is disposable:
@@ -375,6 +380,13 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 			const result = await deliverPrompt(ws, sessionId, text)
 			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
 		}),
+	setModel: (workspaceId, sessionId, model) =>
+		withUiPriority('background', async () => {
+			const ws = reads.getWorkspace(workspaceId)
+			if (!ws) return { ok: false, error: 'the workspace is gone' }
+			const result = await applyAgentPatch(ws, sessionId, { model })
+			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
+		}),
 	materialize: async (_workspaceId, worktree, attachmentIds) => {
 		try {
 			materializeStagedAttachments(STAGED_ATTACHMENTS_DIR, worktree, attachmentIds)
@@ -413,6 +425,10 @@ async function applyAgentPatch(
 	if (!result.ok) return { ok: false, error: result.error }
 	if (!(await confirmAgentOptions(ws, sessionId, opts))) {
 		return { ok: false, error: 'Conductor didn’t record the change — it may have been asleep. Try again.' }
+	}
+	if (patch.model) {
+		const session = reads.listSessions(ws.id).find(row => row.id === sessionId)
+		modelCache.rememberModel(session?.agent_type, patch.model)
 	}
 	return { ok: true }
 }
@@ -861,6 +877,12 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, { repos: reads.listRepos() })
 			}
 
+			// GET /api/models — prior live picker reads, without activating Conductor. A
+			// new workspace has no chat yet, so this is its only safe source of choices.
+			if (isRoute(routes.modelCatalog, req.method, pathname)) {
+				return json(req, res, 200, { groups: modelCache.list() })
+			}
+
 			// GET /api/settings — relay preferences plus what the phone needs to edit them:
 			// the SSIDs this Mac already holds credentials for, so the picker offers a choice
 			// instead of asking someone to type a network name from memory on a phone keyboard.
@@ -1024,11 +1046,15 @@ const server = http.createServer(async (req, res) => {
 				const body = JSON.parse((await readBody(req)) || '{}') as {
 					repo?: string
 					prompt?: string
+					model?: string
 					send?: boolean
 					sendImmediately?: boolean
 					attachmentIds?: string[]
 				}
 				const attachmentIds = body.attachmentIds ?? []
+				if (body.model !== undefined && typeof body.model !== 'string')
+					return json(req, res, 400, { error: 'model must be a picker label' })
+				const model = body.model?.trim() || undefined
 				if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string'))
 					return json(req, res, 400, { error: 'attachment ids must be a list of strings' })
 				const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
@@ -1067,9 +1093,10 @@ const server = http.createServer(async (req, res) => {
 				// its own schedule and the phone watches it in /api/state; `send:true` opts API
 				// callers into waiting.
 				// Whatever happens, the prompt is already pre-filled in Conductor's composer.
-				const settled = prompt
-					? firstPrompts.enqueue(created.id, prompt, body.sendImmediately !== false, attachmentIds)
-					: null
+				const settled =
+					prompt || model
+						? firstPrompts.enqueue(created.id, prompt, body.sendImmediately !== false, attachmentIds, model)
+						: null
 				const failed = settled && body.send === true ? await settled : null
 				settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
 				return json(req, res, 200, {
@@ -1077,8 +1104,12 @@ const server = http.createServer(async (req, res) => {
 					workspaceId: created.id,
 					workspace: reads.getWorkspace(created.id) ?? created,
 					pendingPrompt: prompt || undefined,
-					sent: body.send === true ? !failed : false,
-					warning: failed?.error && `Workspace created; the prompt is pre-filled but wasn’t sent (${failed.error}).`
+					model,
+					sent: body.send === true && !!prompt && !failed,
+					configured: body.send === true && !!model && !failed,
+					warning:
+						failed?.error &&
+						`Workspace created; the initial ${model ? 'model selection and prompt' : 'prompt'} didn’t finish (${failed.error}).`
 				})
 			}
 
@@ -1204,6 +1235,7 @@ const server = http.createServer(async (req, res) => {
 				const located = locateChat(ws, sessionId)
 				if ('error' in located) return json(req, res, 409, { error: located.error })
 				const result = await listAgentModels({ workspace: ws, sessionId, tab: located.tab })
+				if (result.ok && result.models) modelCache.remember(located.session?.agent_type, result.models)
 				return json(req, res, result.ok ? 200 : 502, result)
 			}
 
