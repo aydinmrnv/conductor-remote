@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Copy, GitFork, Loader2 } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -12,13 +12,20 @@ import { Markdown } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
+/** The three useful transcript cuts that `split_chat` exposes through MCP. */
+export interface SplitFormat {
+	thinking: boolean
+	tools: boolean
+}
+
 export function Transcript({
 	sessionId,
 	workspaceId,
 	working,
 	workingSince,
 	queued,
-	poll
+	poll,
+	onFork
 }: {
 	sessionId: string | null
 	workspaceId: string
@@ -29,6 +36,8 @@ export function Transcript({
 	queued?: PendingPrompt | null
 	/** `false` for an archived chat: it is fetched once, because it has no next message. */
 	poll?: boolean
+	/** Opens a new chat with a selected cut of this transcript staged as an attachment. */
+	onFork?: (format: SplitFormat) => Promise<void>
 }) {
 	const { entries, loading, error } = useTranscript(sessionId, poll ?? true)
 	const pending = useApp(s => s.pending)
@@ -42,6 +51,14 @@ export function Transcript({
 	// lands — so this holds the row list (and each group's slice) at the same identity
 	// across the polls above, which is what lets the memoised rows below bail out.
 	const rows = useMemo(() => groupSteps(entries), [entries])
+	const lastAssistantKey = useMemo(() => {
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i]
+			if (entry.role === 'tool' || entry.role === 'thinking') continue
+			return entry.role === 'assistant' ? rowKey(entry) : null
+		}
+		return null
+	}, [entries])
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
@@ -125,7 +142,12 @@ export function Transcript({
 							row.kind === 'steps' ? (
 								<StepGroup key={row.key} entries={row.entries} />
 							) : (
-								<Entry key={row.key} e={row.e} />
+								<Entry
+									key={row.key}
+									e={row.e}
+									showChatActions={row.key === lastAssistantKey}
+									onFork={row.key === lastAssistantKey ? onFork : undefined}
+								/>
 							)
 						)}
 						{visiblePending.map(p => (
@@ -348,7 +370,15 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 }
 
 /** One transcript row. Memoised on the entry, which the poll appends to rather than rebuilds. */
-const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
+const Entry = memo(function Entry({
+	e,
+	showChatActions = false,
+	onFork
+}: {
+	e: TranscriptEntry
+	showChatActions?: boolean
+	onFork?: (format: SplitFormat) => Promise<void>
+}) {
 	if (e.role === 'user') {
 		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
 		// the attributes are the row it draws in the sheet. Every user-side bubble carries
@@ -400,16 +430,145 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 	}
 	// assistant
 	return (
-		<div className="flex justify-start">
+		<div className="flex flex-col items-start">
 			{/* No fill on the agent's side — it's the bulk of the transcript, so the user's
-			    tinted bubbles read as the reply and this reads as the page. Padding drops with
-			    the background or the text would sit inset from everything around it. */}
+		    tinted bubbles read as the reply and this reads as the page. Padding drops with
+		    the background or the text would sit inset from everything around it. */}
 			<Bubble className="max-w-[92%] px-0.5">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
+			{showChatActions ? <ChatActions text={e.text} onFork={onFork} /> : null}
 		</div>
 	)
 })
+
+/** Copy the latest response, or branch the whole chat from a transcript attachment. */
+function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFormat) => Promise<void> }) {
+	const [copied, setCopied] = useState(false)
+	const [menuOpen, setMenuOpen] = useState(false)
+	const [forking, setForking] = useState(false)
+	const [forkError, setForkError] = useState<string | null>(null)
+
+	const copy = async () => {
+		try {
+			await copyText(text)
+			setCopied(true)
+			window.setTimeout(() => setCopied(false), 1800)
+		} catch {
+			setCopied(false)
+		}
+	}
+
+	const fork = async (format: SplitFormat) => {
+		if (!onFork || forking) return
+		setForking(true)
+		setForkError(null)
+		setMenuOpen(false)
+		try {
+			await onFork(format)
+		} catch (err) {
+			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
+		} finally {
+			setForking(false)
+		}
+	}
+
+	return (
+		<div className="mt-1.5 flex max-w-full flex-col items-start gap-1">
+			<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
+				<button
+					type="button"
+					onClick={() => void copy()}
+					aria-label={copied ? 'Copied response' : 'Copy response'}
+					className="flex size-7 items-center justify-center transition active:bg-surface-2"
+				>
+					{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
+				</button>
+				{onFork ? (
+					<>
+						<span className="h-4 w-px bg-border-soft" aria-hidden />
+						<button
+							type="button"
+							onClick={() => void fork({ thinking: true, tools: false })}
+							disabled={forking}
+							aria-label="Fork chat with reasoning"
+							className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+						>
+							{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
+							Fork
+						</button>
+						<button
+							type="button"
+							onClick={() => setMenuOpen(open => !open)}
+							disabled={forking}
+							aria-label="Choose fork transcript type"
+							aria-haspopup="menu"
+							aria-expanded={menuOpen}
+							className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
+						>
+							<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
+						</button>
+					</>
+				) : null}
+			</div>
+			{menuOpen ? (
+				<>
+					<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
+					<div
+						role="menu"
+						aria-label="Fork transcript type"
+						className="relative z-30 -mt-0.5 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+					>
+						<ForkOption
+							label="Concise"
+							detail="Messages only"
+							onClick={() => void fork({ thinking: false, tools: false })}
+						/>
+						<ForkOption
+							label="With reasoning"
+							detail="Messages and reasoning"
+							onClick={() => void fork({ thinking: true, tools: false })}
+						/>
+						<ForkOption
+							label="Full transcript"
+							detail="Messages, reasoning, and tools"
+							onClick={() => void fork({ thinking: true, tools: true })}
+						/>
+					</div>
+				</>
+			) : null}
+			{forkError ? <span className="max-w-[85vw] text-[11px] text-del">{forkError}</span> : null}
+		</div>
+	)
+}
+
+function ForkOption({ label, detail, onClick }: { label: string; detail: string; onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			role="menuitem"
+			onClick={onClick}
+			className="flex w-full flex-col px-3 py-2 text-left active:bg-surface-2"
+		>
+			<span className="text-[12px] font-medium text-text">{label}</span>
+			<span className="text-[11px] text-faint">{detail}</span>
+		</button>
+	)
+}
+
+/** Clipboard's async API is unavailable in a few embedded browsers, so keep a small fallback. */
+async function copyText(text: string): Promise<void> {
+	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
+	const input = document.createElement('textarea')
+	input.value = text
+	input.setAttribute('readonly', '')
+	input.style.cssText = 'position:fixed;opacity:0'
+	document.body.append(input)
+	input.select()
+	const copied = document.execCommand('copy')
+	input.remove()
+	if (!copied) throw new Error('Clipboard unavailable')
+}
 
 /**
  * The classic three-dot "typing" bubble, shown under the last message while the agent

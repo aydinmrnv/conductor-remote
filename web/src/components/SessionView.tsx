@@ -14,6 +14,7 @@ import { Composer } from './Composer.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import { StatusPicker } from './StatusPicker.tsx'
+import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
 import { Spinner } from './ui.tsx'
 
@@ -42,6 +43,7 @@ export function SessionView() {
 	const workingHints = useApp(s => s.workingHints)
 	const readMarks = useApp(s => s.readMarks)
 	const markRead = useApp(s => s.markRead)
+	const setDraft = useApp(s => s.setDraft)
 
 	const ws = liveWorkspace
 	const actuator = data?.actuator
@@ -117,6 +119,19 @@ export function SessionView() {
 		}
 	}
 
+	// The relay writes the transcript and opens the tab. Its returned text contains
+	// Conductor's attachment token, which belongs in the new chat's composer until
+	// the user adds the question that starts the fork.
+	const forkChat = async ({ thinking, tools }: SplitFormat) => {
+		if (!sessionId) return
+		const split = await client.splitChat(sessionId, ws.id, thinking, tools)
+		if (!split.ok) throw new Error(split.error ?? 'Could not fork this chat')
+		if (!split.sessionId) throw new Error('The new chat opened, but its id was not available')
+		setDraft(split.sessionId, split.text)
+		await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
+		pickSession(split.sessionId)
+	}
+
 	return (
 		<div className="flex h-full min-w-0 overflow-hidden">
 			<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -161,6 +176,7 @@ export function SessionView() {
 					working={working}
 					workingSince={workingSince}
 					queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
+					onFork={forkChat}
 				/>
 				{/* The agent controls — and the Stop button — render inside the composer card. */}
 				<Composer

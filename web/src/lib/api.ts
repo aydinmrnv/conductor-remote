@@ -22,6 +22,7 @@ import type {
 	SendResult,
 	SessionsResponse,
 	SettingsResponse,
+	SplitChatResult,
 	StateResponse,
 	StatusResult,
 	StopResult,
@@ -240,6 +241,19 @@ export const client = {
 	/** Open a new chat ("New chat, same files" / Cmd+T) in a workspace. */
 	newChat: (workspaceId: string) =>
 		api<NewChatResult>(routes.newChat.path(workspaceId), { method: routes.newChat.method }, ACTION_TIMEOUT_MS),
+	/**
+	 * Open a new tab with this chat's transcript staged as an attachment. The caller
+	 * puts `text` into that tab's composer, then the user can add the new direction.
+	 */
+	splitChat: (sessionId: string, workspaceId: string, includeThinking: boolean, includeTools: boolean) =>
+		api<SplitChatResult>(
+			routes.splitChat.path(sessionId),
+			{
+				method: routes.splitChat.method,
+				body: JSON.stringify({ workspaceId, includeThinking, includeTools })
+			},
+			ACTION_TIMEOUT_MS
+		),
 	/** Repos a new workspace can be created in. */
 	repos: () => api<ReposResponse>(routes.repos.path()),
 	/**
