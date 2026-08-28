@@ -62,11 +62,9 @@
 *)
 
 on splitLines(s)
-	set saved to AppleScript's text item delimiters
-	set AppleScript's text item delimiters to linefeed
-	set parts to text items of s
-	set AppleScript's text item delimiters to saved
-	return parts
+	-- `do shell script` converts the file's LF separators to AppleScript returns.
+	-- `paragraphs` handles that form and keeps empty fields between separators.
+	return paragraphs of s
 end splitLines
 
 -- The target file's first two lines are tab title and palette query. The
