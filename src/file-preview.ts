@@ -1,10 +1,6 @@
-/**
- * A source location as coding agents write it in Markdown: an absolute path,
- * with an optional `:line` or `:line:column` suffix.
- *
- * This module intentionally has no Node imports. It is useful to the relay and
- * stays easy to exercise in the portable checks.
- */
+import path from 'node:path'
+
+/** A source location as coding agents write it in Markdown: an absolute path, with an optional line or column. */
 export interface FileReference {
 	path: string
 	line: number | null
@@ -53,6 +49,29 @@ function sourceExtension(filePath: string): string {
 /** True when a file is a text source format this viewer is allowed to expose. */
 export function isPreviewableSource(filePath: string): boolean {
 	return SOURCE_EXTENSIONS.has(sourceExtension(filePath))
+}
+
+/** True only for a descendant. A prefix test would let `/workspaces-old` escape `/workspaces`. */
+function insideDirectory(filePath: string, root: string): boolean {
+	const relative = path.relative(root, filePath)
+	return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
+/**
+ * Public Funnel clients may preview source under Conductor's workspaces only.
+ * A tailnet relay is limited to trusted devices, so it can also show project
+ * notes and supporting files from the signed-in user's home directory.
+ *
+ * Call this only with real paths. That ensures a symlink cannot point outside
+ * an allowed directory after this check.
+ */
+export function isAllowedPreviewPath(
+	filePath: string,
+	workspaceRoot: string,
+	homeRoot: string,
+	exposeMode: 'public' | 'tailnet'
+): boolean {
+	return insideDirectory(filePath, workspaceRoot) || (exposeMode === 'tailnet' && insideDirectory(filePath, homeRoot))
 }
 
 /**
