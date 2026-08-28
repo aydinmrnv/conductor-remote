@@ -147,6 +147,8 @@ export function Transcript({
 									e={row.e}
 									showChatActions={row.key === lastAssistantKey}
 									onFork={row.key === lastAssistantKey ? onFork : undefined}
+									working={row.key === lastAssistantKey && working}
+									workingSince={workingSince}
 								/>
 							)
 						)}
@@ -186,7 +188,7 @@ export function Transcript({
 								onDismiss={() => dismiss(showQueued)}
 							/>
 						) : null}
-						{working ? <WorkingIndicator since={workingSince} /> : null}
+						{working && !lastAssistantKey ? <WorkingIndicator since={workingSince} /> : null}
 					</div>
 				)}
 			</div>
@@ -373,11 +375,15 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 const Entry = memo(function Entry({
 	e,
 	showChatActions = false,
-	onFork
+	onFork,
+	working = false,
+	workingSince
 }: {
 	e: TranscriptEntry
 	showChatActions?: boolean
 	onFork?: (format: SplitFormat) => Promise<void>
+	working?: boolean
+	workingSince?: number | null
 }) {
 	if (e.role === 'user') {
 		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
@@ -437,13 +443,25 @@ const Entry = memo(function Entry({
 			<Bubble className="max-w-[92%] px-0.5">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
-			{showChatActions ? <ChatActions text={e.text} onFork={onFork} /> : null}
+			{showChatActions ? (
+				<ChatActions text={e.text} onFork={onFork} working={working} workingSince={workingSince} />
+			) : null}
 		</div>
 	)
 })
 
 /** Copy the latest response, or branch the whole chat from a transcript attachment. */
-function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFormat) => Promise<void> }) {
+function ChatActions({
+	text,
+	onFork,
+	working = false,
+	workingSince
+}: {
+	text: string
+	onFork?: (format: SplitFormat) => Promise<void>
+	working?: boolean
+	workingSince?: number | null
+}) {
 	const [copied, setCopied] = useState(false)
 	const [menuOpen, setMenuOpen] = useState(false)
 	const [forking, setForking] = useState(false)
@@ -475,68 +493,73 @@ function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFo
 
 	return (
 		<div className="mt-1.5 flex max-w-full flex-col items-start gap-1">
-			<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
-				<button
-					type="button"
-					onClick={() => void copy()}
-					aria-label={copied ? 'Copied response' : 'Copy response'}
-					className="flex size-7 items-center justify-center transition active:bg-surface-2"
-				>
-					{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
-				</button>
-				{onFork ? (
-					<>
-						<span className="h-4 w-px bg-border-soft" aria-hidden />
+			<div className="flex items-center gap-3">
+				{working ? <WorkingIndicator since={workingSince} /> : null}
+				<div className="relative">
+					<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
 						<button
 							type="button"
-							onClick={() => void fork({ thinking: true, tools: false })}
-							disabled={forking}
-							aria-label="Fork chat with reasoning"
-							className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+							onClick={() => void copy()}
+							aria-label={copied ? 'Copied response' : 'Copy response'}
+							className="flex size-7 items-center justify-center transition active:bg-surface-2"
 						>
-							{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
-							Fork
+							{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
 						</button>
-						<button
-							type="button"
-							onClick={() => setMenuOpen(open => !open)}
-							disabled={forking}
-							aria-label="Choose fork transcript type"
-							aria-haspopup="menu"
-							aria-expanded={menuOpen}
-							className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
-						>
-							<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
-						</button>
-					</>
-				) : null}
-			</div>
-			{menuOpen ? (
-				<>
-					<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
-					<div
-						role="menu"
-						aria-label="Fork transcript type"
-						className="relative z-30 -mt-0.5 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-					>
-						<ForkOption
-							label="Concise"
-							detail="Messages only"
-							onClick={() => void fork({ thinking: false, tools: false })}
-						/>
-						<ForkOption
-							label="With reasoning"
-							detail="Messages and reasoning"
-							onClick={() => void fork({ thinking: true, tools: false })}
-						/>
-						<ForkOption
-							label="Full transcript"
-							detail="Messages, reasoning, and tools"
-							onClick={() => void fork({ thinking: true, tools: true })}
-						/>
+						{onFork ? (
+							<>
+								<span className="h-4 w-px bg-border-soft" aria-hidden />
+								<button
+									type="button"
+									onClick={() => void fork({ thinking: true, tools: false })}
+									disabled={forking}
+									aria-label="Fork chat with reasoning"
+									className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+								>
+									{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
+									Fork
+								</button>
+								<button
+									type="button"
+									onClick={() => setMenuOpen(open => !open)}
+									disabled={forking}
+									aria-label="Choose fork transcript type"
+									aria-haspopup="menu"
+									aria-expanded={menuOpen}
+									className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
+								>
+									<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
+								</button>
+							</>
+						) : null}
 					</div>
-				</>
-			) : null}
+					{menuOpen ? (
+						<>
+							<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
+							<div
+								role="menu"
+								aria-label="Fork transcript type"
+								className="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+							>
+								<ForkOption
+									label="Concise"
+									detail="Messages only"
+									onClick={() => void fork({ thinking: false, tools: false })}
+								/>
+								<ForkOption
+									label="With reasoning"
+									detail="Messages and reasoning"
+									onClick={() => void fork({ thinking: true, tools: false })}
+								/>
+								<ForkOption
+									label="Full transcript"
+									detail="Messages, reasoning, and tools"
+									onClick={() => void fork({ thinking: true, tools: true })}
+								/>
+							</div>
+						</>
+					) : null}
+				</div>
+			</div>
 			{forkError ? <span className="max-w-[85vw] text-[11px] text-del">{forkError}</span> : null}
 		</div>
 	)
