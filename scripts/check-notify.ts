@@ -69,6 +69,15 @@ const T2 = '2026-08-27T10:41:30.000Z'
 	check('the turn you asked for notifies once confirmed', fired(w, [chat('idle', T1)]).join() === 'chat-1:done')
 }
 
+// A turn that needs a person to respond is also finished. Conductor preserves these
+// statuses until the person acts, so they use the same confirmation as `idle`.
+for (const status of ['needs_plan_response', 'needs_user_input']) {
+	const w = new TurnWatcher()
+	fired(w, [chat('working', T1)])
+	check(`the first poll that sees ${status} is not news`, fired(w, [chat(status, T1)]).length === 0)
+	check(`a turn ending at ${status} notifies once confirmed`, fired(w, [chat(status, T1)]).join() === 'chat-1:done')
+}
+
 // A flicker is a queued prompt starting the next turn, not a turn that ended.
 {
 	const w = new TurnWatcher()
