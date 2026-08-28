@@ -8,11 +8,11 @@
  * Accessibility, no AppleScript, no window has to exist. A Conductor update can
  * rename every UI string and notifications keep working.
  *
- * What counts as news is deliberately narrow — `sessions.status` is the only
- * signal Conductor records, and it holds exactly three values:
- * - `working → idle` — the turn ended. This is *the* event: it covers "done",
- *   "asked you a question" and "hit a permission prompt" alike, because all
- *   three end the turn.
+ * What counts as news is deliberately narrow. `sessions.status` is the only
+ * signal Conductor records. A normal turn ends in one of three states:
+ * - `working → idle | needs_plan_response | needs_user_input` means the turn ended.
+ *   This is *the* event: it covers "done", "asked you a question" and "plan ready"
+ *   alike, because all three end the turn.
  * - `→ error` — the agent stopped badly.
  * There is no permission-request table to watch (verified against the schema), so
  * don't go looking for a finer-grained trigger; there isn't one.
@@ -305,6 +305,11 @@ function askedBy(state: { turnStartedAt: string | null; lastUserMessageAt: strin
 	return `${state.turnStartedAt ?? ''}|${state.lastUserMessageAt ?? ''}`
 }
 
+/** Statuses that keep a completed turn open until the person responds. */
+function turnEnded(status: string | null): boolean {
+	return status === 'idle' || status === 'needs_plan_response' || status === 'needs_user_input'
+}
+
 /** A chat whose transition has been confirmed and is worth a notification. */
 export interface DueNotification {
 	state: SessionState
@@ -373,7 +378,7 @@ export class TurnWatcher {
 			if (pendingKind) {
 				this.armed.delete(state.sessionId)
 				// Confirmed only if the new status held for a second step; a flap just drops the arm.
-				const held = (pendingKind === 'done' && now === 'idle') || (pendingKind === 'error' && now === 'error')
+				const held = (pendingKind === 'done' && turnEnded(now)) || (pendingKind === 'error' && now === 'error')
 				if (held && !(pendingKind === 'done' && this.selfScheduled(state))) {
 					const asked = askedBy(state)
 					if (pendingKind === 'done' && asked) this.notifiedTurn.set(state.sessionId, asked)
@@ -384,7 +389,7 @@ export class TurnWatcher {
 			// A chat we've never seen (a new one, or the first step after re-baselining)
 			// contributes its status to the snapshot but is never itself news.
 			if (before === undefined) continue
-			if (before === 'working' && now === 'idle') this.armed.set(state.sessionId, 'done')
+			if (before === 'working' && turnEnded(now)) this.armed.set(state.sessionId, 'done')
 			else if (before !== 'error' && now === 'error') this.armed.set(state.sessionId, 'error')
 		}
 		// A chat armed on the last step can vanish before this one (its workspace was
