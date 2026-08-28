@@ -11,7 +11,8 @@
 
 	The target rides in on the environment (RELAY_WS_*, RELAY_TAB_*, RELAY_SET_*,
 	RELAY_PROMPT_FILE) rather than being interpolated, which keeps AppleScript
-	string escaping out of the picture entirely.
+	string escaping out of the picture entirely. The three matching labels use a
+	UTF-8 temporary file because `system attribute` decodes text as MacRoman.
 
 	Two traps to respect when editing:
 
@@ -67,6 +68,25 @@ on splitLines(s)
 	set AppleScript's text item delimiters to saved
 	return parts
 end splitLines
+
+-- The target file's first two lines are tab title and palette query. The
+-- remaining lines are sidebar-title candidates. The path is ASCII; the file
+-- contents reach AppleScript through `do shell script` as UTF-8.
+on targetField(fieldIndex)
+	set fields to my splitLines(do shell script "cat " & quoted form of (system attribute "RELAY_TARGET_FILE"))
+	if fieldIndex > (count of fields) then return ""
+	return item fieldIndex of fields
+end targetField
+
+on targetSidebarTitles()
+	set fields to my splitLines(do shell script "cat " & quoted form of (system attribute "RELAY_TARGET_FILE"))
+	if (count of fields) < 3 then return {}
+	set titles to {}
+	repeat with fieldIndex from 3 to (count of fields)
+		set end of titles to item fieldIndex of fields
+	end repeat
+	return titles
+end targetSidebarTitles
 
 on windowProbe()
 	-- One read, three outcomes, none of them guessed: {count, errNum, errText}.
@@ -413,7 +433,7 @@ on findSidebarRow()
 	-- in the AX tree (a collapsed section has none), and the title follows
 	-- Conductor's precedence, so we try each candidate and require a *unique* hit —
 	-- anything ambiguous returns nothing rather than guessing at a neighbour.
-	set titles to my splitLines(system attribute "RELAY_WS_TITLES")
+	set titles to my targetSidebarTitles()
 	if (count of titles) is 0 then return missing value
 	set repoName to system attribute "RELAY_WS_REPO"
 	set rows to my sidebarLinks()
@@ -455,7 +475,7 @@ on focusViaPalette()
 		delay 0.25
 		keystroke "k" using {command down}
 		delay 0.7
-		keystroke (system attribute "RELAY_WS_QUERY")
+		keystroke (my targetField(2))
 		delay 0.9
 		key code 36
 		delay 1.3
@@ -522,7 +542,7 @@ on openViaDeepLink()
 end openViaDeepLink
 
 on focusWorkspace()
-	if (system attribute "RELAY_WS_QUERY") is "" then return
+	if (my targetField(2)) is "" then return
 	if my openViaDeepLink() then return
 	if my atTargetWorkspace() then return
 	if my focusViaSidebar() then
@@ -754,7 +774,7 @@ on selectChatTab()
 	set wantIndex to (system attribute "RELAY_TAB_INDEX") as integer
 	if wantIndex is 0 then return
 	set wantCount to (system attribute "RELAY_TAB_COUNT") as integer
-	set wantTitle to system attribute "RELAY_TAB_TITLE"
+	set wantTitle to my targetField(1)
 	set strips to my tabGroups()
 	if (count of strips) is 0 then
 		-- A lone chat has no ambiguity to resolve; more than one and we must not guess.

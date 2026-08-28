@@ -432,18 +432,43 @@ function restartAllowed(): boolean {
 	}
 }
 
-/** The target rides in on the environment, like RELAY_WS_QUERY, to dodge AppleScript escaping. */
+/** Fixed targeting values travel in the environment; the three UI labels ride in RELAY_TARGET_FILE. */
 function targetEnv(target: SendTarget): Record<string, string> {
 	return {
 		RELAY_ALLOW_RESTART: restartAllowed() ? '1' : '',
 		RELAY_TAB_INDEX: String(target.tab?.index ?? 0),
 		RELAY_TAB_COUNT: String(target.tab?.count ?? 0),
-		RELAY_TAB_TITLE: target.tab?.title ?? '',
 		RELAY_WS_BRANCH: target.workspace.branch ?? '',
 		RELAY_WS_REPO: target.workspace.repo_name ?? '',
-		RELAY_WS_QUERY: focusQuery(target.workspace),
-		RELAY_WS_LINK: workspaceLink(target.workspace.id, target.sessionId),
-		RELAY_WS_TITLES: sidebarTitles(target.workspace).join('\n')
+		RELAY_WS_LINK: workspaceLink(target.workspace.id, target.sessionId)
+	}
+}
+
+/**
+ * The target file is line-based: tab title, palette query, then sidebar-title candidates. Conductor labels
+ * cannot contain a newline, and `do shell script` reads this file as UTF-8 rather than MacRoman.
+ */
+function targetLines(target: SendTarget): string[] {
+	return [target.tab?.title ?? '', focusQuery(target.workspace), ...sidebarTitles(target.workspace)]
+}
+
+/**
+ * Give one UI action the three matching labels in a UTF-8 file. `system attribute` decodes text as MacRoman,
+ * but it safely carries the temporary file path.
+ */
+export async function withTargetEnvironment<T>(
+	target: SendTarget,
+	action: (environment: Record<string, string>) => Promise<T>
+): Promise<T> {
+	const fs = await import('node:fs/promises')
+	const os = await import('node:os')
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-target-'))
+	const file = path.join(directory, 'text')
+	try {
+		await fs.writeFile(file, targetLines(target).join('\n'), 'utf8')
+		return await action({ ...targetEnv(target), RELAY_TARGET_FILE: file })
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined)
 	}
 }
 
@@ -510,16 +535,18 @@ end tell
 		const tmp = path.join(os.tmpdir(), `relay-prompt-${process.pid}-${Date.now()}.txt`)
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
-			await uiTurn(() =>
-				exec('osascript', ['-e', script], {
-					env: {
-						...process.env,
-						RELAY_PROMPT_FILE: tmp,
-						RELAY_QUEUE_PROMPT: options.queue ? '1' : '',
-						...targetEnv(target)
-					},
-					timeout: runCeiling(deadline)
-				})
+			await withTargetEnvironment(target, targetEnvironment =>
+				uiTurn(() =>
+					exec('osascript', ['-e', script], {
+						env: {
+							...process.env,
+							RELAY_PROMPT_FILE: tmp,
+							RELAY_QUEUE_PROMPT: options.queue ? '1' : '',
+							...targetEnvironment
+						},
+						timeout: runCeiling(deadline)
+					})
+				)
 			)
 			return { ok: true, strategy: this.name }
 		} catch (err) {
@@ -558,11 +585,13 @@ my selectChatTab()
 my cancelAgent()
 return "ok"`.trim()
 	try {
-		await uiTurn(() =>
-			exec('osascript', ['-e', script], {
-				env: { ...process.env, ...targetEnv(target) },
-				timeout: SEND_ATTEMPT_MS
-			})
+		await withTargetEnvironment(target, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, ...targetEnvironment },
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
 		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
@@ -658,18 +687,20 @@ my selectChatTab()
 my applyAgentOptions()
 return "ok"`.trim()
 	try {
-		await uiTurn(() =>
-			exec('osascript', ['-e', script], {
-				env: {
-					...process.env,
-					...targetEnv(target),
-					RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
-					RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
-					RELAY_SET_FAST: opts.toggleFast ? '1' : '',
-					RELAY_SET_MODEL: opts.model ?? ''
-				},
-				timeout: SEND_ATTEMPT_MS
-			})
+		await withTargetEnvironment(target, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: {
+						...process.env,
+						...targetEnvironment,
+						RELAY_SET_EFFORT: opts.effort ? EFFORT_LABELS[opts.effort] : '',
+						RELAY_SET_PLAN: opts.plan === undefined ? '' : opts.plan ? '1' : '0',
+						RELAY_SET_FAST: opts.toggleFast ? '1' : '',
+						RELAY_SET_MODEL: opts.model ?? ''
+					},
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
 		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
@@ -712,15 +743,17 @@ my activateConductor()
 my setWorkspaceStatus()
 return "ok"`.trim()
 	try {
-		await uiTurn(() =>
-			exec('osascript', ['-e', script], {
-				env: {
-					...process.env,
-					...targetEnv({ workspace, sessionId: null }),
-					RELAY_SET_STATUS: label
-				},
-				timeout: 25000
-			})
+		await withTargetEnvironment({ workspace, sessionId: null }, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: {
+						...process.env,
+						...targetEnvironment,
+						RELAY_SET_STATUS: label
+					},
+					timeout: 25000
+				})
+			)
 		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
@@ -738,11 +771,13 @@ my focusWorkspace()
 my selectChatTab()
 return my listModels()`.trim()
 	try {
-		const { stdout } = await uiTurn(() =>
-			exec('osascript', ['-e', script], {
-				env: { ...process.env, ...targetEnv(target) },
-				timeout: SEND_ATTEMPT_MS
-			})
+		const { stdout } = await withTargetEnvironment(target, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, ...targetEnvironment },
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
 		)
 		const models = stdout
 			.split('\n')
@@ -834,11 +869,13 @@ end tell`.trim()
 	try {
 		// Shares the focus path with a send, so it needs the same ceiling: 15s was under
 		// the cost of activating a cold Conductor and finding the row on its own.
-		await uiTurn(() =>
-			exec('osascript', ['-e', script], {
-				env: { ...process.env, ...targetEnv({ workspace, sessionId: null }) },
-				timeout: SEND_ATTEMPT_MS
-			})
+		await withTargetEnvironment({ workspace, sessionId: null }, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, ...targetEnvironment },
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
 		)
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
