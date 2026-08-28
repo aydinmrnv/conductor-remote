@@ -78,9 +78,9 @@ export class ApiError extends Error {
 // A sleeping Mac (relay + Tailscale suspended) answers nothing — no response, no
 // reset — so a bare fetch hangs forever and the poll never errors, leaving the UI
 // frozen on stale data with no offline banner. A timeout aborts the request so the
-// poll surfaces an error and the banner shows. Polls stay short (flip to offline
-// fast); mutating calls drive AppleScript + a delivery read-back on the relay, so
-// they get a much longer budget.
+// poll surfaces an error. The store waits ten seconds since the last successful
+// relay call before it shows the offline banner. Mutating calls drive AppleScript +
+// a delivery read-back on the relay, so they get a much longer budget.
 //
 // **These must exceed the relay's own budget for the same call**, or the phone gives
 // up on work that is still running and shows a failure for something that then
