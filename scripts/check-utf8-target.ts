@@ -5,6 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { type SendTarget, withTargetEnvironment } from '../src/writes.ts'
 
+const appleScript = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'conductor.applescript'), 'utf8')
+
 const target = {
 	workspace: {
 		id: 'workspace-1',
@@ -40,6 +42,21 @@ await withTargetEnvironment(target, async environment => {
 			.replace(/\r\n?/g, '\n')
 			.trimEnd()
 		assert.equal(output, targetText, 'AppleScript reads the target text from the file as UTF-8')
+
+		const readField = (expression: string): string =>
+			execFileSync('osascript', ['-e', `${appleScript}\nreturn ${expression}`], {
+				encoding: 'utf8',
+				env: { ...process.env, RELAY_TARGET_FILE: targetFile }
+			})
+				.replace(/\r\n?/g, '\n')
+				.trimEnd()
+		assert.equal(readField('my targetField(1)'), 'Chat — title', 'the tab title stays in the first field')
+		assert.equal(readField('my targetField(2)'), 'feature/utf8-query', 'the palette query stays in the second field')
+		assert.equal(
+			readField('item 1 of (my targetSidebarTitles())'),
+			'Palette — query',
+			'the first sidebar title stays in the third field'
+		)
 	}
 	for (const name of ['RELAY_TAB_TITLE', 'RELAY_WS_QUERY', 'RELAY_WS_TITLES']) {
 		assert.equal(environment[name], undefined, `${name} is not passed through the environment`)
@@ -62,7 +79,6 @@ await assert.rejects(
 )
 assert.equal(fs.existsSync(rejectedTargetFile), false, 'the target file is removed after a failed UI action')
 
-const appleScript = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'conductor.applescript'), 'utf8')
 assert.match(
 	appleScript,
 	/system attribute "RELAY_TARGET_FILE"/,
