@@ -3,10 +3,11 @@ import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
-import { useRepos } from '../hooks.ts'
+import { useModelCatalog, useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { useApp } from '../store.ts'
+import { ModelPicker } from './ModelPicker.tsx'
 import { RepoAvatar } from './ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
@@ -57,10 +58,12 @@ function saveSendNow(on: boolean): void {
  */
 export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const { data } = useRepos()
+	const modelCatalog = useModelCatalog()
 	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
 	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
 	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
 	const [prompt, setPrompt] = useState('')
+	const [model, setModel] = useState<string | undefined>()
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
@@ -87,6 +90,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const uploading = attachments.some(attachment => attachment.status === 'uploading')
 	const attachmentError = attachments.some(attachment => attachment.status === 'error')
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
+	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
 
 	const discardAttachment = (stageId: string | undefined) => {
 		if (stageId) void client.discardStagedAttachment(stageId).catch(() => undefined)
@@ -189,7 +193,8 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				repo,
 				text,
 				sendNow,
-				readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : []))
+				readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : [])),
+				model
 			)
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
@@ -321,7 +326,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							chooseFiles(files)
 						}}
 					/>
-					<div className="flex items-center px-1 pt-1">
+					<div className="flex items-center gap-1 px-1 pt-1">
 						<button
 							type="button"
 							onClick={() => fileInput.current?.click()}
@@ -331,6 +336,13 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							<Paperclip size={15} />
 							Attach files
 						</button>
+						<ModelPicker
+							value={model}
+							models={models}
+							isFetching={modelCatalog.isFetching}
+							isError={modelCatalog.isError}
+							onSelect={setModel}
+						/>
 						<span className="ml-auto pr-1 text-[11px] text-faint">Drop files here</span>
 					</div>
 					{draggingFiles ? (

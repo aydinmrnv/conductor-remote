@@ -242,10 +242,10 @@ Two transports, same sixteen tools.
 |---|---|
 | `search_chats` · `read_chat` | full-text search every chat on this Mac, archived included, then read one |
 | `list_workspaces` · `list_chats` · `workspace_diff` · `list_repos` | what is running, and what it changed |
-| `create_workspace` | start work in a repo, with an optional first prompt. Touches no UI |
+| `create_workspace` | start work in a repo, with an optional first prompt and cached model label. Creation uses a deep link; selected model setup runs later |
 | `send_prompt` · `stop_turn` | talk to a running agent, or cancel its turn |
 | `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
-| `list_models` · `set_agent_options` | model, effort, plan, fast — Conductor keeps these in its UI and nowhere else |
+| `list_models` · `set_agent_options` | cached model labels, model, effort, plan, fast — Conductor keeps these in its UI and nowhere else |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
 | `dismiss_prompt` | throw away a prompt the relay is still holding |
 | `keep_awake` | hold this Mac awake with the lid shut, so a long run stays reachable |
@@ -300,14 +300,15 @@ of the time.
 | `list_chats` | the chat tabs in a workspace |
 | `workspace_diff` | a workspace's diff against its target branch |
 | `list_repos` | repos a workspace can be created in |
-| `create_workspace` | start a new workspace, optionally with a first prompt |
+| `create_workspace` | start a new workspace, optionally with a first prompt and model |
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
 | `set_workspace_status` | set the sidebar status (drives the real UI) |
 
-The first six touch nothing. `create_workspace` opens a Conductor deep link, so it
-needs no Accessibility and steals no focus. The last three drive Conductor's real
-window for a few seconds.
+The first six touch nothing. `create_workspace` opens a Conductor deep link, so
+creation needs no Accessibility and steals no focus. A requested model is applied
+later through Conductor's UI, before the relay sends the first prompt. The last
+three drive Conductor's real window for a few seconds.
 
 The HTTP transport is deliberately minimal: the server never initiates a message, so
 there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no

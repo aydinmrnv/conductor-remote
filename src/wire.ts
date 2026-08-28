@@ -24,6 +24,7 @@
 import type { UpdateStatus } from './autoupdate.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
+import type { CachedModelGroup } from './model-cache.ts'
 import type { NoSleepState } from './nosleep.ts'
 import type { DeviceInfo } from './notify.ts'
 import type { ParkedAgentPatch, ParkedPrompt } from './parked.ts'
@@ -42,6 +43,7 @@ export type { PrStatus, UnreadSession } from './reads.ts'
 export type { SearchRole, SearchSnippet } from './search.ts'
 export type {
 	ActuatorInfo,
+	CachedModelGroup,
 	DeviceInfo as PushDevice,
 	IndexStatus as SearchIndexStatus,
 	LogEntry,
@@ -181,6 +183,11 @@ export interface ModelsResult {
 	error?: string
 }
 
+/** GET /api/models — labels previously observed in Conductor's picker, without opening its UI. */
+export interface ModelCatalogResponse {
+	groups: CachedModelGroup[]
+}
+
 /** POST /api/workspaces — returns as soon as the row exists; the prompt is delivered later. */
 export interface CreateWorkspaceResult {
 	ok: boolean
@@ -188,7 +195,11 @@ export interface CreateWorkspaceResult {
 	workspace?: Workspace
 	/** Echoed back so the caller can submit it once the worktree is ready. */
 	pendingPrompt?: string
+	/** The model requested for the new chat. The relay applies it before the first prompt. */
+	model?: string
 	sent?: boolean
+	/** True when `send: true` waited for an initial model selection to finish. */
+	configured?: boolean
 	warning?: string
 	error?: string
 }
