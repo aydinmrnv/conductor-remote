@@ -23,14 +23,34 @@ for (const [input, expected] of cases) {
 	}
 }
 
-const groups = groupModelPickerLabels(['Opus 5', 'Opus 5 1M', 'Sonnet 4.6', 'openai/gpt-5.4'])
-const opus = groups.find(group => group.label === 'Opus')?.models.join(',')
-const sonnet = groups.find(group => group.label === 'Sonnet')?.models.join(',')
-const openai = groups.find(group => group.label === 'openai')?.models.join(',')
-if (opus === 'Opus 5,Opus 5 1M' && sonnet === 'Sonnet 4.6' && openai === 'openai/gpt-5.4') {
-	console.info('  ok    groups model families')
+const groups = groupModelPickerLabels([
+	'5.6 Terra',
+	'Auto',
+	'Composer 2.5',
+	'Fable 5',
+	'Grok 4.6',
+	'Haiku 4.5',
+	'Opus 5',
+	'Sonnet 4.6',
+	'opencode-go/grok-4.5',
+	'openai/gpt-5.4',
+	'unknown-model'
+])
+const anthropic = groups.find(group => group.label === 'Anthropic')?.models.join(',')
+const cursor = groups.find(group => group.label === 'Cursor')?.models.join(',')
+const openai = groups.find(group => group.label === 'OpenAI')?.models.join(',')
+const opencode = groups.find(group => group.label === 'OpenCode')?.models.join(',')
+const unknown = groups.find(group => group.label === 'Other')?.models.join(',')
+if (
+	anthropic === 'Fable 5,Haiku 4.5,Opus 5,Sonnet 4.6' &&
+	cursor === 'Composer 2.5,Grok 4.6' &&
+	openai === '5.6 Terra,Auto,openai/gpt-5.4' &&
+	opencode === 'opencode-go/grok-4.5' &&
+	unknown === 'unknown-model'
+) {
+	console.info('  ok    groups models by provider')
 } else {
-	console.error(`  FAIL  groups model families; got ${JSON.stringify(groups)}`)
+	console.error(`  FAIL  groups models by provider; got ${JSON.stringify(groups)}`)
 	failures++
 }
 

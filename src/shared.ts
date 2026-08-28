@@ -79,18 +79,24 @@ export interface ModelPickerGroup {
 }
 
 /**
- * Group picker labels by model family rather than by a maintained list of model
- * names. The labels come from Conductor at run time, including provider-qualified
- * OpenCode names, so a hard-coded catalog would age badly.
+ * Conductor's labels omit the agent for its built-in models. Keep them in the
+ * same provider sections as Conductor's picker: Claude Code, Codex, Cursor,
+ * and OpenCode. An unknown label belongs in Other until Conductor gives us a
+ * provider-qualified name or this small mapping gains its family.
  */
-function modelFamily(model: string): string {
-	const label = modelPickerLabel(model).trim()
+function modelProvider(model: string): string {
+	const label = modelPickerLabel(model).trim().toLowerCase()
+	if (label.startsWith('anthropic/')) return 'Anthropic'
+	if (label.startsWith('openai/')) return 'OpenAI'
+	if (label.startsWith('cursor/')) return 'Cursor'
+	if (/^(claude|fable|haiku|opus|sonnet)(?:[\s-]|$)/.test(label)) return 'Anthropic'
+	if (/^(?:auto|gpt|o[1-9]|\d)(?:[\s.-]|$)/.test(label)) return 'OpenAI'
+	if (/^(composer|grok)(?:[\s-]|$)/.test(label)) return 'Cursor'
+	if (/^opencode(?:-go)?\//.test(label)) return 'OpenCode'
+
 	const slash = label.indexOf('/')
 	if (slash > 0) return label.slice(0, slash)
-	const words = label.split(/[\s-]+/).filter(Boolean)
-	if (!words.length) return 'Other'
-	if (words[0].toLowerCase() === 'claude' && words[1]) return words[1]
-	return words[0]
+	return 'Other'
 }
 
 /** Stable, case-insensitive grouping shared by every model selector. */
@@ -99,10 +105,10 @@ export function groupModelPickerLabels(models: string[]): ModelPickerGroup[] {
 	for (const raw of models) {
 		const model = modelPickerLabel(raw).trim()
 		if (!model) continue
-		const family = modelFamily(model)
-		const entries = grouped.get(family) ?? []
+		const provider = modelProvider(model)
+		const entries = grouped.get(provider) ?? []
 		if (!entries.includes(model)) entries.push(model)
-		grouped.set(family, entries)
+		grouped.set(provider, entries)
 	}
 	return [...grouped]
 		.map(([label, entries]) => ({ label, models: entries.sort((a, b) => a.localeCompare(b)) }))
