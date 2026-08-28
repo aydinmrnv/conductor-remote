@@ -2,8 +2,11 @@ import { create } from 'zustand'
 import { loadAgentDrafts, writeAgentDraft } from './lib/agentDraft.ts'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 import { loadDrafts, writeDraft } from './lib/draft.ts'
+import { offlineDelay } from './lib/online.ts'
 import { loadReadMarks, type ReadMarks, writeReadMarks } from './lib/read.ts'
 import type { AgentPatch, UpdateStatus } from './lib/types.ts'
+
+let offlineTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by
@@ -84,7 +87,7 @@ function loadLastNewWorkspaceRepo(): string {
 
 interface AppState {
 	token: string | null
-	/** Whether the last relay call succeeded — drives the offline banner. */
+	/** Whether the relay is reachable — drives the offline banner. */
 	online: boolean
 	/** Epoch ms of the last successful relay call — the banner's "last synced". */
 	lastSyncAt: number | null
@@ -186,7 +189,25 @@ export const useApp = create<AppState>((set, get) => {
 			else clearToken()
 			set({ token })
 		},
-		setOnline: online => set(online ? { online, lastSyncAt: Date.now() } : { online }),
+		setOnline: online => {
+			if (online) {
+				if (offlineTimer) clearTimeout(offlineTimer)
+				offlineTimer = null
+				set({ online, lastSyncAt: Date.now() })
+				return
+			}
+
+			if (!get().online || offlineTimer) return
+			const delay = offlineDelay(get().lastSyncAt)
+			if (delay === 0) {
+				set({ online: false })
+				return
+			}
+			offlineTimer = setTimeout(() => {
+				offlineTimer = null
+				set({ online: false })
+			}, delay)
+		},
 		setUpdate: update => set({ update }),
 		markWorking: sessionId => set({ workingHints: { ...get().workingHints, [sessionId]: Date.now() } }),
 		clearWorking: sessionId => {
