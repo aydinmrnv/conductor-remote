@@ -3,7 +3,7 @@
  * coding agents emit in their final responses. Keep the parser strict: ordinary
  * PWA paths must remain ordinary browser links.
  */
-import { parseFileReference } from '../src/file-preview.ts'
+import { isAllowedPreviewPath, parseFileReference } from '../src/file-preview.ts'
 
 const failures: string[] = []
 
@@ -41,6 +41,39 @@ check('rejects a relative path', parseFileReference('web/src/app.tsx:19'), null)
 check('rejects a workspace secret', parseFileReference('/Users/hyldmo/project/.env:1'), null)
 check('rejects line zero', parseFileReference('/Users/hyldmo/file.ts:0'), null)
 check('rejects an unsafe integer line', parseFileReference('/Users/hyldmo/file.ts:9007199254740992'), null)
+
+const workspaces = '/Users/hyldmo/conductor/workspaces'
+const home = '/Users/hyldmo'
+check(
+	'allows a Conductor workspace in public mode',
+	isAllowedPreviewPath(
+		'/Users/hyldmo/conductor/workspaces/conductor-remote/yeosu/src/server.ts',
+		workspaces,
+		home,
+		'public'
+	),
+	true
+)
+check(
+	'rejects home files in public mode',
+	isAllowedPreviewPath('/Users/hyldmo/.gstack/builder-journey.md', workspaces, home, 'public'),
+	false
+)
+check(
+	'allows home supporting files in tailnet mode',
+	isAllowedPreviewPath('/Users/hyldmo/.gstack/builder-journey.md', workspaces, home, 'tailnet'),
+	true
+)
+check(
+	'rejects a workspace lookalike in tailnet mode',
+	isAllowedPreviewPath('/Users/hyldmo-conductor/workspaces/project/src/app.ts', workspaces, home, 'tailnet'),
+	false
+)
+check(
+	'rejects system files in tailnet mode',
+	isAllowedPreviewPath('/etc/config.ts', workspaces, home, 'tailnet'),
+	false
+)
 
 if (failures.length) {
 	console.error(`file links: ${failures.length} check(s) failed`)

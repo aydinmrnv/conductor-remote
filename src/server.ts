@@ -8,7 +8,7 @@ import { writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
-import { parseFileReference } from './file-preview.ts'
+import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { workspaceDiff } from './git.ts'
@@ -53,7 +53,7 @@ import {
 	stageAttachment,
 	stagedAttachments
 } from './staged-attachments.ts'
-import { driftWarningLines, tailscaleBin } from './tailscale.ts'
+import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
 import { renderTranscript } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import {
@@ -531,17 +531,11 @@ const FILE_PREVIEW_MAX_BYTES = 512 * 1024
 const FILE_PREVIEW_CONTEXT_LINES = 100
 const FILE_PREVIEW_FIRST_LINES = 500
 
-/** True only for a descendant. A prefix test would let `/workspaces-old` escape `/workspaces`. */
-function insideDirectory(filePath: string, root: string): boolean {
-	const relative = path.relative(root, filePath)
-	return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-}
-
 /**
  * Serve source that an agent linked in its Markdown. The link format comes from
- * coding-agent file references, but its path still arrives from an internet-facing
- * client. Resolve both sides and accept only regular source files below the
- * configured Conductor workspace root.
+ * coding-agent file references, but its path still arrives from a remote client.
+ * Public Funnel clients stay within Conductor workspaces. Tailnet-only relays may
+ * also read supporting source files from the signed-in user's home directory.
  */
 async function serveFilePreview(req: http.IncomingMessage, res: http.ServerResponse, reference: string): Promise<void> {
 	const target = parseFileReference(reference)
@@ -549,13 +543,17 @@ async function serveFilePreview(req: http.IncomingMessage, res: http.ServerRespo
 
 	let filePath: string
 	let workspaceRoot: string
+	let homeRoot: string
 	let size: number
 	try {
-		;[filePath, workspaceRoot] = await Promise.all([
+		;[filePath, workspaceRoot, homeRoot] = await Promise.all([
 			fs.promises.realpath(target.path),
-			fs.promises.realpath(cfg.workspacesRoot)
+			fs.promises.realpath(cfg.workspacesRoot),
+			fs.promises.realpath(os.homedir())
 		])
-		if (!insideDirectory(filePath, workspaceRoot)) return json(req, res, 404, { error: 'source file not found' })
+		if (!isAllowedPreviewPath(filePath, workspaceRoot, homeRoot, readExposeMode())) {
+			return json(req, res, 404, { error: 'source file not found' })
+		}
 		const info = await fs.promises.stat(filePath)
 		if (!info.isFile()) return json(req, res, 404, { error: 'source file not found' })
 		size = info.size
