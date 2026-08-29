@@ -44,6 +44,7 @@ check('rejects an unsafe integer line', parseFileReference('/Users/hyldmo/file.t
 
 const workspaces = '/Users/hyldmo/conductor/workspaces'
 const home = '/Users/hyldmo'
+const bundledSkills = '/Applications/Conductor.app/Contents/Resources/conductor-skill/skills'
 check(
 	'allows a Conductor workspace in public mode',
 	isAllowedPreviewPath(
@@ -63,6 +64,28 @@ check(
 	'allows home supporting files in tailnet mode',
 	isAllowedPreviewPath('/Users/hyldmo/.gstack/builder-journey.md', workspaces, home, 'tailnet'),
 	true
+)
+check(
+	'allows bundled Conductor skills in tailnet mode',
+	isAllowedPreviewPath(
+		'/Applications/Conductor.app/Contents/Resources/conductor-skill/skills/conductor/SKILL.md',
+		workspaces,
+		home,
+		'tailnet',
+		bundledSkills
+	),
+	true
+)
+check(
+	'rejects bundled Conductor skills in public mode',
+	isAllowedPreviewPath(
+		'/Applications/Conductor.app/Contents/Resources/conductor-skill/skills/conductor/SKILL.md',
+		workspaces,
+		home,
+		'public',
+		bundledSkills
+	),
+	false
 )
 check(
 	'rejects a workspace lookalike in tailnet mode',

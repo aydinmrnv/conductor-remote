@@ -8,7 +8,7 @@ import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
-import { Markdown } from './Markdown.tsx'
+import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Empty, Spinner } from './ui.tsx'
 
@@ -406,11 +406,24 @@ const Entry = memo(function Entry({
 				</div>
 			)
 		}
+		const source = sourceReference(e.detail)
 		return (
 			<div className="flex min-w-0 items-baseline gap-2 overflow-hidden whitespace-nowrap rounded-xl border border-border-soft bg-surface/60 px-3 py-1.5">
 				<span className="shrink-0 font-mono text-[11px] text-faint">▸</span>
 				<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
-				{e.detail ? <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{e.detail}</span> : null}
+				{e.detail ? (
+					source ? (
+						<ChatLink
+							href={source}
+							title={`Open ${e.detail}`}
+							className="min-w-0 flex-1 truncate font-mono text-[11px] text-accent underline underline-offset-2"
+						>
+							{e.detail}
+						</ChatLink>
+					) : (
+						<span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{e.detail}</span>
+					)
+				) : null}
 			</div>
 		)
 	}
