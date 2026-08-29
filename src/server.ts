@@ -546,6 +546,7 @@ async function serveLocalImage(
 const FILE_PREVIEW_MAX_BYTES = 512 * 1024
 const FILE_PREVIEW_CONTEXT_LINES = 100
 const FILE_PREVIEW_FIRST_LINES = 500
+const BUNDLED_SKILLS_ROOT = '/Applications/Conductor.app/Contents/Resources/conductor-skill/skills'
 
 /**
  * Serve source that an agent linked in its Markdown. The link format comes from
@@ -560,14 +561,16 @@ async function serveFilePreview(req: http.IncomingMessage, res: http.ServerRespo
 	let filePath: string
 	let workspaceRoot: string
 	let homeRoot: string
+	let bundledSkillsRoot: string | null
 	let size: number
 	try {
-		;[filePath, workspaceRoot, homeRoot] = await Promise.all([
+		;[filePath, workspaceRoot, homeRoot, bundledSkillsRoot] = await Promise.all([
 			fs.promises.realpath(target.path),
 			fs.promises.realpath(cfg.workspacesRoot),
-			fs.promises.realpath(os.homedir())
+			fs.promises.realpath(os.homedir()),
+			fs.promises.realpath(BUNDLED_SKILLS_ROOT).catch(() => null)
 		])
-		if (!isAllowedPreviewPath(filePath, workspaceRoot, homeRoot, readExposeMode())) {
+		if (!isAllowedPreviewPath(filePath, workspaceRoot, homeRoot, readExposeMode(), bundledSkillsRoot)) {
 			return json(req, res, 404, { error: 'source file not found' })
 		}
 		const info = await fs.promises.stat(filePath)

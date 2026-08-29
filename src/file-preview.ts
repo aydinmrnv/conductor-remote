@@ -1,54 +1,10 @@
 import path from 'node:path'
+import { isPreviewableSource } from './shared.ts'
 
 /** A source location as coding agents write it in Markdown: an absolute path, with an optional line or column. */
 export interface FileReference {
 	path: string
 	line: number | null
-}
-
-const SOURCE_EXTENSIONS = new Set([
-	'.bash',
-	'.c',
-	'.cc',
-	'.cpp',
-	'.css',
-	'.go',
-	'.h',
-	'.hpp',
-	'.html',
-	'.java',
-	'.js',
-	'.json',
-	'.jsx',
-	'.md',
-	'.mjs',
-	'.mts',
-	'.php',
-	'.py',
-	'.rb',
-	'.rs',
-	'.scss',
-	'.sh',
-	'.sql',
-	'.svg',
-	'.swift',
-	'.toml',
-	'.ts',
-	'.tsx',
-	'.txt',
-	'.yaml',
-	'.yml'
-])
-
-function sourceExtension(filePath: string): string {
-	const name = filePath.slice(filePath.lastIndexOf('/') + 1)
-	const dot = name.lastIndexOf('.')
-	return dot === -1 ? '' : name.slice(dot).toLowerCase()
-}
-
-/** True when a file is a text source format this viewer is allowed to expose. */
-export function isPreviewableSource(filePath: string): boolean {
-	return SOURCE_EXTENSIONS.has(sourceExtension(filePath))
 }
 
 /** True only for a descendant. A prefix test would let `/workspaces-old` escape `/workspaces`. */
@@ -69,9 +25,15 @@ export function isAllowedPreviewPath(
 	filePath: string,
 	workspaceRoot: string,
 	homeRoot: string,
-	exposeMode: 'public' | 'tailnet'
+	exposeMode: 'public' | 'tailnet',
+	bundledSkillsRoot: string | null = null
 ): boolean {
-	return insideDirectory(filePath, workspaceRoot) || (exposeMode === 'tailnet' && insideDirectory(filePath, homeRoot))
+	return (
+		insideDirectory(filePath, workspaceRoot) ||
+		(exposeMode === 'tailnet' &&
+			(insideDirectory(filePath, homeRoot) ||
+				(bundledSkillsRoot !== null && insideDirectory(filePath, bundledSkillsRoot))))
+	)
 }
 
 /**

@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
-import { attachmentTokens } from '../../../src/shared.ts'
+import { attachmentTokens, isPreviewableSource } from '../../../src/shared.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
@@ -60,9 +60,10 @@ function ChatImage({ src, alt, ...props }: React.ComponentProps<'img'>) {
 }
 
 /** Agent file links are absolute paths, unlike the PWA's own `/w/:id` routes. */
-function sourceReference(href: string | undefined): string | null {
+export function sourceReference(href: string | undefined): string | null {
 	if (!href?.startsWith('/')) return null
-	return /:[1-9]\d*(?::\d+)?$/.test(href) || /\.md(?::[1-9]\d*(?::\d+)?)?$/i.test(href) ? href : null
+	const location = href.match(/:([1-9]\d*)(?::\d+)?$/)
+	return isPreviewableSource(location ? href.slice(0, -location[0].length) : href) ? href : null
 }
 
 /**
@@ -70,7 +71,7 @@ function sourceReference(href: string | undefined): string | null {
  * back to this app and the router quite reasonably turns it into the home screen.
  * Intercept coding-agent locations and show a relay-backed source preview instead.
  */
-function ChatLink({ href, children, onClick, ...props }: React.ComponentProps<'a'>) {
+export function ChatLink({ href, children, onClick, ...props }: React.ComponentProps<'a'>) {
 	const attachment = attachmentPath(href)
 	const reference = sourceReference(href)
 	const [previewing, setPreviewing] = useState(false)

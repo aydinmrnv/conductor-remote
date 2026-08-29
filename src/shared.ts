@@ -184,3 +184,45 @@ export function attachmentTokens(text: string): AttachmentToken[] {
 	}
 	return tokens
 }
+
+/** Text source formats the relay may return to the phone's source preview. */
+const SOURCE_EXTENSIONS = new Set([
+	'.bash',
+	'.c',
+	'.cc',
+	'.cpp',
+	'.css',
+	'.go',
+	'.h',
+	'.hpp',
+	'.html',
+	'.java',
+	'.js',
+	'.json',
+	'.jsx',
+	'.md',
+	'.mjs',
+	'.mts',
+	'.php',
+	'.py',
+	'.rb',
+	'.rs',
+	'.scss',
+	'.sh',
+	'.sql',
+	'.svg',
+	'.swift',
+	'.toml',
+	'.ts',
+	'.tsx',
+	'.txt',
+	'.yaml',
+	'.yml'
+])
+
+/** True for a file extension the relay's source preview accepts. */
+export function isPreviewableSource(filePath: string): boolean {
+	const name = filePath.slice(filePath.lastIndexOf('/') + 1)
+	const dot = name.lastIndexOf('.')
+	return dot !== -1 && SOURCE_EXTENSIONS.has(name.slice(dot).toLowerCase())
+}
