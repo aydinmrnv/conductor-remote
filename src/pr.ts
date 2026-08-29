@@ -14,7 +14,7 @@ const exec = promisify(execFile)
  *   - `conflicts` vs `mergeable` is computed **locally** with `git merge-tree`,
  *     not GitHub's lazily-computed (and usually `UNKNOWN`) `mergeable` field.
  *   - Any failure (no `gh`, unauthenticated, not a GitHub remote) degrades to
- *     `pr_status = null` → the PWA shows the neutral accent dot. Nothing breaks.
+ *     `pr_status = null` → the PWA shows the default blue dot. Nothing breaks.
  */
 
 interface GhPr {
