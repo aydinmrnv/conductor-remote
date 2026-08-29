@@ -24,6 +24,7 @@ interface GhPr {
 	state: 'OPEN' | 'CLOSED' | 'MERGED'
 	isDraft: boolean
 	updatedAt: string
+	statusCheckRollup?: Array<{ conclusion?: string | null; state?: string | null }> | null
 }
 
 const REPO_TTL = 60_000
@@ -60,7 +61,7 @@ export function attachPrStatus(workspaces: Workspace[]): void {
 			else {
 				const c = w.worktree ? conflictCache.get(w.worktree) : undefined
 				// Optimistically green until the local merge check says otherwise (self-corrects within CONFLICT_TTL).
-				w.pr_status = c?.conflicts ? 'conflicts' : 'mergeable'
+				w.pr_status = c?.conflicts ? 'conflicts' : hasFailedChecks(pr.statusCheckRollup) ? 'checks_failed' : 'mergeable'
 				if (w.worktree && (!c || now - c.at > CONFLICT_TTL)) refreshConflict(w.worktree, w.baseBranch)
 			}
 		}
@@ -85,7 +86,16 @@ async function fetchRepoPRs(root: string): Promise<Map<string, GhPr> | null> {
 	try {
 		const { stdout } = await exec(
 			'gh',
-			['pr', 'list', '--state', 'all', '--limit', '100', '--json', 'headRefName,number,url,state,isDraft,updatedAt'],
+			[
+				'pr',
+				'list',
+				'--state',
+				'all',
+				'--limit',
+				'100',
+				'--json',
+				'headRefName,number,url,state,isDraft,updatedAt,statusCheckRollup'
+			],
 			{ cwd: root, encoding: 'utf8', timeout: 15_000 }
 		)
 		const list = JSON.parse(stdout) as GhPr[]
@@ -97,6 +107,28 @@ async function fetchRepoPRs(root: string): Promise<Map<string, GhPr> | null> {
 	} catch {
 		return null
 	}
+}
+
+const FAILED_CHECK_CONCLUSIONS = new Set([
+	'ACTION_REQUIRED',
+	'CANCELLED',
+	'FAILURE',
+	'STALE',
+	'STARTUP_FAILURE',
+	'TIMED_OUT'
+])
+const FAILED_CHECK_STATES = new Set(['ERROR', 'FAILURE'])
+
+/**
+ * Check runs carry their terminal result in `conclusion`; legacy status contexts
+ * use `state`. Pending checks remain green because this marker calls out failures.
+ */
+export function hasFailedChecks(checks: GhPr['statusCheckRollup']): boolean {
+	return !!checks?.some(
+		check =>
+			(check.conclusion && FAILED_CHECK_CONCLUSIONS.has(check.conclusion)) ||
+			(check.state && FAILED_CHECK_STATES.has(check.state))
+	)
 }
 
 function refreshConflict(worktree: string, base: string): void {

@@ -20,7 +20,7 @@
 	/* Workspace dot by PR state (src/pr.ts). */
 	--color-pr-merged: #ac47ff;
 	--color-pr-draft: #a4a3a2;
-	--color-pr-conflicts: #fd9a00;
+	--color-pr-attention: #facc15;
 	--color-pr-mergeable: #49de80;
 
 	--color-add: #3ecf8e;

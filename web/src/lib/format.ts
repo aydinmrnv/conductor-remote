@@ -75,12 +75,13 @@ export function statusLabel(w: Workspace): string {
 const PR_DOT_COLORS: Record<NonNullable<Workspace['pr_status']>, string> = {
 	merged: 'var(--color-pr-merged)',
 	draft: 'var(--color-pr-draft)',
-	conflicts: 'var(--color-pr-conflicts)',
+	conflicts: 'var(--color-pr-attention)',
+	checks_failed: 'var(--color-pr-attention)',
 	mergeable: 'var(--color-pr-mergeable)'
 }
 
 /**
- * The workspace dot: PR state drives the colour (merged/draft/conflicts/mergeable),
+ * The workspace dot: PR state drives the colour (merged/draft/attention/mergeable),
  * everything else falls back to blue. Setup uses a muted spinner. An active
  * agent uses a spinner in its status colour (`StatusDot`).
  */
