@@ -59,9 +59,10 @@ function ChatImage({ src, alt, ...props }: React.ComponentProps<'img'>) {
 	return <img src={src} alt={alt ?? ''} {...props} />
 }
 
-/** Agent file links are absolute source locations, unlike the PWA's own `/w/:id` routes. */
+/** Agent file links are absolute paths, unlike the PWA's own `/w/:id` routes. */
 function sourceReference(href: string | undefined): string | null {
-	return href?.startsWith('/') && /:[1-9]\d*(?::\d+)?$/.test(href) ? href : null
+	if (!href?.startsWith('/')) return null
+	return /:[1-9]\d*(?::\d+)?$/.test(href) || /\.md(?::[1-9]\d*(?::\d+)?)?$/i.test(href) ? href : null
 }
 
 /**
@@ -173,11 +174,30 @@ function FilePreviewSheet({ reference, onClose }: { reference: string; onClose: 
 				<div className="min-h-0 flex-1 overflow-auto">
 					{!preview && !error ? <Spinner label="Reading source…" /> : null}
 					{error ? <p className="mx-auto max-w-xs px-6 py-16 text-center text-sm text-muted">{error}</p> : null}
-					{preview ? <SourceLines preview={preview} lineRef={highlightedLine} /> : null}
+					{preview ? (
+						isMarkdownFile(preview.path) ? (
+							<MarkdownFile preview={preview} />
+						) : (
+							<SourceLines preview={preview} lineRef={highlightedLine} />
+						)
+					) : null}
 				</div>
 			</div>
 		</>,
 		document.body
+	)
+}
+
+function isMarkdownFile(filePath: string): boolean {
+	return filePath.toLowerCase().endsWith('.md')
+}
+
+function MarkdownFile({ preview }: { preview: FilePreviewResponse }) {
+	return (
+		<div className="p-4 text-sm leading-6 text-text">
+			<Markdown>{preview.content}</Markdown>
+			<PreviewTruncationNotice preview={preview} />
+		</div>
 	)
 }
 
@@ -210,13 +230,17 @@ function SourceLines({
 					)
 				})}
 			</pre>
-			{preview.truncated ? (
-				<p className="border-t border-border-soft px-4 py-2 text-xs text-faint">
-					Showing lines {preview.lineStart}–{preview.lineEnd} of {preview.totalLines}.
-				</p>
-			) : null}
+			<PreviewTruncationNotice preview={preview} />
 		</>
 	)
+}
+
+function PreviewTruncationNotice({ preview }: { preview: FilePreviewResponse }) {
+	return preview.truncated ? (
+		<p className="border-t border-border-soft px-4 py-2 text-xs text-faint">
+			Showing lines {preview.lineStart}–{preview.lineEnd} of {preview.totalLines}.
+		</p>
+	) : null
 }
 
 const COMPONENTS = { a: ChatLink, img: ChatImage }
