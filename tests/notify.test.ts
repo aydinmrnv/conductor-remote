@@ -129,10 +129,7 @@ describe('turn watcher', () => {
 
 	test('tracks loop suppression independently for each chat', () => {
 		const watcher = new TurnWatcher()
-		const both = (status: string, yoursTurn: string) => [
-			chat(status, T1, 'looper'),
-			chat(status, yoursTurn, 'yours')
-		]
+		const both = (status: string, yoursTurn: string) => [chat(status, T1, 'looper'), chat(status, yoursTurn, 'yours')]
 		fired(watcher, both('working', T1))
 		fired(watcher, both('idle', T1))
 		fired(watcher, both('idle', T1))

@@ -41,9 +41,7 @@ describe('route table', () => {
 			const path = isParam(route) ? route.path(samples[0]) : route.path()
 			for (const method of ['GET', 'POST', 'PATCH', 'DELETE']) {
 				if (method === route.method) continue
-				const matches = isParam(route)
-					? routeParam(route, method, path) !== null
-					: isRoute(route, method, path)
+				const matches = isParam(route) ? routeParam(route, method, path) !== null : isRoute(route, method, path)
 				expect(matches, `${name} also answered ${method}`).toBe(false)
 			}
 		}

@@ -8,7 +8,8 @@ interface Answer {
 	tag: string
 }
 
-const memo = (ttlMs = 400) => new SendOnce<Answer>({ keep: answer => answer.status === 200 || answer.status === 202, ttlMs })
+const memo = (ttlMs = 400) =>
+	new SendOnce<Answer>({ keep: answer => answer.status === 200 || answer.status === 202, ttlMs })
 
 describe('send memo', () => {
 	test('returns a delivered result for repeated keys without sending twice', async () => {

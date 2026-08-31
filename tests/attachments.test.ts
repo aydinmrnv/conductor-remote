@@ -30,9 +30,7 @@ describe('attachment tokens', () => {
 		)
 		expect(
 			attachmentToken('Transcript of Approve plan.md', '.context/attachments/kuB8pt/Transcript of Approve plan.md')
-		).toBe(
-			'@⟦Transcript of Approve plan.md⟧(.context%2Fattachments%2FkuB8pt%2FTranscript%20of%20Approve%20plan.md)'
-		)
+		).toBe('@⟦Transcript of Approve plan.md⟧(.context%2Fattachments%2FkuB8pt%2FTranscript%20of%20Approve%20plan.md)')
 	})
 
 	test('parses a complete token when its filename contains parentheses', () => {
@@ -63,9 +61,7 @@ describe('attachment tokens', () => {
 
 describe('attachment names', () => {
 	test('preserves a plain safe name', () => {
-		expect(attachmentName('Transcript of Select product colors.md')).toBe(
-			'Transcript of Select product colors.md'
-		)
+		expect(attachmentName('Transcript of Select product colors.md')).toBe('Transcript of Select product colors.md')
 	})
 
 	test('removes path traversal and always returns a usable name', () => {

@@ -26,7 +26,12 @@ describe('latest assistant action target', () => {
 
 	test('does not reuse the previous turn after a new user prompt', () => {
 		expect(
-			latestAssistantForActions([previous, user, entry('tool', 'work without a response', 3), entry('system', 'aborted', 4)])
+			latestAssistantForActions([
+				previous,
+				user,
+				entry('tool', 'work without a response', 3),
+				entry('system', 'aborted', 4)
+			])
 		).toBeNull()
 	})
 

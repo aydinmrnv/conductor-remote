@@ -176,7 +176,7 @@ Two asymmetric halves — keep them separate:
   *interrupted* either). The subtle one: **release the lock before resolving the
   caller.** Settling first and cleaning up in a chained `.then` frees it one
   microtask late, so code that awaits a write and then reads `uiQueueDepth()` is
-  told a run is still in flight when none is. `scripts/check-uilock.ts` exists
+  told a run is still in flight when none is. `tests/ui-lock.test.ts` exists
   because `tsc` reads all of this happily and caught neither that bug nor the
   cascade behind it.
 - **Writes are the one fragile nerve.** Prompts go back via the `Actuator`
@@ -510,7 +510,7 @@ Two asymmetric halves — keep them separate:
   this file survives intact. The near misses are quiet: `encodeURIComponent` encoding
   the slashes too *is* the format (tidying that away still sends, and simply isn't an
   attachment any more), and the brackets are `⟦⟧`, not the ASCII ones they resemble.
-  `scripts/check-attachments.ts` pins both against a token Conductor itself wrote,
+  `tests/attachments.test.ts` pins both against a token Conductor itself wrote,
   and pins the other half — that a name built from a **chat title**, which is free text
   a model wrote and which then gets joined onto a path, cannot climb out of the worktree.
   - **`split_chat` is what it exists for** (`POST /api/sessions/:id/split`): copy a chat
@@ -641,7 +641,7 @@ Two asymmetric halves — keep them separate:
     with, so they cannot drift. Decoding happens in `routeParam`, which is what stops
     a handler forgetting `decodeURIComponent` on a repo name. **What the table cannot
     fix is renaming a path**: both sides derive from the one string, so a typo stays
-    self-consistent and `scripts/check-routes.ts` passes — and the phone runs from a
+    self-consistent and `tests/routes.test.ts` passes — and the phone runs from a
     service-worker cache while the relay updates itself, so an installed PWA can be a
     version behind. Treat a path rename as a breaking change to that older client.
   - **This is also the answer to "should we adopt tRPC", and `wire.ts` + `routes.ts`
@@ -693,7 +693,7 @@ Two asymmetric halves — keep them separate:
     fires (a loop that breaks is worth hearing about however it started), and a chat
     recording **neither** (dormant since before `queue_order` landed in May 2026) notifies
     every time, because with no evidence either way, silence is the dangerous default. The
-    state machine is `TurnWatcher`, split out of the poll loop so `scripts/check-notify.ts`
+    state machine is `TurnWatcher`, split out of the poll loop so `tests/notify.test.ts`
     can drive it a tick at a time.
   Web Push is written out of
   `node:crypto` in `src/webpush.ts` (VAPID ES256 + `aes128gcm`) to keep the
@@ -811,16 +811,12 @@ Two asymmetric halves — keep them separate:
 ## Commands
 
 ```bash
-yarn verify   # typecheck (tsc) + lint (Biome) + the nine checks below — before every commit
+yarn verify   # typecheck + lint + Vitest + repository checks — before every commit
+yarn test     # run the Vitest suite once
+yarn test:watch # rerun affected Vitest tests while editing
+yarn test:coverage # run Vitest with V8 text + HTML coverage reports
+yarn check:repo # import-boundary and AppleScript source/toolchain validation
 yarn fix      # Biome autofix (format + safe lints)
-yarn check:applescript # osacompile src/*.applescript + resolve every `my handler()` call
-yarn check:nosleep     # run NOSLEEP_BODY against a stub pmset in a temp dir (no root, no real pmset)
-yarn check:uilock      # the UI lock's queue: order, priority, release-on-failure, cap
-yarn check:sendonce    # the send memo: Retry never doubles a prompt, a failure stays retryable
-yarn check:notify      # the turn watcher: a loop's own laps stay quiet, yours still buzz
-yarn check:imports     # web/src may only `import type` from src/ (shared.ts/routes.ts aside)
-yarn check:routes      # the /api route table: round-trip, no collisions, method is identity
-yarn check:attachments # the @⟦⟧() token Conductor parses, and a chat title that can't escape the worktree
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
@@ -829,13 +825,11 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Nine automated tests. Three of them share one reason to exist: **each guards a
-language nothing else in the toolchain reads** — an AppleScript handler, a shell body,
-a syntax another app parses. They live in a string or a sibling file, so `tsc` sees text
-and Biome sees text, and a mistake surfaces for the first time on someone's phone or
-someone's Mac. The other six guard things `tsc` reads fine and still cannot judge:
-control flow (four times over), which side of the Node/browser line an import lands on,
-and whether a URL still addresses the handler that answers it.
+Automated verification has two layers. Vitest discovers the behavioral and integration
+tests under `tests/`, supports focused/watch runs, reports individual failures, and can
+collect V8 coverage. Two source/toolchain validators remain standalone scripts because
+they inspect the repository rather than one runtime unit: the AppleScript compiler and
+handler scan, and the relay/web import boundary.
 
 - `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
   the way `osascript` will, and every `my handler()` call, in the script *and* in
@@ -846,7 +840,7 @@ and whether a URL still addresses the handler that answers it.
   stdlib-only, and it gates the release since the tarball ships the .applescript
   verbatim); the ubuntu job skips it, and the resolution half runs everywhere,
   which is what catches a rename in a pull request.
-- `scripts/check-nosleep.ts` — runs `NOSLEEP_BODY` against a **stub `pmset`** in a
+- `tests/nosleep.test.ts` — runs `NOSLEEP_BODY` against a **stub `pmset`** in a
   temp directory, pidfile and all, so it needs no root and never touches this
   machine's power settings. It asserts the property that costs something: the
   captured values always go back. A window that restores the *wrong* values leaves
@@ -855,24 +849,24 @@ and whether a URL still addresses the handler that answers it.
   incumbent refuses (must exit 75, must not capture), and a recycled pid (must not
   be signalled). Portable, so the ubuntu job runs it too.
 
-- `scripts/check-uilock.ts` — the UI lock's queue (`writes.ts` ▸ `uiTurn`), driven
+- `tests/ui-lock.test.ts` — the UI lock's queue (`writes.ts` ▸ `uiTurn`), driven
   with timers instead of AppleScript, since it is the control flow being tested and
   not the scripts. It earns its place on cost: a run that fails to release the lock
   wedges **every** future write with no error and no fix from the phone, and a
   priority bug puts a human tap behind a minute of agent work. It found both bugs in
   the queue while that queue was being written. Portable, so the ubuntu job runs it.
 
-- `scripts/check-firstprompt.ts` — the first-prompt queue's two budgets
+- `tests/firstprompt.test.ts` — the first-prompt queue's two budgets
   (`src/firstprompt.ts` ▸ `step`). Sending before the worktree is ready means most of
   the failures the queue now sees are ones waiting fixes, so an early send spends
   `earlyAttempts` and only a post-`ready` one spends the three that give up in public.
   Get that split backwards and every slow repo greets its owner with a `failed` prompt
   Conductor would have taken a minute later — which is the regression the change itself
   could introduce, and it typechecks either way. `DeliveryDeps` is injected, so this
-  needs no Mac, no Conductor and no relay; the delays are real seconds, so it waits on
-  the queue's own actions rather than on a stopwatch. Portable, so the ubuntu job runs it.
+  needs no Mac, no Conductor and no relay; fake timers drive the queue's own schedule
+  without waiting out production delays. Portable, so the ubuntu job runs it.
 
-- `scripts/check-sendonce.ts` — the send memo (`src/sendonce.ts`), which decides whether
+- `tests/sendonce.test.ts` — the send memo (`src/sendonce.ts`), which decides whether
   a prompt is typed into Conductor a second time. Both of its failure modes are pure
   control flow and both typecheck: remember too little and Retry doubles the prompt,
   which is the bug it was written for; remember a *failure* and Retry silently does
@@ -880,7 +874,7 @@ and whether a URL still addresses the handler that answers it.
   of the two and the easier mistake to make while editing `keep`. Takes a function and a
   key, so it needs nothing else. Portable, so the ubuntu job runs it.
 
-- `scripts/check-notify.ts` — the notifier's state machine (`src/notify.ts` ▸
+- `tests/notify.test.ts` — the notifier's state machine (`src/notify.ts` ▸
   `TurnWatcher`). Every rule in it is a rule about *not* buzzing a phone, which is why
   it is worth pinning: too eager is a nuisance you notice, too quiet is a notifier that
   has stopped and looks exactly like a Mac with nothing to report. Covers the baseline,
@@ -889,7 +883,7 @@ and whether a URL still addresses the handler that answers it.
   a chat with no turn head keeps the old behaviour. Rows are injected, so no push store
   and no network. Portable, so the ubuntu job runs it.
 
-- `scripts/check-routes.ts` — the `/api` route table (`src/routes.ts`). Every route
+- `tests/routes.test.ts` — the `/api` route table (`src/routes.ts`). Every route
   matches the path it builds, the parameter survives encoding verbatim, no route answers
   another route's path, and a route answers its own method only. It earns its place on
   blast radius: the table is the one place a path is written now, read by the relay's
@@ -898,7 +892,7 @@ and whether a URL still addresses the handler that answers it.
   whichever `if` is written first in the dispatcher wins, so a real overlap looks fine
   until someone reorders the file. Portable, so the ubuntu job runs it.
 
-- `scripts/check-attachments.ts` — the two halves of a Conductor attachment
+- `tests/attachments.test.ts` — the two halves of a Conductor attachment
   (`src/attachments.ts`), both of them strings all the way down. The token is *another
   app's* syntax, so it is asserted against one Conductor itself wrote, byte for byte:
   the percent-encoded slashes look like a bug and are the format, and `⟦⟧` are not the

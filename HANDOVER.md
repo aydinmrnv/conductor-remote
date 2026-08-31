@@ -151,8 +151,8 @@ scripts/         dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/u
                  + qr.ts (dep-free QR of the phone URL, printed by service.ts)
                  + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
                  + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)
-                 + check-{applescript,nosleep,uilock,imports,routes,attachments}.ts
-                   (the automated tests, all run by `yarn verify`)
+                 + check-{applescript,imports}.ts (repository source/toolchain validators)
+tests/           Vitest unit, contract, concurrency, filesystem and shell integration tests
 dist/             built PWA (gitignored) — what the relay serves
 dist-node/        compiled relay (gitignored) — src/ + service.ts/qr.ts → JS for the npm tarball
 ```
@@ -194,12 +194,12 @@ assistant/system rows and plain text for user prompts; `queue_order` set +
 - **Yarn standalone.** An empty `yarn.lock` marks this repo as its own project
   (there's a `package.json` higher up in `$HOME`). `.yarnrc.yml` sets
   `nodeLinker: node-modules`.
-- **`yarn verify`** = typecheck + lint (Biome) + `scripts/check-applescript.ts`.
-  `yarn check` collides with a Yarn Classic builtin, so the script is `verify`.
-  The AppleScript step is the repo's only automated test: `osacompile` parses
-  `src/conductor.applescript`, and every `my handler()` call in the script and in
-  the TypeScript that appends to it must resolve to an `on handler(`. The compile
-  half is macOS-only and skips on CI; the resolution half runs everywhere.
+- **`yarn verify`** = typecheck + lint (Biome) + Vitest + the repository checks.
+  `yarn test` runs 17 discoverable test files; `yarn test:watch` focuses the feedback
+  loop and `yarn test:coverage` emits V8 text + HTML coverage. AppleScript and the
+  relay/web import boundary stay in `check:repo` because they validate source and
+  toolchain invariants rather than one runtime unit. The AppleScript compile half is
+  macOS-only and skips on Ubuntu; its handler-resolution half runs everywhere.
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public
   commits.
 - **Releases key off reachable version tags — never rewind `main` after a tagged
