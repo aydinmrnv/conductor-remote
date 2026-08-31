@@ -2,7 +2,7 @@
  * Compile-check the AppleScript the relay ships, and check that every handler it
  * calls exists.
  *
- * This is the only automated test in the repo, and it earns that place because
+ * This stays a standalone repository check because
  * `src/conductor.applescript` is a thousand lines of a language nothing else here
  * looks at: `tsc` sees a string, Biome sees a string, and a stray quote or a
  * renamed handler shows up for the first time as a failed send on someone's phone.

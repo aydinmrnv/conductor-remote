@@ -318,7 +318,7 @@ export interface DueNotification {
 
 /**
  * The status state machine, kept apart from the store and the network so it can be
- * driven a tick at a time by `scripts/check-notify.ts`. Every rule in it is a rule
+ * driven a tick at a time by `tests/notify.test.ts`. Every rule in it is a rule
  * about *not* notifying, and each one is a nuisance or a silence that nothing in the
  * type system can catch.
  */

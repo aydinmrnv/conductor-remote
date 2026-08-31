@@ -91,7 +91,7 @@ function pumpUi(): void {
 }
 
 /**
- * Take the lock, run `op`, release it. Exported for `scripts/check-uilock.ts`,
+ * Take the lock, run `op`, release it. Exported for `tests/ui-lock.test.ts`,
  * which is the only way this queue's control flow gets read by anything.
  */
 export function uiTurn<T>(op: () => Promise<T>): Promise<T> {
