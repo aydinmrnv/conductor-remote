@@ -18,7 +18,7 @@ export interface TranscriptEntry {
 	text: string
 	/** Tool name when role === 'tool'. */
 	tool?: string
-	/** Mono secondary line for tool rows (command, path, pattern, …). */
+	/** Full mono secondary detail for tool rows (command, path, pattern, …). */
 	detail?: string
 	/** True when this row is a failed tool result. */
 	error?: boolean
@@ -61,9 +61,10 @@ function stripWorktree(s: string, worktree: string | null): string {
 }
 
 /**
- * Mirror Conductor's one-line tool rows: the human description as the title
- * (Bash always has one), the primary input as a mono detail. Tools without a
- * recognizable primary input get the title alone — dumping raw JSON is noise.
+ * Mirror Conductor's tool rows: the human description as the title (Bash always
+ * has one), the primary input as mono detail. The phone truncates that detail in
+ * the closed row and reveals this full value on demand. Tools without a recognizable
+ * primary input get the title alone — dumping raw JSON is noise.
  */
 function summarizeToolUse(name: string, input: unknown, worktree: string | null): { text: string; detail?: string } {
 	if (!input || typeof input !== 'object') return { text: name }
@@ -72,7 +73,7 @@ function summarizeToolUse(name: string, input: unknown, worktree: string | null)
 	const detail =
 		str(o.command) ?? str(o.file_path) ?? str(o.path) ?? str(o.pattern) ?? str(o.url) ?? str(o.skill) ?? str(o.prompt)
 	if (!detail || detail === text) return { text }
-	return { text, detail: clip(stripWorktree(detail, worktree).replace(/\s+/g, ' '), 160) }
+	return { text, detail: stripWorktree(detail, worktree) }
 }
 
 function resultText(content: unknown): string {
