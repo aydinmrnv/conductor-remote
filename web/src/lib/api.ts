@@ -290,13 +290,13 @@ export const client = {
 		prompt: string,
 		sendImmediately = true,
 		attachmentIds: string[] = [],
-		model?: string
+		agent: AgentPatch = {}
 	) =>
 		api<CreateWorkspaceResult>(
 			routes.createWorkspace.path(),
 			{
 				method: routes.createWorkspace.method,
-				body: JSON.stringify({ repo, prompt, sendImmediately, attachmentIds, model })
+				body: JSON.stringify({ repo, prompt, sendImmediately, attachmentIds, ...agent })
 			},
 			ACTION_TIMEOUT_MS
 		),

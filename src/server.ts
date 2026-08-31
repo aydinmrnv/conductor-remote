@@ -380,11 +380,11 @@ const firstPrompts = new FirstPromptQueue(path.join(stateDir(), 'first-prompts.j
 			const result = await deliverPrompt(ws, sessionId, text)
 			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
 		}),
-	setModel: (workspaceId, sessionId, model) =>
+	setAgent: (workspaceId, sessionId, agent) =>
 		withUiPriority('background', async () => {
 			const ws = reads.getWorkspace(workspaceId)
 			if (!ws) return { ok: false, error: 'the workspace is gone' }
-			const result = await applyAgentPatch(ws, sessionId, { model })
+			const result = await applyAgentPatch(ws, sessionId, agent)
 			return { ok: result.ok, error: result.error, blocked: lockBlocked(result.error) }
 		}),
 	materialize: async (_workspaceId, worktree, attachmentIds) => {
@@ -1044,12 +1044,16 @@ const server = http.createServer(async (req, res) => {
 					ok: true
 				})
 
-			// POST /api/workspaces { repo, prompt, send? } — create a workspace via Conductor's deep link
+			// POST /api/workspaces { repo, prompt, model?, effort?, plan?, fast?, send? }
+			// — create a workspace via Conductor's deep link, then configure its first chat.
 			if (isRoute(routes.createWorkspace, req.method, pathname)) {
 				const body = JSON.parse((await readBody(req)) || '{}') as {
 					repo?: string
 					prompt?: string
 					model?: string
+					effort?: string
+					plan?: boolean
+					fast?: boolean
 					send?: boolean
 					sendImmediately?: boolean
 					attachmentIds?: string[]
@@ -1057,7 +1061,22 @@ const server = http.createServer(async (req, res) => {
 				const attachmentIds = body.attachmentIds ?? []
 				if (body.model !== undefined && typeof body.model !== 'string')
 					return json(req, res, 400, { error: 'model must be a picker label' })
-				const model = body.model?.trim() || undefined
+				if (body.effort !== undefined && typeof body.effort !== 'string')
+					return json(req, res, 400, { error: 'effort must be a string' })
+				const effort = body.effort?.trim() || undefined
+				if (effort && !EFFORT_LABELS[effort])
+					return json(req, res, 400, { error: `effort must be one of ${Object.keys(EFFORT_LABELS).join(', ')}` })
+				if (body.plan !== undefined && typeof body.plan !== 'boolean')
+					return json(req, res, 400, { error: 'plan must be a boolean' })
+				if (body.fast !== undefined && typeof body.fast !== 'boolean')
+					return json(req, res, 400, { error: 'fast must be a boolean' })
+				const agent: ParkedAgentPatch = {
+					model: body.model?.trim() || undefined,
+					effort,
+					plan: body.plan,
+					fast: body.fast
+				}
+				const configureAgent = Object.values(agent).some(value => value !== undefined)
 				if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string'))
 					return json(req, res, 400, { error: 'attachment ids must be a list of strings' })
 				const attachments = stagedAttachments(STAGED_ATTACHMENTS_DIR, attachmentIds)
@@ -1097,8 +1116,14 @@ const server = http.createServer(async (req, res) => {
 				// callers into waiting.
 				// Whatever happens, the prompt is already pre-filled in Conductor's composer.
 				const settled =
-					prompt || model
-						? firstPrompts.enqueue(created.id, prompt, body.sendImmediately !== false, attachmentIds, model)
+					prompt || configureAgent
+						? firstPrompts.enqueue(
+								created.id,
+								prompt,
+								body.sendImmediately !== false,
+								attachmentIds,
+								configureAgent ? agent : undefined
+							)
 						: null
 				const failed = settled && body.send === true ? await settled : null
 				settled?.catch(() => undefined) // fire-and-forget: it reports failure, it never rejects
@@ -1107,12 +1132,12 @@ const server = http.createServer(async (req, res) => {
 					workspaceId: created.id,
 					workspace: reads.getWorkspace(created.id) ?? created,
 					pendingPrompt: prompt || undefined,
-					model,
+					model: agent.model,
 					sent: body.send === true && !!prompt && !failed,
-					configured: body.send === true && !!model && !failed,
+					configured: body.send === true && configureAgent && !failed,
 					warning:
 						failed?.error &&
-						`Workspace created; the initial ${model ? 'model selection and prompt' : 'prompt'} didn’t finish (${failed.error}).`
+						`Workspace created; the initial ${configureAgent ? 'agent settings and prompt' : 'prompt'} didn’t finish (${failed.error}).`
 				})
 			}
 

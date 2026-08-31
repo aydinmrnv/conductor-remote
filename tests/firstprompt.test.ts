@@ -63,12 +63,12 @@ describe('first prompt queue', () => {
 		expect(settled).toBeNull()
 	})
 
-	test('applies a selected model before the first prompt', async () => {
+	test('applies selected agent settings before the first prompt', async () => {
 		const steps: string[] = []
-		const queue = new FirstPromptQueue(path.join(directory, 'model.json'), {
+		const queue = new FirstPromptQueue(path.join(directory, 'agent.json'), {
 			inspect: () => ({ phase: 'setting_up', sessionId: 'chat-model', alreadySent: false }),
-			setModel: async (_workspaceId, _sessionId, model) => {
-				steps.push(`model:${model}`)
+			setAgent: async (_workspaceId, _sessionId, agent) => {
+				steps.push(`agent:${agent.model}:${agent.effort}:${agent.fast}:${agent.plan}`)
 				return { ok: true }
 			},
 			send: async (_workspaceId, _sessionId, text) => {
@@ -77,14 +77,51 @@ describe('first prompt queue', () => {
 			}
 		})
 
-		await queue.enqueue('ws-model', 'hello', true, [], 'Opus 5')
-		expect(steps).toEqual(['model:Opus 5', 'prompt:hello'])
+		await queue.enqueue('ws-model', 'hello', true, [], {
+			model: 'Opus 5',
+			effort: 'high',
+			fast: true,
+			plan: true
+		})
+		expect(steps).toEqual(['agent:Opus 5:high:true:true', 'prompt:hello'])
 		expect(queue.get('ws-model')).toBeNull()
 		await flush()
 
 		steps.length = 0
-		await queue.enqueue('ws-model-only', '', true, [], 'Sonnet 4.6')
-		expect(steps).toEqual(['model:Sonnet 4.6'])
+		await queue.enqueue('ws-model-only', '', true, [], { model: 'Sonnet 4.6' })
+		expect(steps).toEqual(['agent:Sonnet 4.6:undefined:undefined:undefined'])
+	})
+
+	test('upgrades a persisted model-only entry into an agent patch', async () => {
+		const models: string[] = []
+		const file = path.join(directory, 'legacy-model.json')
+		fs.writeFileSync(
+			file,
+			JSON.stringify([
+				{
+					workspaceId: 'ws-legacy-model',
+					text: '',
+					model: 'Opus 5',
+					status: 'waiting',
+					attempts: 0,
+					createdAt: Date.now(),
+					sendImmediately: true
+				}
+			])
+		)
+		const queue = new FirstPromptQueue(file, {
+			inspect: () => ({ phase: 'ready', sessionId: 'chat-legacy-model', alreadySent: false }),
+			setAgent: async (_workspaceId, _sessionId, agent) => {
+				models.push(agent.model ?? '')
+				return { ok: true }
+			},
+			send: async () => ({ ok: true })
+		})
+
+		queue.start()
+		await flush()
+		expect(models).toEqual(['Opus 5'])
+		expect(queue.get('ws-legacy-model')).toBeNull()
 	})
 
 	test('uses a separate budget for early and ready failures', async () => {
