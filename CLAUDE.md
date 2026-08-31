@@ -348,7 +348,8 @@ Two asymmetric halves — keep them separate:
 
     The same verified path drives the chat's **agent settings** (`setAgentOptions`,
     `POST /api/sessions/:id/agent`). Their *values* are plain reads — `sessions`
-    has `model`, `claude_effort_level`, `fast_mode`, `permission_mode` — so only
+    has `model`, provider-specific effort (`codex_thinking_level` for Codex,
+    `claude_effort_level` for Claude), `fast_mode`, `permission_mode` — so only
     the writes touch the UI: effort is a button whose **label is its own value**
     and which *cycles* (Low → Medium → High → Extra high → Max → Ultracode → wrap),
     so we press until the label matches; Plan is an `AXCheckBox` with readable

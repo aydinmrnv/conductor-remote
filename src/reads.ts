@@ -82,7 +82,11 @@ export interface SessionRow {
 	model: string | null
 	/** 'plan' when the chat is in plan mode, else 'default'. */
 	permission_mode: string | null
-	/** low | medium | high | xhigh | max | ultracode (null for non-Claude agents). */
+	/**
+	 * Normalized current effort: low | medium | high | xhigh | max | ultracode.
+	 * The legacy wire name stays for cached phone clients; Conductor stores Codex
+	 * values in `codex_thinking_level` and Claude values in this named column.
+	 */
 	claude_effort_level: string | null
 	/** 1 when Conductor's "Fast" toggle is on. */
 	fast_mode: number | null
@@ -102,6 +106,20 @@ export interface SessionRow {
 	last_user_message_at: string | null
 	/** When the turn now in flight was dispatched — see `listSessions`. Null before Conductor's first queued turn. */
 	turn_started_at: string | null
+}
+
+/** The raw provider-specific fields selected from Conductor's sessions table. */
+interface SessionDbRow extends SessionRow {
+	codex_thinking_level: string | null
+}
+
+/** Keep the stable wire field in sync with whichever provider owns the chat. */
+function toSessionRow(row: SessionDbRow): SessionRow {
+	const { codex_thinking_level, ...session } = row
+	return {
+		...session,
+		claude_effort_level: row.agent_type === 'codex' ? codex_thinking_level : row.claude_effort_level
+	}
 }
 
 /** GitHub PR state of a workspace's branch, attached best-effort by src/pr.ts. */
@@ -462,8 +480,9 @@ export class Reads {
 		// have `sent_at` NULL and are skipped, which is why a queued message can't blip the
 		// timer while the previous answer is still going. Served straight off
 		// idx_session_messages_sent_at(session_id, sent_at) — measured free at this poll rate.
-		return this.db.query<SessionRow>(
-			`SELECT s.id, s.status, s.title, s.model, s.permission_mode, s.claude_effort_level, s.fast_mode, s.agent_type,
+		const rows = this.db.query<SessionDbRow>(
+			`SELECT s.id, s.status, s.title, s.model, s.permission_mode,
+			        s.claude_effort_level, s.codex_thinking_level, s.fast_mode, s.agent_type,
 			        s.context_used_percent, s.unread_count,
 			        s.created_at, s.updated_at, s.last_user_message_at,
 			        (SELECT MAX(m.sent_at) FROM session_messages m
@@ -473,6 +492,7 @@ export class Reads {
 			 ORDER BY s.created_at ASC`,
 			[workspaceId]
 		)
+		return rows.map(toSessionRow)
 	}
 
 	/**

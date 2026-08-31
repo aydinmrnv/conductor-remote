@@ -643,10 +643,11 @@ my joinInstantHotspot()`.trim()
 }
 
 /**
- * Conductor stores the effort level as `sessions.claude_effort_level`, but the
- * composer button is labelled with the human name and *cycles* through them in
- * this order. Both directions are needed: the label to press toward, and the DB
- * value to confirm against.
+ * Conductor stores the effort level in a provider-specific session column
+ * (`codex_thinking_level` or `claude_effort_level`), normalized by Reads onto the
+ * relay's stable wire field. The composer button is labelled with the human name
+ * and *cycles* through these values, so both directions are needed: the label to
+ * press toward, and the normalized DB value to confirm against.
  */
 export const EFFORT_LABELS: Record<string, string> = {
 	low: 'Low',
@@ -659,7 +660,7 @@ export const EFFORT_LABELS: Record<string, string> = {
 
 /** What a phone can change about the agent before (or instead of) sending a prompt. */
 export interface AgentOptions {
-	/** A `claude_effort_level` value (low…ultracode), not the UI label. */
+	/** A normalized effort value (low…ultracode), not the UI label. */
 	effort?: string
 	plan?: boolean
 	/** Fast mode exposes no readable state, so pass `true` only when it must flip. */
