@@ -1,10 +1,11 @@
-import { SlidersHorizontal, Zap } from 'lucide-react'
+import { Map as MapIcon, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { shortModel } from '../lib/format.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { EffortBars, ProviderMark } from './AgentIcons.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 
 /**
@@ -16,8 +17,8 @@ import { ModelPicker } from './ModelPicker.tsx'
  * **staged, not sent**: pushing one costs a slow, focus-stealing AppleScript trip
  * and only decides what the *next* prompt runs on, so a tap is instant and local,
  * and the send applies it (hooks.ts ▸ `useSendPrompt`) before the prompt goes.
- * A staged pill is coloured, and flipping a value back to what Conductor already
- * has drops the staged one rather than queuing a no-op round trip.
+ * A staged control uses the accent colour, and flipping a value back to what
+ * Conductor already has drops the staged one rather than queuing a no-op trip.
  */
 const EFFORT_LABELS: Record<string, string> = {
 	low: 'Low',
@@ -40,14 +41,23 @@ function change<T>(next: T, current: T): T | undefined {
 }
 
 /**
- * The pill shows the DB's model id (`opus-5-1m`) while the picker lists Conductor's
- * menu labels (`Opus 5 NEW`). There's no reliable mapping between the two, so the
- * list marks the *staged* entry only, rather than mark the wrong one as current.
+ * Compact the stable built-in ids (`gpt-5.6-sol`, `opus-5-1m`) into the labels
+ * Conductor shows. Unknown/provider-specific ids stay untouched rather than risk
+ * displaying a misleading name.
  */
 function modelPill(session: Session): string {
 	const raw = shortModel(session.model)
 	if (!raw) return 'Model'
-	return raw.includes(':') ? (raw.split('/').pop() ?? raw) : raw
+	const pathTail = raw.split('/').pop() ?? raw
+	const id = pathTail.split(':').pop() ?? pathTail
+	const parts = id.split('-')
+	const title = (part: string) => {
+		if (!part) return ''
+		return part.toLowerCase() === '1m' ? '1M' : part[0].toUpperCase() + part.slice(1)
+	}
+	if (parts[0] === 'gpt' && parts[1]) return [parts[1], ...parts.slice(2).map(title)].join(' ')
+	if (/^(opus|sonnet|haiku|fable)$/.test(parts[0] ?? '')) return parts.map(title).join(' ')
+	return id
 }
 
 export function AgentBar({ session, workspaceId }: { session: Session; workspaceId: string }) {
@@ -73,66 +83,84 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	const planOn = staged.plan ?? dbPlan
 	const fastOn = staged.fast ?? dbFast
 	const anyStaged = Object.keys(staged).length > 0
+	const displayedModel = staged.model ?? modelPill(session)
+	const providerModel = staged.model ?? session.model
 
 	// Tapping effort steps to the next level, matching the desktop button's own behaviour.
 	const nextEffort = () => EFFORT_ORDER[(EFFORT_ORDER.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]
 
 	return (
 		<div className="min-w-0 flex-1">
-			{/* Not gated on `online`: a cached choice can still stage locally and apply on send. */}
-			<ModelPicker
-				value={staged.model ?? modelPill(session)}
-				models={models}
-				open={picking}
-				onOpenChange={setPicking}
-				isFetching={liveModels.isFetching || modelCatalog.isFetching}
-				isError={liveModels.isError}
-				onSelect={model => stage({ model: change(model, staged.model) })}
-				renderTrigger={({ picking, toggle }) => (
-					<button
-						type="button"
-						onClick={toggle}
-						aria-label="Agent settings"
-						aria-haspopup="menu"
-						aria-expanded={picking}
-						className={cn('ctl flex size-9 items-center justify-center p-0', anyStaged && 'ctl-staged')}
-					>
-						<SlidersHorizontal size={17} />
-					</button>
-				)}
-				beforeOptions={
-					<div className="flex flex-wrap items-center gap-0.5 border-b border-border px-1 py-1">
-						{effort ? (
+			<div className="flex min-w-0 items-center gap-0.5">
+				{/* Only the model control opens a menu; the other settings stay one-tap ghost controls. */}
+				<div className="min-w-0">
+					<ModelPicker
+						value={displayedModel}
+						models={models}
+						open={picking}
+						onOpenChange={setPicking}
+						isFetching={liveModels.isFetching || modelCatalog.isFetching}
+						isError={liveModels.isError}
+						onSelect={model => stage({ model: change(model, staged.model) })}
+						renderTrigger={({ picking, toggle }) => (
 							<button
 								type="button"
-								onClick={() => stage({ effort: change(nextEffort(), dbEffort) })}
-								className={cn('ctl', staged.effort && 'ctl-staged')}
+								onClick={toggle}
+								aria-label={`Change model, currently ${displayedModel}`}
+								aria-haspopup="menu"
+								aria-expanded={picking}
+								className={cn(
+									'flex h-8 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
+									staged.model !== undefined && 'text-accent'
+								)}
 							>
-								{EFFORT_LABELS[effort]}
+								<ProviderMark agentType={session.agent_type} model={providerModel} className="size-[15px]" />
+								<span className="truncate">{displayedModel}</span>
 							</button>
-						) : null}
-						<button
-							type="button"
-							onClick={() => stage({ plan: change(!planOn, dbPlan) })}
-							className={cn('ctl', planOn && 'ctl-on', staged.plan !== undefined && 'ctl-staged')}
-						>
-							Plan
-						</button>
-						<button
-							type="button"
-							onClick={() => stage({ fast: change(!fastOn, dbFast) })}
-							className={cn(
-								'ctl flex items-center gap-1',
-								fastOn && 'ctl-on',
-								staged.fast !== undefined && 'ctl-staged'
-							)}
-						>
-							<Zap size={13} />
-							Fast
-						</button>
-					</div>
-				}
-			/>
+						)}
+					/>
+				</div>
+				<button
+					type="button"
+					onClick={() => stage({ fast: change(!fastOn, dbFast) })}
+					aria-label={`Fast mode ${fastOn ? 'on' : 'off'}`}
+					aria-pressed={fastOn}
+					className={cn(
+						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+						fastOn && 'text-text',
+						staged.fast !== undefined && 'text-accent'
+					)}
+				>
+					<Zap size={17} />
+				</button>
+				{effort ? (
+					<button
+						type="button"
+						onClick={() => stage({ effort: change(nextEffort(), dbEffort) })}
+						aria-label={`Reasoning effort: ${EFFORT_LABELS[effort]}`}
+						className={cn(
+							'flex h-8 shrink-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
+							staged.effort && 'text-accent'
+						)}
+					>
+						<EffortBars effort={effort} />
+						<span className="max-[340px]:hidden">{EFFORT_LABELS[effort]}</span>
+					</button>
+				) : null}
+				<button
+					type="button"
+					onClick={() => stage({ plan: change(!planOn, dbPlan) })}
+					aria-label={`Plan mode ${planOn ? 'on' : 'off'}`}
+					aria-pressed={planOn}
+					className={cn(
+						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+						planOn && 'text-text',
+						staged.plan !== undefined && 'text-accent'
+					)}
+				>
+					<MapIcon size={17} />
+				</button>
+			</div>
 			{anyStaged ? (
 				<div className="px-2 pt-0.5 text-[11px] text-faint">{sending ? 'Applying…' : 'Applies when you send'}</div>
 			) : null}
