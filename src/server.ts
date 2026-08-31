@@ -4,7 +4,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { writeAttachment } from './attachments.ts'
+import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
@@ -1494,17 +1494,10 @@ const server = http.createServer(async (req, res) => {
 				if ('error' in opened) {
 					return json(req, res, 502, { ...opened.result, attachment: { ...attachment, ...rendered } })
 				}
-				// Both forms on purpose: the token is what Conductor turns into a chip, and the
-				// sentence is what still works if it does not. Nothing here may depend on which.
-				const prompt = (body.prompt ?? '').trim()
-				const text = [
-					attachment.token,
-					`(the chat this was split off from — read \`${attachment.relPath}\` first)`,
-					'',
-					prompt
-				]
-					.join('\n')
-					.trim()
+				// The token is what Conductor turns into the attachment chip and supplies to the
+				// receiving agent. Do not repeat `attachment.relPath` in prose: that renders a
+				// second link to the same transcript in the new chat.
+				const text = attachmentPrompt(attachment.token, body.prompt)
 				return json(req, res, 200, {
 					ok: true,
 					sessionId: opened.sessionId,

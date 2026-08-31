@@ -20,7 +20,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { attachmentName, attachmentToken, writeAttachment } from '../src/attachments.ts'
+import { attachmentName, attachmentPrompt, attachmentToken, writeAttachment } from '../src/attachments.ts'
 import { attachmentTokens } from '../src/shared.ts'
 import {
 	discardStagedAttachment,
@@ -65,6 +65,23 @@ check(
 		])
 )
 check('ordinary text that resembles a token stays ordinary', attachmentTokens('@⟦file.md⟧(example.md)').length === 0)
+const transcriptToken = attachmentToken(
+	'Transcript of Approve plan.md',
+	'.context/attachments/kuB8pt/Transcript of Approve plan.md'
+)
+const forkPrompt = attachmentPrompt(transcriptToken, 'Continue from this transcript.')
+check(
+	'a fork prompt contains its transcript link once',
+	forkPrompt.split('.context%2Fattachments%2FkuB8pt').length === 2,
+	forkPrompt
+)
+check('a fork prompt identifies its source', forkPrompt.startsWith(`Forked from ${transcriptToken}`), forkPrompt)
+check('a fork prompt retains its new direction', forkPrompt.endsWith('Continue from this transcript.'), forkPrompt)
+check(
+	'a fork without a direction leaves room for one',
+	attachmentPrompt(transcriptToken).endsWith('\n\n'),
+	attachmentPrompt(transcriptToken)
+)
 
 // ── the name ────────────────────────────────────────────────────────────────────
 check(

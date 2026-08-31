@@ -540,9 +540,8 @@ Two asymmetric halves — keep them separate:
     attachment instruction an agent sees is built at send time and stored nowhere) and
     which one live split settled: the next agent was handed Conductor's own *"The user has
     attached these files. Read them before proceeding. - &lt;path&gt; (113.8 KB)"* ahead of the
-    prompt, and read the file. The prompt still carries a plain sentence naming the file
-    beside the token. That costs a line and is what leaves a readable path behind on the
-    day the parsing changes.
+    prompt, and read the file. The attachment token is the one canonical reference: a
+    second prose path creates a duplicate link in Conductor's chat.
   - **⌘T alone does not open the tab, and it fails by opening something else.** The
     keystroke lands wherever focus is, so a focused terminal panel takes it and you get a
     new *terminal* — measured: the run reported success, `sessions` gained nothing, and

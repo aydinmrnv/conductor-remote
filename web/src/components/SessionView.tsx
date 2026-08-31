@@ -30,6 +30,7 @@ export function SessionView() {
 	const pickSession = (id: string) => setSearchParams({ session: id }, { replace: true })
 	const [diffOpen, setDiffOpen] = useState(false)
 	const [creatingChat, setCreatingChat] = useState(false)
+	const [focusComposerFor, setFocusComposerFor] = useState<string | null>(null)
 	const queryClient = useQueryClient()
 	const { data, isLoading } = useWorkspaces()
 	const liveWorkspace = data?.workspaces.find(w => w.id === workspaceId)
@@ -128,6 +129,7 @@ export function SessionView() {
 		if (!split.ok) throw new Error(split.error ?? 'Could not fork this chat')
 		if (!split.sessionId) throw new Error('The new chat opened, but its id was not available')
 		setDraft(split.sessionId, split.text)
+		setFocusComposerFor(split.sessionId)
 		await queryClient.invalidateQueries({ queryKey: ['sessions', ws.id] })
 		pickSession(split.sessionId)
 	}
@@ -186,6 +188,8 @@ export function SessionView() {
 					workspaceId={ws.id}
 					working={working}
 					actuator={actuator}
+					focusDraft={sessionId === focusComposerFor}
+					onDraftFocused={() => setFocusComposerFor(null)}
 				/>
 			</div>
 
