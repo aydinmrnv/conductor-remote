@@ -316,29 +316,29 @@ export function Composer({
 						}
 					}}
 				/>
-				<div className="mt-1 flex items-end gap-2">
+				<div className="mt-1 flex items-start gap-1">
+					{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
 					<button
 						type="button"
 						onClick={() => fileInput.current?.click()}
 						disabled={disabled || !online}
 						aria-label="Attach files"
-						className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:scale-90 disabled:text-faint"
+						className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
 					>
-						<Paperclip size={18} />
+						<Paperclip size={17} />
 					</button>
-					{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
 					{canStop ? (
 						<button
 							type="button"
 							onClick={stop}
 							disabled={stopping || !online}
 							aria-label="Stop the agent"
-							className="flex size-9 shrink-0 items-center justify-center rounded-full border border-border text-text transition active:scale-90 disabled:text-faint"
+							className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-text transition active:bg-surface-2 disabled:text-faint"
 						>
 							{stopping ? (
 								<span className="size-4 animate-spin rounded-full border-2 border-border border-t-text" />
 							) : (
-								<Square size={15} fill="currentColor" />
+								<Square size={14} fill="currentColor" />
 							)}
 						</button>
 					) : null}
@@ -351,9 +351,9 @@ export function Composer({
 							onClick={() => send()}
 							disabled={disabled || !canSend || !online}
 							aria-label="Send"
-							className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition active:scale-90 disabled:bg-surface-2 disabled:text-faint"
+							className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
 						>
-							<ArrowUp size={19} />
+							<ArrowUp size={18} />
 						</button>
 					)}
 				</div>
