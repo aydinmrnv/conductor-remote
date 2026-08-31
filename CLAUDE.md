@@ -346,6 +346,21 @@ Two asymmetric halves — keep them separate:
     second UI run behind it; and **no key means no memo**, so an MCP caller or a PWA
     cached from before this gets exactly the old behaviour rather than a guess.
 
+    **The bubble holding that prompt is now persisted too** (`web/src/lib/pending.ts`).
+    The composer clears its draft the moment a send *starts*, so from then until a
+    confirmation the optimistic bubble holds the only copy of what was typed — and it
+    lived in memory alone, so the reload that follows a lost answer (or iOS discarding
+    the backgrounded PWA, which is the one that actually happens) threw the text away
+    in exactly the case it was worth keeping. A `sending` entry cannot come back as it
+    left, because the request died with the page and nobody is awaiting it: it returns
+    `error` flagged `interrupted`, which the transcript reconciles like a live one, so a
+    prompt that *did* land shows up as a real user row and drops the bubble instead of
+    parking a red one beside it. That reconciliation is also what covers the gap past
+    the memo's 10-minute TTL, since a landed prompt's bubble is gone before Retry can be
+    tapped. A failure the app *watched* happen is never reconciled that way — its red
+    state is a fact about the send, and an identical prompt earlier in the chat must not
+    retire it.
+
     The same verified path drives the chat's **agent settings** (`setAgentOptions`,
     `POST /api/sessions/:id/agent`). Their *values* are plain reads — `sessions`
     has `model`, provider-specific effort (`codex_thinking_level` for Codex,
@@ -876,6 +891,17 @@ handler scan, and the relay/web import boundary.
   nothing for ten minutes, so the prompt is lost rather than doubled, which is the worse
   of the two and the easier mistake to make while editing `keep`. Takes a function and a
   key, so it needs nothing else. Portable, so the ubuntu job runs it.
+
+- `tests/pending.test.ts` — the phone's optimistic prompt store
+  (`web/src/lib/pending.ts`), which since the composer clears its draft at send time
+  holds the only copy of what someone typed until the relay confirms it. Both ways of
+  getting the restore wrong are silent and cost the text: restore too little and a
+  reload throws away the prompt that failed, which is the bug it was written for;
+  restore a `sending` entry as it was stored and the bubble spins against a request
+  that died with the page, so the one bubble carrying a Retry button never offers it.
+  Also pins what must *not* be restored — a prompt older than a day, and another
+  build's rows. localStorage is stubbed, so no browser. Portable, so the ubuntu job
+  runs it.
 
 - `tests/notify.test.ts` — the notifier's state machine (`src/notify.ts` ▸
   `TurnWatcher`). Every rule in it is a rule about *not* buzzing a phone, which is why

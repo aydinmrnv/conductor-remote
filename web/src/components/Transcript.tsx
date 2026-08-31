@@ -5,9 +5,9 @@ import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
+import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { latestAssistantForActions } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
-import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
@@ -64,11 +64,11 @@ export function Transcript({
 		queryClient.invalidateQueries({ queryKey: ['state'] })
 	}
 
-	// This session's optimistic prompts, hiding any still-`sending` one whose text
+	// This session's optimistic prompts, hiding any still-unconfirmed one whose text
 	// has already arrived as a real user row — the confirmed bubble replaces it.
 	const delivered = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
 	const mine = pending.filter(p => p.sessionId === sessionId)
-	const visiblePending = mine.filter(p => !(p.status === 'sending' && delivered.has(p.text.trim())))
+	const visiblePending = mine.filter(p => !(isUnconfirmed(p) && delivered.has(p.text.trim())))
 
 	// The relay keeps the entry until delivery is *confirmed*, and its own send lands as
 	// a real user row up to a poll before /api/state drops it — so hide the queued bubble
@@ -79,10 +79,12 @@ export function Transcript({
 
 	// Purge confirmed optimistic bubbles from the store once the real row shows (the
 	// send hook also purges on a timer; this catches the fast path so nothing lingers).
+	// It is also the only thing that retires a bubble restored from storage, whose send
+	// resolved while the app wasn't running to hear it (lib/pending.ts).
 	useEffect(() => {
 		const seen = new Set(entries.filter(e => e.role === 'user').map(e => e.text.trim()))
 		for (const p of pending) {
-			if (p.sessionId === sessionId && p.status === 'sending' && seen.has(p.text.trim())) removePending(p.id)
+			if (p.sessionId === sessionId && isUnconfirmed(p) && seen.has(p.text.trim())) removePending(p.id)
 		}
 	}, [entries, pending, sessionId, removePending])
 

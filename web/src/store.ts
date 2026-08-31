@@ -3,6 +3,7 @@ import { loadAgentDrafts, writeAgentDraft } from './lib/agentDraft.ts'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
 import { loadDrafts, writeDraft } from './lib/draft.ts'
 import { offlineDelay } from './lib/online.ts'
+import { loadPending, type PendingMessage, writePending } from './lib/pending.ts'
 import { loadReadMarks, type ReadMarks, writeReadMarks } from './lib/read.ts'
 import type { AgentPatch, UpdateStatus } from './lib/types.ts'
 
@@ -32,24 +33,6 @@ export interface ViewPrefs {
 const VIEW_KEY = 'conductor-remote-view'
 const LAST_NEW_WORKSPACE_REPO_KEY = 'conductor-remote-last-new-workspace-repo'
 const defaultView: ViewPrefs = { groupBy: 'status', repos: [], sortBy: 'updated', hideMerged: false, collapsed: [] }
-
-/**
- * A prompt shown optimistically in the transcript before the relay confirms it.
- * `sending` until the POST resolves; `error` if it failed (the relay's read-back
- * found no matching row, or the request never reached it). Carries workspaceId so
- * the in-chat Retry can re-send without the Composer.
- */
-export interface PendingMessage {
-	id: string
-	sessionId: string
-	workspaceId: string
-	text: string
-	/** Keep a retry in Conductor's follow-up queue. */
-	queue?: boolean
-	status: 'sending' | 'error'
-	error?: string
-	createdAt: number
-}
 
 /** Drop keys with no staged value, so "nothing staged" is `{}` and never `{ plan: undefined }`. */
 function prunePatch(patch: AgentPatch): AgentPatch {
@@ -102,7 +85,11 @@ interface AppState {
 	 * working immediately, bridging the gap until the status poll catches up.
 	 */
 	workingHints: Record<string, number>
-	/** Prompts awaiting confirmation, rendered as optimistic in-chat bubbles. */
+	/**
+	 * Prompts awaiting confirmation, rendered as optimistic in-chat bubbles and
+	 * mirrored to localStorage (see lib/pending.ts) — between the composer clearing
+	 * its draft and the relay confirming, this is the only copy of the text.
+	 */
 	pending: PendingMessage[]
 	/** Unsent composer text per chat, mirrored to localStorage (see lib/draft.ts). */
 	drafts: Record<string, string>
@@ -170,13 +157,19 @@ export const useApp = create<AppState>((set, get) => {
 		localStorage.setItem(VIEW_KEY, JSON.stringify(view))
 		set({ view })
 	}
+	// Every change to the list goes through here: the composer clears its draft the
+	// moment a send starts, so from then on this is the only copy of what was typed.
+	const savePending = (pending: PendingMessage[]) => {
+		writePending(pending)
+		set({ pending })
+	}
 	return {
 		token: bootstrapToken(),
 		online: true,
 		lastSyncAt: null,
 		update: null,
 		workingHints: {},
-		pending: [],
+		pending: loadPending(),
 		drafts: loadDrafts(),
 		agentDrafts: loadAgentDrafts(),
 		readMarks: loadReadMarks(),
@@ -217,15 +210,13 @@ export const useApp = create<AppState>((set, get) => {
 			set({ workingHints: rest })
 		},
 		addPending: m =>
-			set({
-				pending: [
-					...get().pending.filter(p => p.id !== m.id),
-					{ ...m, status: 'sending', error: undefined, createdAt: Date.now() }
-				]
-			}),
+			savePending([
+				...get().pending.filter(p => p.id !== m.id),
+				{ ...m, status: 'sending', error: undefined, createdAt: Date.now() }
+			]),
 		failPending: (id, error) =>
-			set({ pending: get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p)) }),
-		removePending: id => set({ pending: get().pending.filter(p => p.id !== id) }),
+			savePending(get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p))),
+		removePending: id => savePending(get().pending.filter(p => p.id !== id)),
 		setDraft: (chatId, text) => {
 			writeDraft(chatId, text)
 			set({ drafts: { ...get().drafts, [chatId]: text } })
