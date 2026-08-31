@@ -35,7 +35,9 @@ export function Composer({
 	sessionId,
 	workspaceId,
 	working,
-	actuator
+	actuator,
+	focusDraft = false,
+	onDraftFocused
 }: {
 	/** The chat the controls act on; absent while the workspace has no session yet. */
 	session?: Session
@@ -44,6 +46,9 @@ export function Composer({
 	/** Is this chat mid-answer? Conductor's status, or our own optimistic hint (see SessionView). */
 	working: boolean
 	actuator?: ActuatorInfo
+	/** A newly forked chat asks to continue from the end of its staged handoff. */
+	focusDraft?: boolean
+	onDraftFocused?: () => void
 }) {
 	const draftKey = sessionId ?? workspaceId
 	const text = useApp(s => s.drafts[draftKey] ?? '')
@@ -81,6 +86,17 @@ export function Composer({
 	// Fit a restored — or externally stashed — draft, not just what's being typed.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure whenever the text changes, however it changed
 	useEffect(autosize, [text])
+
+	// A fork has just switched to a blank chat with its handoff in the draft. Focus only
+	// that explicit request — selecting an ordinary existing chat must not steal focus.
+	useEffect(() => {
+		if (!focusDraft) return
+		const textarea = ref.current
+		if (!textarea) return
+		textarea.focus({ preventScroll: true })
+		textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+		onDraftFocused?.()
+	}, [focusDraft, onDraftFocused])
 
 	// Fire-and-forget: the optimistic bubble (and its inline error on failure) is the
 	// feedback now, so we clear the box immediately instead of awaiting the send.

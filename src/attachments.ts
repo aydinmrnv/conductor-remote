@@ -16,9 +16,9 @@
  * A token *written into the composer* is re-parsed, which was the one open question and
  * is now measured: a split sent this way reached the next agent as a real attachment,
  * carrying Conductor's own "The user has attached these files. Read them before
- * proceeding. - <path> (113.8 KB)" ahead of the prompt. Keep naming the file in plain
- * words beside the token anyway. It costs a line, and it is what leaves the next agent a
- * readable path on the day that parsing changes.
+ * proceeding. - <path> (113.8 KB)" ahead of the prompt. The token is therefore the
+ * single canonical attachment reference: repeating its path in prose renders a duplicate
+ * link in Conductor's chat.
  */
 
 import crypto from 'node:crypto'
@@ -68,6 +68,12 @@ export function attachmentName(name: string): string {
 /** The composer's own syntax for an attached file. `encodeURIComponent` matches it exactly, `/` included. */
 export function attachmentToken(name: string, relPath: string): string {
 	return `@⟦${name}⟧(${encodeURIComponent(relPath)})`
+}
+
+/** Compose a fork handoff, leaving an empty line for the user's added context when needed. */
+export function attachmentPrompt(token: string, prompt?: string): string {
+	const context = prompt?.trim()
+	return context ? `Forked from ${token}\n\n${context}` : `Forked from ${token}\n\n`
 }
 
 export interface WrittenAttachment {
