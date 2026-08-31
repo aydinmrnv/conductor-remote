@@ -17,7 +17,7 @@ import {
 	workspaceTitle
 } from '../lib/format.ts'
 import { unreadCount } from '../lib/read.ts'
-import type { Workspace } from '../lib/types.ts'
+import type { RepoIcon, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
@@ -91,9 +91,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
-	const repos = [
+	const repoIcons = new Map(workspaces.map(w => [w.repo_name, w.icon] as const))
+	const repos: RepoChoice[] = [
 		...new Set([...workspaces.map(w => w.repo_name).filter((r): r is string => !!r), ...view.repos])
-	].sort()
+	]
+		.sort()
+		.map(name => ({ name, icon: repoIcons.get(name) ?? null }))
 	const inRepo = view.repos.length
 		? workspaces.filter(w => !!w.repo_name && view.repos.includes(w.repo_name))
 		: workspaces
@@ -272,8 +275,13 @@ function GroupDot({ status }: { status?: string }) {
 	return <span className="dot size-2" style={{ background: color }} />
 }
 
+interface RepoChoice {
+	name: string
+	icon: RepoIcon | null
+}
+
 /** The desktop sidebar's Group by / Repo / Sort by popover. */
-function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPrefs; onClose: () => void }) {
+function ViewControls({ repos, view, onClose }: { repos: RepoChoice[]; view: ViewPrefs; onClose: () => void }) {
 	const setView = useApp(s => s.setView)
 	return (
 		<>
@@ -329,7 +337,7 @@ function RepoFilter({
 	selected,
 	onChange
 }: {
-	repos: string[]
+	repos: RepoChoice[]
 	selected: string[]
 	onChange: (repos: string[]) => void
 }) {
@@ -361,7 +369,13 @@ function RepoFilter({
 				>
 					<RepoOption checked={selectedAll} label="All repos" onChange={() => onChange([])} />
 					{repos.map(repo => (
-						<RepoOption key={repo} checked={selected.includes(repo)} label={repo} onChange={() => toggle(repo)} />
+						<RepoOption
+							key={repo.name}
+							checked={selected.includes(repo.name)}
+							label={repo.name}
+							icon={<RepoAvatar icon={repo.icon} name={repo.name} />}
+							onChange={() => toggle(repo.name)}
+						/>
 					))}
 				</div>
 			) : null}
@@ -369,10 +383,22 @@ function RepoFilter({
 	)
 }
 
-function RepoOption({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) {
+function RepoOption({
+	checked,
+	label,
+	icon,
+	onChange
+}: {
+	checked: boolean
+	label: string
+	icon?: ReactNode
+	onChange: () => void
+}) {
 	return (
-		<label className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text active:bg-surface">
+		<label className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-sm text-text active:bg-surface">
 			<input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
+			{icon ?? <span className="size-8 shrink-0" />}
+			<span className="min-w-0 flex-1 truncate">{label}</span>
 			<span
 				className={cn(
 					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent',
@@ -381,7 +407,6 @@ function RepoOption({ checked, label, onChange }: { checked: boolean; label: str
 			>
 				{checked ? <Check size={12} strokeWidth={3} /> : null}
 			</span>
-			<span className="truncate">{label}</span>
 		</label>
 	)
 }
