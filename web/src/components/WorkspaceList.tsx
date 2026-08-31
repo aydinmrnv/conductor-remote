@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
+	isDone,
 	isMerged,
 	RECENT_BUCKETS,
 	recentBucket,
@@ -99,8 +100,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 		: workspaces
 	// The workspace you're *in* is never hidden: the list is the way back to the chat on
 	// screen, and a filter that swallows it reads as the app having lost your place.
-	const shown = view.hideMerged ? inRepo.filter(w => !isMerged(w) || w.id === selectedId) : inRepo
-	const hiddenMerged = inRepo.length - shown.length
+	const shown = inRepo.filter(
+		w => w.id === selectedId || !((view.hideMerged && isMerged(w)) || (view.hideDone && isDone(w)))
+	)
+	// One count for both toggles rather than one each: a merged workspace marked Done is
+	// hidden once, so two counts would add up to more rows than the filters took out.
+	const hidden = inRepo.length - shown.length
 	const groups = groupWorkspaces(sortWorkspaces(shown, view.sortBy), view.groupBy)
 
 	// A search result names the chat its excerpt came from, so opening one lands on that
@@ -113,15 +118,15 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 
 	// The dot marks the *setting*; the subtitle only speaks up once a filter actually
 	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
-	const filtered = view.repos.length > 0 || view.hideMerged
-	const narrowed = view.repos.length > 0 || hiddenMerged > 0
+	const filtered = view.repos.length > 0 || view.hideMerged || view.hideDone
+	const narrowed = view.repos.length > 0 || hidden > 0
 	const repoFilterLabel = view.repos.length === 1 ? view.repos[0] : `${view.repos.length} repos`
 	const subtitle = workspaces.length
 		? narrowed
 			? [
 					`${shown.length} of ${workspaces.length}`,
 					view.repos.length ? repoFilterLabel : null,
-					hiddenMerged ? `${hiddenMerged} merged hidden` : null
+					hidden ? `${hidden} hidden` : null
 				]
 					.filter(Boolean)
 					.join(' · ')
@@ -189,7 +194,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				) : shown.length === 0 ? (
 					<Empty>
 						{view.repos.length ? `No workspaces in ${repoFilterLabel}` : 'No workspaces'}
-						{hiddenMerged ? ` — ${hiddenMerged} merged ${hiddenMerged === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
+						{hidden ? ` — ${hidden} ${hidden === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
 					</Empty>
 				) : (
 					groups.map(g => {
@@ -305,6 +310,9 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						]}
 					/>
 				</ControlRow>
+				{/* Two toggles, because the two claims disagree in both directions: merged is
+				    read off the PR on GitHub (`isMerged`), Done is the status somebody set
+				    (`isDone`), and either one alone leaves finished work in the list. */}
 				<ControlRow id="view-hide-merged" label="Hide merged">
 					<ViewSwitch
 						id="view-hide-merged"
@@ -313,12 +321,14 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						onChange={v => setView({ hideMerged: v })}
 					/>
 				</ControlRow>
-				{/* Whose merge, exactly: ours, off `gh`, not Conductor's status — see `isMerged`.
-				    Worth one line here because the two disagree often enough that a workspace
-				    still sitting in "Done" after this is on looks like the toggle misfiring. */}
-				<p className="-mt-1 text-faint text-xs">
-					By the PR on GitHub, which can trail a merge by up to a minute — not by Conductor’s status.
-				</p>
+				<ControlRow id="view-hide-done" label="Hide done">
+					<ViewSwitch
+						id="view-hide-done"
+						checked={view.hideDone}
+						label="Hide workspaces marked Done"
+						onChange={v => setView({ hideDone: v })}
+					/>
+				</ControlRow>
 			</div>
 		</>
 	)

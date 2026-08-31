@@ -26,13 +26,26 @@ export interface ViewPrefs {
 	 * filter that hides rows has to be asked for, never inherited.
 	 */
 	hideMerged: boolean
+	/**
+	 * Drop workspaces marked Done (see `isDone`). Separate from `hideMerged`: a
+	 * branch that landed and a status somebody set are different claims, and the
+	 * two disagree in both directions. Off by default, for the same reason.
+	 */
+	hideDone: boolean
 	/** Collapsed group keys (e.g. 'status:done', 'repo:auk-store'). */
 	collapsed: string[]
 }
 
 const VIEW_KEY = 'conductor-remote-view'
 const LAST_NEW_WORKSPACE_REPO_KEY = 'conductor-remote-last-new-workspace-repo'
-const defaultView: ViewPrefs = { groupBy: 'status', repos: [], sortBy: 'updated', hideMerged: false, collapsed: [] }
+const defaultView: ViewPrefs = {
+	groupBy: 'status',
+	repos: [],
+	sortBy: 'updated',
+	hideMerged: false,
+	hideDone: false,
+	collapsed: []
+}
 
 /** Drop keys with no staged value, so "nothing staged" is `{}` and never `{ plan: undefined }`. */
 function prunePatch(patch: AgentPatch): AgentPatch {
