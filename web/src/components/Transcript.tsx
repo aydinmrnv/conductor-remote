@@ -404,24 +404,52 @@ const Entry = memo(function Entry({
 			)
 		}
 		const source = sourceReference(e.detail)
+		if (!e.detail) {
+			return (
+				<div className="flex min-w-0 items-baseline gap-2 overflow-hidden whitespace-nowrap rounded-xl border border-border-soft bg-surface/60 px-3 py-1.5">
+					<span className="shrink-0 font-mono text-[11px] text-faint">·</span>
+					<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
+				</div>
+			)
+		}
 		return (
-			<div className="flex min-w-0 items-baseline gap-2 overflow-hidden whitespace-nowrap rounded-xl border border-border-soft bg-surface/60 px-3 py-1.5">
-				<span className="shrink-0 font-mono text-[11px] text-faint">▸</span>
-				<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
-				{e.detail ? (
-					source ? (
+			<details className="group/tool min-w-0 overflow-hidden rounded-xl border border-border-soft bg-surface/60">
+				<summary className="flex cursor-pointer select-none list-none items-baseline gap-2 overflow-hidden whitespace-nowrap px-3 py-1.5 [&::-webkit-details-marker]:hidden">
+					<span className="shrink-0 font-mono text-[11px] text-faint transition-transform group-open/tool:rotate-90">
+						▸
+					</span>
+					<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
+					{source ? (
 						<ChatLink
 							href={source}
 							title={`Open ${e.detail}`}
-							className="min-w-0 flex-1 truncate font-mono text-[11px] text-accent underline underline-offset-2"
+							onClick={event => event.stopPropagation()}
+							className="min-w-0 flex-1 truncate font-mono text-[11px] text-accent underline underline-offset-2 group-open/tool:invisible"
 						>
 							{e.detail}
 						</ChatLink>
 					) : (
-						<span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{e.detail}</span>
-					)
-				) : null}
-			</div>
+						<span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint group-open/tool:invisible">
+							{e.detail}
+						</span>
+					)}
+				</summary>
+				<div className="border-t border-border-soft px-3 py-2">
+					{source ? (
+						<ChatLink
+							href={source}
+							title={`Open ${e.detail}`}
+							className="block whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-accent underline underline-offset-2 [overflow-wrap:anywhere]"
+						>
+							{e.detail}
+						</ChatLink>
+					) : (
+						<pre className="whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-muted [overflow-wrap:anywhere]">
+							{e.detail}
+						</pre>
+					)}
+				</div>
+			</details>
 		)
 	}
 	if (e.role === 'thinking') {
