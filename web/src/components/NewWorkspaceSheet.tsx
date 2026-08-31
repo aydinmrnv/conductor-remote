@@ -6,8 +6,9 @@ import { useNavigate } from 'react-router'
 import { useModelCatalog, useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import type { AgentPatch } from '../lib/types.ts'
 import { useApp } from '../store.ts'
-import { ModelPicker } from './ModelPicker.tsx'
+import { AgentControls, nextEffort } from './AgentControls.tsx'
 import { RepoAvatar } from './ui.tsx'
 
 /** The "Send immediately" choice, remembered for next time — a preference, not state. */
@@ -63,7 +64,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
 	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
 	const [prompt, setPrompt] = useState('')
-	const [model, setModel] = useState<string | undefined>()
+	const [agent, setAgent] = useState<AgentPatch>({})
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
 	const [busy, setBusy] = useState(false)
@@ -91,6 +92,12 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const attachmentError = attachments.some(attachment => attachment.status === 'error')
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
+	const anyAgentChoice = Object.keys(agent).length > 0
+	const stageAgent = (patch: AgentPatch) =>
+		setAgent(current => {
+			const next = { ...current, ...patch }
+			return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)) as AgentPatch
+		})
 
 	const discardAttachment = (stageId: string | undefined) => {
 		if (stageId) void client.discardStagedAttachment(stageId).catch(() => undefined)
@@ -194,7 +201,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 				text,
 				sendNow,
 				readyAttachments.flatMap(attachment => (attachment.stageId ? [attachment.stageId] : [])),
-				model
+				agent
 			)
 			if (!r.ok || !r.workspaceId) {
 				setError(r.error ?? 'could not create the workspace')
@@ -326,24 +333,45 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							chooseFiles(files)
 						}}
 					/>
-					<div className="flex items-center gap-1 px-1 pt-1">
+					<div className="mt-1 flex items-start gap-1 px-1">
+						<AgentControls
+							model={agent.model ?? 'Model'}
+							providerModel={agent.model ?? null}
+							agentType={null}
+							models={models}
+							modelsFetching={modelCatalog.isFetching}
+							modelsError={modelCatalog.isError}
+							fast={agent.fast}
+							effort={agent.effort}
+							plan={agent.plan}
+							showEmptyEffort
+							modelStaged={agent.model !== undefined}
+							fastStaged={agent.fast !== undefined}
+							effortStaged={agent.effort !== undefined}
+							planStaged={agent.plan !== undefined}
+							onModelChange={model => stageAgent({ model: model === agent.model ? undefined : model })}
+							onFastChange={() =>
+								stageAgent({ fast: agent.fast === undefined ? true : agent.fast ? false : undefined })
+							}
+							onEffortChange={() =>
+								stageAgent({
+									effort: agent.effort === 'ultracode' ? undefined : nextEffort(agent.effort)
+								})
+							}
+							onPlanChange={() =>
+								stageAgent({ plan: agent.plan === undefined ? true : agent.plan ? false : undefined })
+							}
+							status={anyAgentChoice ? 'Applies when the workspace opens' : undefined}
+						/>
 						<button
 							type="button"
 							onClick={() => fileInput.current?.click()}
 							disabled={!online}
-							className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-muted transition active:bg-surface-2 disabled:text-faint"
+							aria-label="Attach files"
+							className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
 						>
-							<Paperclip size={15} />
-							Attach files
+							<Paperclip size={17} />
 						</button>
-						<ModelPicker
-							value={model}
-							models={models}
-							isFetching={modelCatalog.isFetching}
-							isError={modelCatalog.isError}
-							onSelect={setModel}
-						/>
-						<span className="ml-auto pr-1 text-[11px] text-faint">Drop files here</span>
 					</div>
 					{draggingFiles ? (
 						<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">

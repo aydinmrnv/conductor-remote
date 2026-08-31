@@ -1,12 +1,9 @@
-import { Map as MapIcon, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
-import { cn } from '../lib/cn.ts'
 import { shortModel } from '../lib/format.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
-import { EffortBars, ProviderMark } from './AgentIcons.tsx'
-import { ModelPicker } from './ModelPicker.tsx'
+import { AgentControls, nextEffort } from './AgentControls.tsx'
 
 /**
  * Conductor's own composer controls, mirrored for the phone — and rendered
@@ -20,15 +17,6 @@ import { ModelPicker } from './ModelPicker.tsx'
  * A staged control uses the accent colour, and flipping a value back to what
  * Conductor already has drops the staged one rather than queuing a no-op trip.
  */
-const EFFORT_LABELS: Record<string, string> = {
-	low: 'Low',
-	medium: 'Medium',
-	high: 'High',
-	xhigh: 'Extra high',
-	max: 'Max',
-	ultracode: 'Ultracode'
-}
-const EFFORT_ORDER = Object.keys(EFFORT_LABELS)
 /** Keep the relay cache useful without leaving a Conductor menu stale all day. */
 const MODEL_CATALOG_STALE_MS = 10 * 60 * 1000
 
@@ -86,84 +74,28 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	const displayedModel = staged.model ?? modelPill(session)
 	const providerModel = staged.model ?? session.model
 
-	// Tapping effort steps to the next level, matching the desktop button's own behaviour.
-	const nextEffort = () => EFFORT_ORDER[(EFFORT_ORDER.indexOf(effort ?? '') + 1) % EFFORT_ORDER.length]
-
 	return (
-		<div className="min-w-0 flex-1">
-			<div className="flex min-w-0 items-center gap-0.5">
-				{/* Only the model control opens a menu; the other settings stay one-tap ghost controls. */}
-				<div className="min-w-0">
-					<ModelPicker
-						value={displayedModel}
-						models={models}
-						open={picking}
-						onOpenChange={setPicking}
-						isFetching={liveModels.isFetching || modelCatalog.isFetching}
-						isError={liveModels.isError}
-						onSelect={model => stage({ model: change(model, staged.model) })}
-						renderTrigger={({ picking, toggle }) => (
-							<button
-								type="button"
-								onClick={toggle}
-								aria-label={`Change model, currently ${displayedModel}`}
-								aria-haspopup="menu"
-								aria-expanded={picking}
-								className={cn(
-									'flex h-8 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
-									staged.model !== undefined && 'text-accent'
-								)}
-							>
-								<ProviderMark agentType={session.agent_type} model={providerModel} className="size-[15px]" />
-								<span className="truncate">{displayedModel}</span>
-							</button>
-						)}
-					/>
-				</div>
-				<button
-					type="button"
-					onClick={() => stage({ fast: change(!fastOn, dbFast) })}
-					aria-label={`Fast mode ${fastOn ? 'on' : 'off'}`}
-					aria-pressed={fastOn}
-					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
-						fastOn && 'text-text',
-						staged.fast !== undefined && 'text-accent'
-					)}
-				>
-					<Zap size={17} />
-				</button>
-				{effort ? (
-					<button
-						type="button"
-						onClick={() => stage({ effort: change(nextEffort(), dbEffort) })}
-						aria-label={`Reasoning effort: ${EFFORT_LABELS[effort]}`}
-						className={cn(
-							'flex h-8 shrink-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
-							staged.effort && 'text-accent'
-						)}
-					>
-						<EffortBars effort={effort} />
-						<span className="max-[340px]:hidden">{EFFORT_LABELS[effort]}</span>
-					</button>
-				) : null}
-				<button
-					type="button"
-					onClick={() => stage({ plan: change(!planOn, dbPlan) })}
-					aria-label={`Plan mode ${planOn ? 'on' : 'off'}`}
-					aria-pressed={planOn}
-					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
-						planOn && 'text-text',
-						staged.plan !== undefined && 'text-accent'
-					)}
-				>
-					<MapIcon size={17} />
-				</button>
-			</div>
-			{anyStaged ? (
-				<div className="px-2 pt-0.5 text-[11px] text-faint">{sending ? 'Applying…' : 'Applies when you send'}</div>
-			) : null}
-		</div>
+		<AgentControls
+			model={displayedModel}
+			providerModel={providerModel}
+			agentType={session.agent_type}
+			models={models}
+			modelPickerOpen={picking}
+			onModelPickerOpenChange={setPicking}
+			modelsFetching={liveModels.isFetching || modelCatalog.isFetching}
+			modelsError={liveModels.isError}
+			fast={fastOn}
+			effort={effort}
+			plan={planOn}
+			modelStaged={staged.model !== undefined}
+			fastStaged={staged.fast !== undefined}
+			effortStaged={staged.effort !== undefined}
+			planStaged={staged.plan !== undefined}
+			onModelChange={model => stage({ model: change(model, staged.model) })}
+			onFastChange={() => stage({ fast: change(!fastOn, dbFast) })}
+			onEffortChange={() => stage({ effort: change(nextEffort(effort), dbEffort) })}
+			onPlanChange={() => stage({ plan: change(!planOn, dbPlan) })}
+			status={anyStaged ? (sending ? 'Applying…' : 'Applies when you send') : undefined}
+		/>
 	)
 }

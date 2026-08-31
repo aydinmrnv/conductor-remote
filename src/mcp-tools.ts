@@ -64,7 +64,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; a requested model and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, a live list_models call and set_workspace_status drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, a live list_models call and set_workspace_status drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -389,7 +389,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'create_workspace',
 			description:
-				'Start a new Conductor workspace in a repo, optionally with a first prompt and model. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies a requested model through Conductor’s UI after it creates the first chat and before it delivers the prompt. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
+				'Start a new Conductor workspace in a repo, optionally with a first prompt and agent settings. The workspace starts from a Conductor deep link, so creation itself needs no Accessibility. The relay applies requested model, effort, plan, and fast settings through Conductor’s UI after it creates the first chat and before it delivers the prompt. Returns as soon as the workspace row exists (~2s), before the worktree is built.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -400,6 +400,13 @@ export function createTools(call: RelayCall): Tool[] {
 						description:
 							'Picker label from list_models with no session_id. The relay applies it before the first prompt, or configures an empty workspace once its chat exists.'
 					},
+					effort: {
+						type: 'string',
+						enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'],
+						description: 'Reasoning effort applied before the first prompt.'
+					},
+					plan: { type: 'boolean', description: 'Start the first chat in Conductor’s Plan mode.' },
+					fast: { type: 'boolean', description: 'Set Fast mode before the first prompt.' },
 					wait_for_send: {
 						type: 'boolean',
 						description:
@@ -417,12 +424,16 @@ export function createTools(call: RelayCall): Tool[] {
 				const repo = need(args, 'repo')
 				const prompt = str(args.prompt)
 				const model = str(args.model)
+				const effort = str(args.effort)
+				const plan = typeof args.plan === 'boolean' ? args.plan : undefined
+				const fast = typeof args.fast === 'boolean' ? args.fast : undefined
+				const configured = model !== undefined || effort !== undefined || plan !== undefined || fast !== undefined
 				const send = args.wait_for_send === true
 				// Default on, matching the relay: an omitted flag must never mean "wait".
 				const sendImmediately = args.send_immediately !== false
 				const data = await call<CreateWorkspaceResult>(routes.createWorkspace.path(), {
 					method: routes.createWorkspace.method,
-					body: { repo, prompt, model, send, sendImmediately },
+					body: { repo, prompt, model, effort, plan, fast, send, sendImmediately },
 					timeoutMs: send ? WRITE_TIMEOUT_MS : 30_000
 				})
 				const lines = [
@@ -433,7 +444,7 @@ export function createTools(call: RelayCall): Tool[] {
 				else if (data.pendingPrompt && !data.sent)
 					lines.push('the first prompt is queued — the relay delivers it, so do not send it again')
 				else if (data.sent) lines.push('the first prompt was delivered')
-				if (data.model) lines.push(data.configured ? `model applied: ${data.model}` : `model queued: ${data.model}`)
+				if (configured) lines.push(data.configured ? 'agent settings applied' : 'agent settings queued')
 				return lines.join('\n')
 			}
 		},

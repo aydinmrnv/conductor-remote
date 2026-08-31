@@ -198,7 +198,7 @@ export interface CreateWorkspaceResult {
 	/** The model requested for the new chat. The relay applies it before the first prompt. */
 	model?: string
 	sent?: boolean
-	/** True when `send: true` waited for an initial model selection to finish. */
+	/** True when `send: true` waited for initial agent settings to finish. */
 	configured?: boolean
 	warning?: string
 	error?: string

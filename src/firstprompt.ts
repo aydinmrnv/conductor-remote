@@ -43,6 +43,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import type { ParkedAgentPatch } from './parked.ts'
 
 export type FirstPromptStatus = 'waiting' | 'failed'
 
@@ -64,7 +65,9 @@ export interface FirstPromptTarget {
 export interface FirstPrompt {
 	workspaceId: string
 	text: string
-	/** Picker label selected while the workspace was being created. */
+	/** Agent choices selected while the workspace was being created. */
+	agent?: ParkedAgentPatch
+	/** Legacy persisted model choice, migrated into `agent` when delivery resumes. */
 	model?: string
 	/** Files staged before this workspace had a worktree. They must land before `text` is sent. */
 	attachmentIds?: string[]
@@ -104,11 +107,11 @@ export interface DeliveryDeps {
 		sessionId: string,
 		text: string
 	) => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
-	/** Apply a selected model before the first prompt enters the chat. */
-	setModel?: (
+	/** Apply selected agent settings before the first prompt enters the chat. */
+	setAgent?: (
 		workspaceId: string,
 		sessionId: string,
-		model: string
+		agent: ParkedAgentPatch
 	) => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
 	/** Put staged phone files into their new worktree before the attachment token is sent. */
 	materialize?: (
@@ -184,14 +187,14 @@ export class FirstPromptQueue {
 		text: string,
 		sendImmediately = true,
 		attachmentIds: string[] = [],
-		model?: string
+		agent?: ParkedAgentPatch
 	): Promise<FirstPrompt | null> {
 		this.entries = [
 			...this.entries.filter(e => e.workspaceId !== workspaceId),
 			{
 				workspaceId,
 				text,
-				...(model?.trim() ? { model: model.trim() } : {}),
+				...(agent && Object.keys(agent).length ? { agent } : {}),
 				...(attachmentIds.length ? { attachmentIds } : {}),
 				status: 'waiting',
 				attempts: 0,
@@ -275,7 +278,7 @@ export class FirstPromptQueue {
 		if (!target?.sessionId) return
 		// It already went — the user sent it from the Mac, where the deep link left it
 		// pre-filled in the composer. Sending again would double it, and changing the
-		// model now would affect a later turn instead of the first one they chose it for.
+		// agent now would affect a later turn instead of the first one they configured.
 		if (target.alreadySent) return this.delivered(entry)
 
 		// Before `ready`, a send is worth trying and not worth judging: Conductor may not
@@ -295,8 +298,9 @@ export class FirstPromptQueue {
 		else entry.attempts += 1
 		this.save()
 
-		const result = entry.model
-			? await this.setModel(entry, target.sessionId)
+		const agent = entry.agent ?? (entry.model ? { model: entry.model } : undefined)
+		const result = agent
+			? await this.setAgent(entry, target.sessionId, agent)
 			: entry.text.trim()
 				? await this.deps.send(entry.workspaceId, target.sessionId, entry.text)
 				: { ok: true }
@@ -323,18 +327,19 @@ export class FirstPromptQueue {
 	}
 
 	/**
-	 * Keep a model choice in the same attempt as its prompt. A successful picker
-	 * change is persisted before the send starts, so a send retry cannot toggle a
-	 * model back and forth. A workspace with no prompt settles after this step.
+	 * Keep agent choices in the same attempt as the prompt. A successful settings
+	 * change is persisted before the send starts, so a retry cannot toggle controls
+	 * back and forth. A workspace with no prompt settles after this step.
 	 */
-	private async setModel(
+	private async setAgent(
 		entry: FirstPrompt,
-		sessionId: string
+		sessionId: string,
+		agent: ParkedAgentPatch
 	): Promise<{ ok: boolean; error?: string; blocked?: boolean }> {
-		if (!entry.model) return { ok: true }
-		if (!this.deps.setModel) return { ok: false, error: 'the relay cannot set a model for a new workspace' }
-		const result = await this.deps.setModel(entry.workspaceId, sessionId, entry.model)
+		if (!this.deps.setAgent) return { ok: false, error: 'the relay cannot configure a new workspace’s agent' }
+		const result = await this.deps.setAgent(entry.workspaceId, sessionId, agent)
 		if (!result.ok) return result
+		entry.agent = undefined
 		entry.model = undefined
 		this.save()
 		return entry.text.trim() ? this.deps.send(entry.workspaceId, sessionId, entry.text) : { ok: true }

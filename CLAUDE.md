@@ -83,7 +83,9 @@ Two asymmetric halves — keep them separate:
   launch, so prompts sat unsent until the next relaunch. Don't confuse that with
   "block the request": creation still returns as soon as the row exists (~2s;
   waiting for setup measured 30s+, past the phone's own 25s budget) and the queue
-  delivers on its own schedule. `send:true` opts an API caller into awaiting it.
+  delivers on its own schedule. Any model/effort/plan/fast choices ride in that
+  same persisted entry and apply before the prompt. `send:true` opts an API caller
+  into awaiting it.
   **And it presses Enter while the worktree is still building** — the one thing
   this queue had wrong. `setting_up` describes the worktree and the setup script,
   not the window: Conductor draws the workspace, its chat tab and its composer the
