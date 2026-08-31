@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router'
 import { useModelCatalog, useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
 import type { AgentPatch } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls, nextEffort } from './AgentControls.tsx'
@@ -63,7 +64,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const lastNewWorkspaceRepo = useApp(s => s.lastNewWorkspaceRepo)
 	const setLastNewWorkspaceRepo = useApp(s => s.setLastNewWorkspaceRepo)
 	const [repo, setRepo] = useState(lastNewWorkspaceRepo)
-	const [prompt, setPrompt] = useState('')
+	// The prompt is a draft in the store, not state here: this sheet unmounts the
+	// moment it is closed, and the text has to outlive that (see lib/draft.ts).
+	const prompt = useApp(s => s.drafts[NEW_WORKSPACE_DRAFT] ?? '')
+	const setDraft = useApp(s => s.setDraft)
+	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const [agent, setAgent] = useState<AgentPatch>({})
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const [sendNow, setSendNow] = useState(loadSendNow)
@@ -182,6 +187,9 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 		chooseFiles(event.dataTransfer.files)
 	}
 
+	// The typed prompt survives this (it is a draft), the staged files do not: a file
+	// left staged is a copy sitting on the relay for a sheet nobody may reopen, and
+	// re-picking one is a tap. Text is the part that cannot be re-made.
 	const close = () => {
 		for (const attachment of attachments) {
 			cancelledUploads.current.add(attachment.id)
@@ -210,6 +218,9 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 			// ['state'] is the workspace-list query — an invalidate on any other key silently
 			// does nothing and the new workspace only shows up on the next 2.5s poll.
 			await queryClient.invalidateQueries({ queryKey: ['state'] })
+			// The relay owns the prompt now (src/firstprompt.ts) and the new chat shows it,
+			// so this is the one exit that drops the draft. Closing keeps it.
+			setPrompt('')
 			onClose()
 			navigate(`/w/${r.workspaceId}`)
 		} catch (e) {

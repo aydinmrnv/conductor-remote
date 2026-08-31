@@ -9,6 +9,16 @@
  */
 const PREFIX = 'conductor-remote-draft:'
 
+/**
+ * The New workspace sheet's first message, which has no chat to be keyed by yet.
+ * The sheet is mounted only while it is open (WorkspaceList.tsx) and its prompt was
+ * component state, so closing it — or iOS relaunching the PWA behind it — threw away
+ * typing that lived nowhere else. One key rather than one per repo: it is the box you
+ * were typing in, and changing the repo should not swap the text underneath you. Ids
+ * are UUIDs, so this cannot collide with a chat's own draft.
+ */
+export const NEW_WORKSPACE_DRAFT = 'new-workspace'
+
 /** Every persisted draft, keyed by chat id — read once at boot to seed the store. */
 export function loadDrafts(): Record<string, string> {
 	const drafts: Record<string, string> = {}
