@@ -5,6 +5,7 @@ import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
+import { latestAssistantForActions } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import type { PendingMessage } from '../store.ts'
 import { useApp } from '../store.ts'
@@ -52,12 +53,8 @@ export function Transcript({
 	// across the polls above, which is what lets the memoised rows below bail out.
 	const rows = useMemo(() => groupSteps(entries), [entries])
 	const lastAssistantKey = useMemo(() => {
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const entry = entries[i]
-			if (entry.role === 'tool' || entry.role === 'thinking') continue
-			return entry.role === 'assistant' ? rowKey(entry) : null
-		}
-		return null
+		const entry = latestAssistantForActions(entries)
+		return entry ? rowKey(entry) : null
 	}, [entries])
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
