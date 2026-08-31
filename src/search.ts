@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { chatCursor } from './chat-cursor.ts'
 import type { ConductorDb } from './db.ts'
 import { HIT_CLOSE, HIT_OPEN } from './shared.ts'
 import { parseMessage } from './transcript.ts'
@@ -354,6 +355,8 @@ export class SearchIndex {
 /** One matching excerpt, as the phone renders it. */
 export interface SearchSnippet {
 	sessionId: string
+	/** Opaque source-message pointer for a bounded `read_chat` around this hit. */
+	cursor: string
 	role: SearchRole
 	at: string
 	/** Hits wrapped in HIT_OPEN/HIT_CLOSE. */
@@ -429,7 +432,13 @@ export function foldHits<W extends { id: string }>(
 		// scoring and snippeting the same slice needs no second sort.
 		if (entry.snippets.length < SNIPPETS_PER_RESULT) {
 			entry.score += hit.score
-			entry.snippets.push({ sessionId: hit.sessionId, role: hit.role, at: hit.at, text: hit.snippet })
+			entry.snippets.push({
+				sessionId: hit.sessionId,
+				cursor: chatCursor(hit.srcRowid),
+				role: hit.role,
+				at: hit.at,
+				text: hit.snippet
+			})
 		}
 	}
 	const results: SearchResult<W>[] = []

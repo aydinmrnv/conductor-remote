@@ -26,8 +26,10 @@
  * a tool cannot behave differently over HTTP than it does over stdio.
  */
 
+import { chatCursor, parseChatCursor } from './chat-cursor.ts'
 import { routes } from './routes.ts'
 import { HIT_CLOSE, HIT_OPEN, workspaceTitle } from './shared.ts'
+import type { TranscriptEntry } from './transcript.ts'
 import type {
 	AgentResult,
 	CreateWorkspaceResult,
@@ -81,6 +83,39 @@ function clip(text: string, max: number): string {
 	return text.length > max ? `${text.slice(0, max)}… [${text.length - max} more chars]` : text
 }
 
+/** A true output bound: unlike `clip`, the truncation marker is inside `max`. */
+function clipExact(text: string, max: number): string {
+	if (text.length <= max) return text
+	const suffix = '… [truncated]'
+	if (max <= suffix.length) return text.slice(0, max)
+	return `${text.slice(0, max - suffix.length)}${suffix}`
+}
+
+/**
+ * Fit a transcript inside one MCP result without dropping either side of a nearby
+ * read. Short entries keep their full text; the longest entries share what remains.
+ */
+function boundedTranscript(header: string[], entries: string[], maxChars: number): string {
+	const prefix = header.length ? `${header.join('\n')}\n\n` : ''
+	if (!entries.length) return clipExact(prefix.trim(), maxChars)
+	const separators = Math.max(0, entries.length - 1) * 2
+	const available = Math.max(1, maxChars - prefix.length - separators)
+	const fullLength = entries.reduce((sum, entry) => sum + entry.length, 0)
+	if (fullLength <= available) return `${prefix}${entries.join('\n\n')}`
+
+	// Find the largest per-entry ceiling whose clipped rows fit. Entries shorter than
+	// it return their unused share to the longer ones, unlike a fixed equal split.
+	let low = 1
+	let high = Math.max(...entries.map(entry => entry.length))
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2)
+		const used = entries.reduce((sum, entry) => sum + Math.min(entry.length, mid), 0)
+		if (used <= available) low = mid
+		else high = mid - 1
+	}
+	return clipExact(`${prefix}${entries.map(entry => clipExact(entry, low)).join('\n\n')}`, maxChars)
+}
+
 function plural(n: number, one: string, many = `${one}s`): string {
 	return `${n} ${n === 1 ? one : many}`
 }
@@ -124,7 +159,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'search_chats',
 			description:
-				'Full-text search every Conductor chat on this Mac, archived workspaces included, and get back the workspaces that discussed it with the matching excerpts. Use this to answer "which workspace did I do X in" or "what did we decide about X". Searches the prompts the user typed, the agent replies and the agent\'s reasoning, not tool output. Each excerpt is tagged [user], [assistant] or [thinking] — a [thinking] hit is reasoning the agent never said out loud, so do not quote it back as its answer. Results carry workspace_id and session_id for read_chat.',
+				'Full-text search every Conductor chat on this Mac, archived workspaces included, and get back the workspaces that discussed it with the matching excerpts. Use this to answer "which workspace did I do X in" or "what did we decide about X". Searches the prompts the user typed, the agent replies and the agent\'s reasoning, not tool output. Each excerpt is tagged [user], [assistant] or [thinking] — a [thinking] hit is reasoning the agent never said out loud, so do not quote it back as its answer. Every excerpt carries its own session_id and cursor for a bounded nearby read_chat.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -154,7 +189,10 @@ export function createTools(call: RelayCall): Tool[] {
 					lines.push(`${tags}${r.byName ? ' · name match' : ''}`)
 					lines.push(`workspace_id: ${w.id}${r.sessionId ? `  session_id: ${r.sessionId}` : ''}`)
 					if (r.hits) lines.push(`${r.hits} matching message${r.hits === 1 ? '' : 's'}:`)
-					for (const s of r.snippets) lines.push(`  [${s.role}] ${clip(unmark(s.text), 400)}`)
+					for (const s of r.snippets) {
+						lines.push(`  [${s.role}] ${clip(unmark(s.text), 400)}`)
+						lines.push(`    session_id: ${s.sessionId}  cursor: ${s.cursor}`)
+					}
 				}
 				return lines.join('\n').trim()
 			}
@@ -162,12 +200,22 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'read_chat',
 			description:
-				'Read a Conductor chat transcript by session_id, newest messages last. Works for archived workspaces, which is how you read work that has been put away. Tool calls and tool output are summarised to one line each; the prose is verbatim.',
+				'Read a bounded Conductor chat transcript by session_id, newest messages last. Pass a cursor from search_chats or a prior read_chat as near; before and after expand either direction or both together. For a [thinking] search hit, set include_thinking true to include the matching block. Without near, returns the trailing entries. Works for archived workspaces. Tool calls and failed tool output are summarised to one line each; prose is verbatim unless the output budget truncates it.',
 			inputSchema: {
 				type: 'object',
 				properties: {
 					session_id: { type: 'string', description: 'From search_chats or list_chats.' },
-					limit: { type: 'number', description: 'How many trailing entries to return (default 40, max 400).' },
+					near: { type: 'string', description: 'A cursor from search_chats or a prior read_chat.' },
+					before: { type: 'number', description: 'Entries before near to return (default 6, max 100).' },
+					after: { type: 'number', description: 'Entries after near to return (default 6, max 100).' },
+					limit: {
+						type: 'number',
+						description: 'Trailing entries when near is omitted (default 12, max 400).'
+					},
+					max_chars: {
+						type: 'number',
+						description: 'Hard result-size budget (default 12000, min 1000, max 40000).'
+					},
 					include_thinking: { type: 'boolean', description: 'Include the agent’s reasoning (default false).' },
 					include_tools: {
 						type: 'boolean',
@@ -178,7 +226,15 @@ export function createTools(call: RelayCall): Tool[] {
 			},
 			run: async args => {
 				const sessionId = need(args, 'session_id')
-				const limit = Math.min(400, Math.max(1, num(args.limit) ?? 40))
+				const near = str(args.near)
+				const anchor = near ? parseChatCursor(near) : null
+				if (near && anchor === null) throw new Error('near must be a cursor returned by search_chats')
+				const count = (value: unknown, fallback: number) =>
+					Math.min(100, Math.max(0, Math.floor(num(value) ?? fallback)))
+				const before = count(args.before, 6)
+				const after = count(args.after, 6)
+				const limit = Math.min(400, Math.max(1, Math.floor(num(args.limit) ?? 12)))
+				const maxChars = Math.min(40_000, Math.max(1_000, Math.floor(num(args.max_chars) ?? 12_000)))
 				// One flag each, because they answer different questions: tools are what the agent
 				// *did*, thinking is why it did it. Reading both off `include_tools` meant the only
 				// way to see the reasoning was to take the tool churn along with it.
@@ -187,20 +243,50 @@ export function createTools(call: RelayCall): Tool[] {
 				const data = await call<MessagesResponse>(`${routes.messages.path(sessionId)}?after=0`, {
 					timeoutMs: 30_000
 				})
+				if (anchor !== null && !data.entries.some(entry => entry.rowid === anchor)) {
+					throw new Error('near cursor is not in that session')
+				}
 				const wanted = data.entries.filter(e =>
 					e.role === 'thinking' ? includeThinking : e.role === 'tool' ? includeTools : true
 				)
 				if (!wanted.length) return `no messages in session ${sessionId}`
-				const tail = wanted.slice(-limit)
-				const head = tail.length < wanted.length ? [`(last ${tail.length} of ${wanted.length} entries)`] : []
-				return [
-					...head,
-					...tail.map(e => {
-						if (e.role === 'tool')
-							return `[tool ${e.tool ?? ''}] ${clip(e.text, 200)}${e.detail ? ` — ${e.detail}` : ''}`
-						return `[${e.role}] ${clip(e.text, 4000)}`
-					})
-				].join('\n\n')
+
+				let selected: TranscriptEntry[]
+				const head: string[] = []
+				if (anchor === null) {
+					selected = wanted.slice(-limit)
+					if (selected.length < wanted.length) {
+						head.push(
+							`(last ${selected.length} of ${wanted.length} entries · older_cursor: ${chatCursor(selected[0].rowid)})`
+						)
+					}
+				} else {
+					const older = wanted.filter(entry => entry.rowid < anchor)
+					const at = wanted.filter(entry => entry.rowid === anchor)
+					const newer = wanted.filter(entry => entry.rowid > anchor)
+					selected = [...(before ? older.slice(-before) : []), ...at, ...newer.slice(0, after)]
+					const parts = [
+						`near ${near}`,
+						`${Math.min(before, older.length)} before`,
+						`${at.length} at`,
+						`${Math.min(after, newer.length)} after`
+					]
+					if (older.length > before && selected[0]) parts.push(`older_cursor: ${chatCursor(selected[0].rowid)}`)
+					if (newer.length > after && selected.at(-1)) {
+						parts.push(`newer_cursor: ${chatCursor(selected.at(-1)!.rowid)}`)
+					}
+					head.push(`(${parts.join(' · ')})`)
+				}
+
+				if (!selected.length) {
+					return boundedTranscript(head, ['(the matching entry is excluded by the current role filters)'], maxChars)
+				}
+				const rendered = selected.map(entry => {
+					if (entry.role === 'tool')
+						return `[tool ${entry.tool ?? ''}] ${clip(entry.text, 200)}${entry.detail ? ` — ${entry.detail}` : ''}`
+					return `[${entry.role}] ${entry.text}`
+				})
+				return boundedTranscript(head, rendered, maxChars)
 			}
 		},
 		{
