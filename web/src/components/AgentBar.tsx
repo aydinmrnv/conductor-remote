@@ -1,4 +1,4 @@
-import { Zap } from 'lucide-react'
+import { SlidersHorizontal, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
@@ -79,42 +79,60 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 
 	return (
 		<div className="min-w-0 flex-1">
-			<div className="flex flex-wrap items-center gap-0.5">
-				{/* Not gated on `online`: a cached choice can still stage locally and apply on send. */}
-				<ModelPicker
-					value={staged.model ?? modelPill(session)}
-					models={models}
-					open={picking}
-					onOpenChange={setPicking}
-					isFetching={liveModels.isFetching || modelCatalog.isFetching}
-					isError={liveModels.isError}
-					onSelect={model => stage({ model: change(model, staged.model) })}
-				/>
-				{effort ? (
+			{/* Not gated on `online`: a cached choice can still stage locally and apply on send. */}
+			<ModelPicker
+				value={staged.model ?? modelPill(session)}
+				models={models}
+				open={picking}
+				onOpenChange={setPicking}
+				isFetching={liveModels.isFetching || modelCatalog.isFetching}
+				isError={liveModels.isError}
+				onSelect={model => stage({ model: change(model, staged.model) })}
+				renderTrigger={({ picking, toggle }) => (
 					<button
 						type="button"
-						onClick={() => stage({ effort: change(nextEffort(), dbEffort) })}
-						className={cn('ctl', staged.effort && 'ctl-staged')}
+						onClick={toggle}
+						aria-label="Agent settings"
+						aria-haspopup="menu"
+						aria-expanded={picking}
+						className={cn('ctl flex size-9 items-center justify-center p-0', anyStaged && 'ctl-staged')}
 					>
-						{EFFORT_LABELS[effort]}
+						<SlidersHorizontal size={17} />
 					</button>
-				) : null}
-				<button
-					type="button"
-					onClick={() => stage({ plan: change(!planOn, dbPlan) })}
-					className={cn('ctl', planOn && 'ctl-on', staged.plan !== undefined && 'ctl-staged')}
-				>
-					Plan
-				</button>
-				<button
-					type="button"
-					onClick={() => stage({ fast: change(!fastOn, dbFast) })}
-					className={cn('ctl flex items-center gap-1', fastOn && 'ctl-on', staged.fast !== undefined && 'ctl-staged')}
-				>
-					<Zap size={13} />
-					Fast
-				</button>
-			</div>
+				)}
+				beforeOptions={
+					<div className="flex flex-wrap items-center gap-0.5 border-b border-border px-1 py-1">
+						{effort ? (
+							<button
+								type="button"
+								onClick={() => stage({ effort: change(nextEffort(), dbEffort) })}
+								className={cn('ctl', staged.effort && 'ctl-staged')}
+							>
+								{EFFORT_LABELS[effort]}
+							</button>
+						) : null}
+						<button
+							type="button"
+							onClick={() => stage({ plan: change(!planOn, dbPlan) })}
+							className={cn('ctl', planOn && 'ctl-on', staged.plan !== undefined && 'ctl-staged')}
+						>
+							Plan
+						</button>
+						<button
+							type="button"
+							onClick={() => stage({ fast: change(!fastOn, dbFast) })}
+							className={cn(
+								'ctl flex items-center gap-1',
+								fastOn && 'ctl-on',
+								staged.fast !== undefined && 'ctl-staged'
+							)}
+						>
+							<Zap size={13} />
+							Fast
+						</button>
+					</div>
+				}
+			/>
 			{anyStaged ? (
 				<div className="px-2 pt-0.5 text-[11px] text-faint">{sending ? 'Applying…' : 'Applies when you send'}</div>
 			) : null}
