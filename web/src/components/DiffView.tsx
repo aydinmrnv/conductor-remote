@@ -36,12 +36,15 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 				vs <span className="font-mono text-faint">{data.base}</span> · {data.files.length} file
 				{data.files.length === 1 ? '' : 's'}
 			</div>
-			<ul className="flex flex-col gap-1 px-3 py-3">
+			{/* One grid for the whole list, each row a subgrid: the two count columns take the
+			    same width on every row, so a zero count renders as an empty cell — no marker,
+			    no number — and the counts beside it stay put. */}
+			<ul className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 px-3 py-3 font-mono text-[12px]">
 				{data.files.map(f => (
-					<li key={f.path} className="flex items-center gap-2 font-mono text-[12px]">
+					<li key={f.path} className="col-span-3 grid grid-cols-subgrid items-center">
 						<span className="truncate text-muted">{f.path}</span>
-						<span className="ml-auto shrink-0 text-add">+{f.added}</span>
-						<span className="shrink-0 text-del">−{f.removed}</span>
+						<span className="text-right text-add">{f.added ? `+${f.added}` : null}</span>
+						<span className="text-right text-del">{f.removed ? `−${f.removed}` : null}</span>
 					</li>
 				))}
 			</ul>
