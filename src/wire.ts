@@ -124,6 +124,19 @@ export interface FilePreviewResponse {
 }
 
 /**
+ * GET /api/workspaces/:id/files — worktree-relative paths, for linking file mentions.
+ *
+ * The phone turns `` `tests/foo.ts` `` in a message into a source link only when it
+ * names a file that is really there, and this is the list it checks against. Only
+ * previewable extensions are listed; `truncated` says the worktree held more than
+ * the relay will ship (src/git.ts ▸ `listSourceFiles`).
+ */
+export interface WorkspaceFilesResponse {
+	files: string[]
+	truncated: boolean
+}
+
+/**
  * GET /api/workspaces/:id — one workspace by id, in any state.
  *
  * `SearchWorkspace`, not `Workspace`, and that is the whole point: this answers for the

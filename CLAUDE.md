@@ -1004,6 +1004,16 @@ handler scan, and the relay/web import boundary.
   matters is the one where a title engineered to climb out still lands inside the
   worktree. Portable, so the ubuntu job runs it.
 
+- `tests/file-mentions.test.ts` / `tests/mention-render.test.tsx` — which words in a chat
+  become source links (`web/src/lib/fileMentions.ts`). Both ways of getting it wrong are
+  quiet: too eager and the transcript underlines ordinary prose, each tap opening a sheet
+  that says the file is not there, which reads as a broken relay rather than a bad guess;
+  too shy and the feature simply is not there, which nobody reports. The matcher is pure,
+  so the first needs no relay and no browser. The second renders the chat to static markup
+  for one fact that belongs to `react-markdown` rather than to us — inline code arrives with
+  **no class**, which is how a mention is told apart from a fence — and it caught the fence
+  with no info string coming through as a link. Portable, so the ubuntu job runs both.
+
 - `scripts/check-imports.ts` — the relay/web boundary (see "One set of types" above).
   `web/src/**` may reach into `src/` only with a **statement-level** `import type`,
   and the trap it exists for is that the inline form looks identical and is not:
@@ -1322,6 +1332,44 @@ bind trap below), not by unit test.
     The **workspace diff stays plain**: per-line highlighting of a 400 kB patch
     (`MAX_PATCH_BYTES`) measured 77ms and ~20,000 extra spans, and every line would be
     highlighted alone, so a block comment loses its colour after the first line anyway.
+  - **A file an agent names in prose is a link too, and only when the file is really
+    there** (`web/src/lib/fileMentions.ts`). Agents write paths in backticks all day —
+    "updated `tests/foo.ts`", "plan written to `~/.gstack/plan.md`" — and every one of
+    them was dead text, while the same path written as a Markdown link has opened the
+    source sheet for a while (`Markdown.tsx` ▸ `sourceReference`). The rule that keeps
+    this from underlining half the transcript is **existence, not shape**: inline code
+    holds far more than paths (`yarn build`, `sessions.status`, `Array.map`), so a
+    worktree-relative mention is matched against the worktree's own file list
+    (`GET /api/workspaces/:id/files`, `git.ts` ▸ `listSourceFiles`: tracked *plus*
+    untracked-not-ignored, since an agent names a file in the same message that created
+    it) and an ambiguous one links nowhere — `types.ts` naming two files is not a fact
+    about either. Measured over the real chats here, that leaves 45 links in 575 code
+    spans on one workspace and 11 in 88 on another, every one of them a file that
+    exists; the misses are `scripts/dev.ts` in a worktree where it was deleted and
+    `dev-forwards.json`, which lives in the relay's state dir. The list costs one
+    request per workspace (143–746 paths here, 3–27 kB before gzip, previewable
+    extensions only) and is deliberately not polled.
+    An **absolute** path is the exception and links on shape alone: `/Users/…` may
+    point at another workspace and `~/…` at a plan file, so there is no list to check
+    it against — **the relay decides whether it may be opened**, exactly as it does for
+    a Markdown link, and `~` is expanded in `file-preview.ts` because the phone has no
+    idea which account the relay runs as. That half needs no workspace, so it is the
+    fallback when there is no resolver in context — an archived chat's `~/plan.md` is as
+    readable as ever, only its worktree is gone, and the same sentence must not link in
+    one chat and not in the one beside it. Which is why that route now **says a refusal
+    is a refusal**: a home path is out of bounds on a public funnel, and answering
+    "source file not found" for a file sitting right there sends people hunting. It
+    discloses nothing, because the 403 is computed from the path and the posture and is
+    the same answer whether or not the file exists.
+    Two traps. A **fenced block with no info string reaches `ChatCode` with no class
+    either**, exactly like an inline span, so the mention text is *not* trimmed — its
+    trailing newline is the whole of what tells a code block from `` `src/git.ts` ``.
+    And the resolver arrives by **context**, not by prop: `ChatCode` is one entry in a
+    static component map nothing threads props through, and a context read is the one
+    thing that updates past `Markdown`'s `memo` when the file list lands after the
+    first paint. `tests/mention-render.test.tsx` renders the chat to static markup for
+    the fence trap alone — it caught it — because everything else about it typechecks
+    and the failure is silent in both directions.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."

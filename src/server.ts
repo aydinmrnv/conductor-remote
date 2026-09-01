@@ -12,7 +12,7 @@ import { DevServerController } from './dev-server.ts'
 import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
-import { workspaceDiff } from './git.ts'
+import { listSourceFiles, workspaceDiff } from './git.ts'
 import {
 	installLogCapture,
 	isManaged,
@@ -568,6 +568,10 @@ const BUNDLED_SKILLS_ROOT = '/Applications/Conductor.app/Contents/Resources/cond
 async function serveFilePreview(req: http.IncomingMessage, res: http.ServerResponse, reference: string): Promise<void> {
 	const target = parseFileReference(reference)
 	if (!target) return json(req, res, 404, { error: 'source file not found' })
+	const refused = (filePath: string) => {
+		const answer = previewRefusal(filePath)
+		return json(req, res, answer.status, { error: answer.error })
+	}
 
 	let filePath: string
 	let workspaceRoot: string
@@ -582,13 +586,15 @@ async function serveFilePreview(req: http.IncomingMessage, res: http.ServerRespo
 			fs.promises.realpath(BUNDLED_SKILLS_ROOT).catch(() => null)
 		])
 		if (!isAllowedPreviewPath(filePath, workspaceRoot, homeRoot, readExposeMode(), bundledSkillsRoot)) {
-			return json(req, res, 404, { error: 'source file not found' })
+			return refused(filePath)
 		}
 		const info = await fs.promises.stat(filePath)
 		if (!info.isFile()) return json(req, res, 404, { error: 'source file not found' })
 		size = info.size
 	} catch {
-		return json(req, res, 404, { error: 'source file not found' })
+		// A path this relay would refuse must answer the same whether or not it is there, or
+		// a public client learns which home files exist by watching 404 turn into 403.
+		return refused(target.path)
 	}
 	if (size > FILE_PREVIEW_MAX_BYTES) return json(req, res, 413, { error: 'source file is too large to preview' })
 
@@ -617,6 +623,30 @@ async function serveFilePreview(req: http.IncomingMessage, res: http.ServerRespo
 		content: lines.slice(start, end).join('\n'),
 		truncated: start > 0 || end < lines.length
 	})
+}
+
+/**
+ * How to answer for a file the preview will not serve, from the path alone.
+ *
+ * Chat mentions made the home-directory case ordinary — agents write "plan written to
+ * `~/.gstack/plan.md`" constantly — and on a public funnel every one of those is refused
+ * by policy. Answering "source file not found" then sends someone hunting for a file that
+ * is sitting right there, so a refusal says it is a refusal. It discloses nothing: the
+ * verdict comes from the path and the funnel's posture, never from the disk, and it is
+ * the answer for an out-of-bounds path whether or not that path exists.
+ */
+function previewRefusal(filePath: string): { status: number; error: string } {
+	const mode = readExposeMode()
+	if (isAllowedPreviewPath(path.resolve(filePath), cfg.workspacesRoot, os.homedir(), mode, BUNDLED_SKILLS_ROOT)) {
+		return { status: 404, error: 'source file not found' }
+	}
+	return {
+		status: 403,
+		error:
+			mode === 'public'
+				? 'this relay is reachable from the internet, so it previews files inside Conductor workspaces only'
+				: 'outside the files this relay may read'
+	}
 }
 
 /** Per-file ceiling for a relay exposed through Tailscale Funnel. Large media belongs in a link. */
@@ -1246,6 +1276,17 @@ const server = http.createServer(async (req, res) => {
 				if (!ws.worktree) return json(req, res, 409, { error: 'worktree path unresolved' })
 				const diff = await workspaceDiff(ws.worktree, ws.baseBranch)
 				return json(req, res, 200, diff)
+			}
+
+			// GET /api/workspaces/:id/files — the worktree's own file list, which is what lets the
+			// phone link `tests/foo.ts` in a message: a mention becomes a link only when it names
+			// a file that is really there. A workspace with no worktree simply links nothing.
+			const filesOf = routeParam(routes.workspaceFiles, req.method, pathname)
+			if (filesOf) {
+				const ws = reads.getWorkspace(filesOf)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				if (!ws.worktree) return json(req, res, 200, { files: [], truncated: false })
+				return json(req, res, 200, await listSourceFiles(ws.worktree))
 			}
 
 			// POST /api/workspaces/:id/merge — merge the workspace's open PR (mirrors Conductor's merge button)

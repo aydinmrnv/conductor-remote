@@ -114,7 +114,9 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
-  git.ts          workspace diff vs target branch (incl. untracked via --no-index)
+  git.ts          workspace diff vs target branch (incl. untracked via --no-index), plus the
+                  worktree's file list (GET /api/workspaces/:id/files) that decides which file
+                  an agent named in a message becomes a link
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
@@ -144,7 +146,9 @@ web/              React PWA (Vite root)
   src/lib/        api client, types, format helpers, cn, composer drafts, staged agent settings,
                   local-first host preference sync (prefs.ts),
                   model-list cache, read marks (unread the phone has seen), push (permission/subscribe/reconcile),
-                  transcript-merge (folds each tool result onto the call it answers, identity intact)
+                  transcript-merge (folds each tool result onto the call it answers, identity intact),
+                  fileMentions (turns `src/git.ts` in a message into a source link, worktree file list
+                  as the existence check; absolute and ~ paths pass through for the relay to allow)
   src/components/ Patch.tsx renders a unified diff (workspace diff + an edit step's result)
   src/store.ts    zustand: token + connection status + drafts + staged agent settings + read marks
                   + this device's push subscription

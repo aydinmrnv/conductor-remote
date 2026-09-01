@@ -104,6 +104,8 @@ export const routes = {
 	sessions: param('GET', '/api/workspaces/:workspaceId/sessions'),
 	newChat: param('POST', '/api/workspaces/:workspaceId/sessions'),
 	diff: param('GET', '/api/workspaces/:workspaceId/diff'),
+	/** The worktree's own file list, which is what makes a chat's `src/foo.ts` a link. */
+	workspaceFiles: param('GET', '/api/workspaces/:workspaceId/files'),
 	merge: param('POST', '/api/workspaces/:workspaceId/merge'),
 	workspaceStatus: param('POST', '/api/workspaces/:workspaceId/status'),
 	/** Read, start/forward, or stop a local workspace's selected Conductor Run task. */

@@ -486,6 +486,27 @@ export function useSessions(workspaceId: string | undefined, poll = true) {
 	return query
 }
 
+/**
+ * The worktree's file list, which is what lets a file an agent named in prose become a
+ * link (`web/src/lib/fileMentions.ts`).
+ *
+ * Polled by nothing: a message says `src/foo.ts` about a file that already exists, and a
+ * file created a minute ago is picked up the next time this goes stale. It matters that
+ * the array identity holds still across those refetches — every inline code span in the
+ * chat reads the resolver built from it, so a new array on each poll would re-render all
+ * of them for nothing. React Query's structural sharing is what keeps it, and the long
+ * `staleTime` is what makes the question rare in the first place.
+ */
+export function useWorkspaceFiles(workspaceId: string | undefined, enabled: boolean) {
+	return useQuery({
+		queryKey: ['workspaceFiles', workspaceId],
+		queryFn: () => client.workspaceFiles(workspaceId as string),
+		enabled: enabled && !!workspaceId,
+		staleTime: 120_000,
+		retry: false
+	})
+}
+
 /** The selected Conductor Run task and its tailnet-only forwarded URL. */
 export function useDevServer(workspaceId: string | undefined) {
 	return useQuery({
