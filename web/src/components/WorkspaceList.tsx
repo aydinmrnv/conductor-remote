@@ -348,7 +348,7 @@ function RepoFilter({
 		onChange(selected.includes(repo) ? selected.filter(r => r !== repo) : [...selected, repo])
 
 	return (
-		<div className="flex flex-col gap-2">
+		<div className="flex flex-col gap-1.5">
 			<ControlRow id="view-repo" label="Repo">
 				<button
 					id="view-repo"
@@ -365,7 +365,7 @@ function RepoFilter({
 			{open ? (
 				<div
 					id="view-repo-options"
-					className="flex max-h-48 flex-col overflow-y-auto rounded-lg border border-border bg-surface-2 p-1"
+					className="flex max-h-48 flex-col overflow-y-auto rounded-lg border border-border bg-surface-2 py-0.5"
 				>
 					<RepoOption checked={selectedAll} label="All repos" onChange={() => onChange([])} />
 					{repos.map(repo => (
@@ -373,7 +373,7 @@ function RepoFilter({
 							key={repo.name}
 							checked={selected.includes(repo.name)}
 							label={repo.name}
-							icon={<RepoAvatar icon={repo.icon} name={repo.name} />}
+							icon={<RepoAvatar icon={repo.icon} name={repo.name} size={REPO_OPTION_ICON} />}
 							onChange={() => toggle(repo.name)}
 						/>
 					))}
@@ -382,6 +382,9 @@ function RepoFilter({
 		</div>
 	)
 }
+
+/** Small enough that a repo row is little taller than its text. */
+const REPO_OPTION_ICON = 22
 
 function RepoOption({
 	checked,
@@ -395,9 +398,9 @@ function RepoOption({
 	onChange: () => void
 }) {
 	return (
-		<label className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-sm text-text active:bg-surface">
+		<label className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-0.5 text-left text-sm text-text active:bg-surface">
 			<input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
-			{icon ?? <span className="size-8 shrink-0" />}
+			{icon ?? <span className="shrink-0" style={{ width: REPO_OPTION_ICON }} />}
 			<span className="min-w-0 flex-1 truncate">{label}</span>
 			<span
 				className={cn(
