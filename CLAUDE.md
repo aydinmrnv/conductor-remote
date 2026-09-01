@@ -1006,6 +1006,12 @@ bind trap below), not by unit test.
   and its cleanup. The relay discovers that process's allocated `CONDUCTOR_PORT`
   from `ps eww` only after Run (never log the snapshot — it contains environments
   and secrets), then gives it a separate root-mounted `tailscale serve` HTTPS port.
+  **A start whose port already listens presses nothing** — forwarding is relay-only
+  work, measured at **0.4s** against the Accessibility path's tens of seconds, and it
+  steals no focus. That is what lets the phone open the tab from the same tap:
+  WebKit drops a tap's activation after a few seconds, so `window.open` lands for
+  this path and is refused for a cold start, which is why the Open control stays on
+  screen and a refused window changes nothing.
   A discovered allocation is cached per workspace, and a **stopped** one has no
   allocation to cache, so the reads also share a single 5s `ps` snapshot: the phone
   polls this state every 2.5s per open chat and each snapshot costs ~650 kB and

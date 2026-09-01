@@ -5,6 +5,19 @@ import { useDevServer } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { useApp } from '../store.ts'
 
+/**
+ * Open the forward the tap just created. Safari drops a tap's activation after a
+ * few seconds, so this lands for a server that was already running (about a
+ * second) and is refused for a cold start that spent half a minute in Conductor's
+ * UI. The Open control is on screen for that case, and a refusal changes nothing.
+ * A backgrounded app is left alone: pulling someone into a browser tab minutes
+ * later is not what they tapped for.
+ */
+function openForward(url: string) {
+	if (document.visibilityState !== 'visible') return
+	window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 const controlClass =
 	'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40'
 
@@ -25,6 +38,7 @@ export function DevServerControls({ workspaceId }: { workspaceId: string }) {
 			const result = running ? await client.startDevServer(workspaceId) : await client.stopDevServer(workspaceId)
 			queryClient.setQueryData(['dev-server', workspaceId], result)
 			if (!result.ok) setError(result.error ?? `Could not ${running ? 'start' : 'stop'} the dev server`)
+			else if (running && result.url) openForward(result.url)
 		} catch (err) {
 			setError(err instanceof Error ? err.message : `Could not ${running ? 'start' : 'stop'} the dev server`)
 		} finally {

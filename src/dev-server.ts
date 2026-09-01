@@ -634,6 +634,24 @@ export class DevServerController {
 				}
 			}
 			let port = await this.portFor(workspace.id)
+			// A task already listening needs no button. Forwarding it touches only
+			// Tailscale and this relay, so it costs about a second, steals no focus
+			// from the Mac, and stays inside the tap activation a phone can open a
+			// tab with. Pressing Run here would also assert a pane for a press it
+			// then decides not to make.
+			if (port && (await tcpOpen(port))) {
+				try {
+					await this.forward(workspace.id, port)
+					return { ok: true, ...(await this.state(workspace)), changed: false }
+				} catch (err) {
+					return {
+						ok: false,
+						...(await this.state(workspace)),
+						changed: false,
+						error: err instanceof Error ? err.message : String(err)
+					}
+				}
+			}
 			const run = await setRunTask(workspace, true)
 			if (!run.ok) return { ok: false, ...(await this.state(workspace)), error: run.error }
 			port ??= run.ports?.[0] ?? null

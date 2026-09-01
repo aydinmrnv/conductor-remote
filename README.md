@@ -225,7 +225,9 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   presses Conductor's selected Run task, waits for its allocated
   `CONDUCTOR_PORT`, and exposes it at a tailnet-only HTTPS URL. Open and Stop
   controls appear once it is running; Stop uses Conductor's own button and
-  removes only this relay's Serve mapping. This requires a Run task configured
+  removes only this relay's Serve mapping. Forwarding a server that is already up
+  presses nothing in Conductor, so it takes about a second and opens the tab from
+  that same tap. This requires a Run task configured
   in Conductor and Tailscale on the viewing device, even when the relay itself
   uses public Funnel.
 - ✅ **Send prompt** — two strategies:
