@@ -264,7 +264,7 @@ Two asymmetric halves — keep them separate:
        and the whole ladder below exists only for a Conductor that doesn't answer
        it. Falling down that ladder: ask whether we're *already there*
        (`atTargetWorkspace`) — the pane header answers in ~0.5s where finding the
-       row to press costs ~10s — then press its sidebar row (an `AXLink` named
+       row to press costs ~1s — then press its sidebar row (an `AXLink` named
        "&lt;repo&gt; &lt;title&gt; +adds -dels"). No keystrokes at all, so nothing
        can be swallowed by a focused field. Only *rendered* rows exist in the AX
        tree, so a **collapsed sidebar section is invisible** — and the row title
@@ -394,12 +394,33 @@ Two asymmetric halves — keep them separate:
     **Workspace status** (`setWorkspaceStatus`, `POST /api/workspaces/:id/status`)
     is the one write that touches no pane at all — it right-clicks the workspace's
     *sidebar row* (`AXShowMenu`), so what's on screen never changes. Conductor
-    offers this nowhere else: **the menu bar has no status command and the palette
-    has none either**, so the row menu (Mark as unread · Pin · Set status · Rename
-    · Copy link · Archive) is the only lever, and a collapsed sidebar section —
-    which hides the row from Accessibility entirely — is reported rather than
-    worked around, because there is no fallback to fall back to. Three things bite:
-    the row must be **scrolled into view** (`AXScrollToVisible`) or `AXShowMenu`
+    offers this nowhere else in its normal UI: **the menu bar has no status command
+    and the palette has none either**, so the row menu (Mark as unread · Pin · Set
+    status · Rename · Copy link · Archive) is the only production-safe lever. (A
+    version-hashed workspace-service export is callable from Web Inspector, and a
+    DOM app-actions bridge is present but internal-only; both are documented in
+    `FINDINGS.md`, and neither is a stable external actuator.) With no fallback to
+    fall back to, a
+    **collapsed sidebar section** — which renders no rows, so its workspaces are
+    invisible to Accessibility — is opened rather than reported: `expandSections`
+    presses every folded header, the row scan runs again, and `restoreSections`
+    folds back exactly what it opened, since the one thing this write promises is
+    that the sidebar is where you left it. Two things make that safe. A section is
+    read as folded by **shape, not by a chevron** (the webview exposes none): the
+    rows are *siblings* of the header, so a header followed by an `AXLink` is open
+    and one followed by its count badge, the next header, or nothing is shut. And
+    what is carried across the write is the header's **name, never its element** —
+    a System Events reference is an index into a tree that the status change
+    re-renders, so folding back by handle would press whatever inherited the slot.
+    The list itself is found by the same kind of test, its direct children being
+    *only* `AXLink` and `AXStaticText`; the transcript hangs off the same web area
+    and holds links of its own, so "the element with links in it" would hand back a
+    message bubble and every press would land in one. One thing stays ambiguous and
+    is left that way: a section holding *no* workspaces looks exactly like a folded
+    one, so it gets opened and folded back for nothing — two presses that change
+    nothing on screen, against no way to tell the two apart through Accessibility.
+    Three more things bite: the row must be **scrolled into view**
+    (`AXScrollToVisible`) or `AXShowMenu`
     succeeds and draws nothing, which is exactly what happens right after a status
     change moves the row to a different group; the submenu opens **nested inside
     the same `AXMenu`** (titled `Set status`) rather than as a sibling, so the
@@ -415,8 +436,18 @@ Two asymmetric halves — keep them separate:
     caveat when testing: `uiTurn` serializes *our* UI operations, not the human's,
     and an open menu dies the moment someone clicks elsewhere — so a run that fails
     while the user is at the Mac is contention, not a bug, and the answer is the
-    ask-first rule below (Traps), never a re-run. Uncontended it is 6/6 at
-    ~11s; typing in Conductor at the same time made it look flaky.
+    ask-first rule below (Traps), never a re-run. Uncontended it was 6/6 at ~11s;
+    typing in Conductor at the same time made it look flaky. It is faster now, and
+    the reason is worth keeping: **finding the row used to be one Apple event per
+    row**, which is 15s across the 50 workspaces here — more, on its own, than the
+    whole write's old 25s budget, and what made the first cut of the section
+    expansion time out. `sidebarRowsAndNames` reads every row's name in **two**
+    events off the list element instead (~1s), which is only safe because the
+    references and the names are two reads: the chosen row is asked its name again
+    and must still answer the one it was picked for, since a sidebar that
+    re-rendered between them shifts the index and lands the status on a neighbour.
+    Measured after that, 2026-09-01: 8.2s through a folded section, 5.4s through an
+    open one, both confirmed in the DB.
 
     **Stopping a turn** (`stopTurn`, `POST /api/sessions/:id/stop`) is the one
     write here that is a **keystroke on purpose**, against the file's own

@@ -90,6 +90,118 @@ never runs. Left as an opt-in, clearly-labeled experiment
 (`UNSAFE_DB_WRITE=1` → `DbQueueActuator`, currently a stub) to be validated
 only by live observation, since it risks racing the app's writer.
 
+### ✗ Raw DB write for workspace status — measured, and it is a ghost
+The same question for `workspaces.manual_status`, which is pure sidebar state
+rather than a dispatch trigger, so the "record, not trigger" argument above does
+not apply to it. Everything about the *write* is easy: the file is `-rw-r--r--`
+and ours, the column is plain `TEXT` with no trigger and no constraint,
+**Conductor does not even bump `updated_at`** on a status change (a row flipped
+twice through the app's own menu still read `2026-05-09`), and there is no cloud
+sync to desync — `organization_id` and `creator_user_id` are null on all 2115
+workspaces here, and the outboxes are for messages and assets. The `UPDATE`
+lands in **0ms** and is never clobbered.
+
+Conductor just never reads it. Measured 2026-09-01 on one live workspace, DB set
+to `backlog` while the app believed `canceled`: unchanged after 90s; unchanged
+after expanding the sidebar section holding it; and unchanged after **opening the
+workspace outright** via its own `conductor://workspace?id=…` link — the pane
+loaded that workspace and computed its diff (`97 files changed +14552 -0`) while
+the sidebar still grouped the row under Canceled. Fifteen minutes and a full
+navigation later the DB still said `backlog` and the UI still said `canceled`.
+(One nudge came back inconclusive rather than negative: pressing **Toggle left
+sidebar** does not unmount the list — 49 rows stayed visible to Accessibility
+right through the "collapsed" state — so it never tested a remount. A process
+restart is the one lever likely to re-read SQLite and was not tried, since two
+agents were working; it is useless as a mechanism anyway.)
+
+So the trap is not that the write fails. It is that **the write succeeds for
+every reader except the one that matters**: `reads.ts` selects `manual_status`
+straight from the row, so the phone would show the new status, confidently and
+wrongly, while the Mac showed the old one. Worse, `server.ts`'s status route
+confirms success by re-reading that same column — a DB-writing actuator would
+confirm against its own write and always return `ok`, turning the one check that
+catches a failed press into a check that can never fail. Hence the AX path
+(`setWorkspaceStatus` in `writes.ts`), at 5-8s, stays.
+
+### △ Frontend workspace service — the missing half of the raw DB write
+Conductor 0.83.1's production frontend answers the ghost-write mystery exactly.
+The real status method does two things inside one serialized workspace action:
+
+```ts
+await db.execute("UPDATE workspaces SET manual_status = ? WHERE id = ?", [status, workspaceId])
+updateCachedWorkspaceForAction(workspaceId, workspace => ({ ...workspace, manualStatus: status }))
+```
+
+The UI mutation then refreshes that workspace and records the
+`workspace_status_changed` metric. A raw SQLite update performs only the first
+line, so the sidebar is not stale accidentally; the live workspace store is the
+authoritative frontend copy until something explicitly refreshes it.
+
+There is a clever diagnostic escape hatch. **Help → Open Debug Tools** works in
+this production build, and its main asset exports the live workspace-service
+singleton. In 0.83.1 that is the version-hashed
+`/assets/index-DdVcOIDT.js` export `U`; a read-only probe confirmed that it has
+both `setWorkspaceManualStatus` and `refreshWorkspace`, and that it returns the
+cached status for a workspace by id. Calling those methods would perform the
+same DB + store mutation as the UI without finding a sidebar row.
+
+That is not the relay's default actuator. Both the asset hash and the minified
+export name can change on every Conductor release, Web Inspector visibly resizes
+the app and must take keyboard focus, and there is no supported external
+JavaScript-evaluation channel. Automating the inspector would therefore replace
+a semantic AX menu operation with coordinates plus private bundle internals. It
+is useful for diagnosis and as a manually enabled experiment; the AX path remains
+the safer shipping mechanism.
+
+### △ Built-in app-actions bridge — one DB flag unlocks it, but the connection won't hold
+The same production UI bundle carries a Playwright-style DOM action loop, and it
+is the most principled route found. Once running, the frontend polls
+`poll_app_action`, runs `execute`/`query`/`explore` requests against its own DOM,
+and returns each result through `submit_app_action_result`. `conductor-runtime
+actions` is the matching localhost HTTP server (`GET /health`, `GET /describe`,
+`POST /execute|/query|/explore`) and writes its port to
+`…/com.conductor.app/logs/latest-actions-server.json`. Locators are `role`,
+`text`, `testId`, `label`, `placeholder`, `css`.
+
+**The gate is a single local DB flag, not an employee account.** Decompiling the
+`renderApp` chunk (brotli-embedded in the Tauri binary) shows the poll loop
+starts on exactly:
+
+```js
+s = !initialLoadInProgress && (isDevMode || settingsByKey.internal_settings_enabled === "true")
+```
+
+The same flag flips the whole internal-user state (it drives
+`configure_sidecar_internal_user`), with no roundhouse or account check anywhere.
+Measured 2026-09-01: writing `internal_settings_enabled='true'` into the
+`settings` table and restarting Conductor started the actions server, and the
+webview connected to it — `/health` read `connected:true`. So the flag alone
+opens both gates: the Rust side (`app_actions.rs` runs
+`SELECT value FROM settings WHERE key='internal_settings_enabled'`) and the
+frontend loop. The earlier "doubly gated" reading was too pessimistic. You do not
+launch the server yourself; the app launches it once the flag is set.
+
+**But the connection does not hold, and that half is Conductor's, not ours.**
+Across app restarts the webview stopped polling and did not reliably re-attach:
+`/health` sat at `connected:false` for minutes while the server was up and idle,
+so no queued `/execute` was ever picked up (`pendingActions:1`, unclaimed). The
+poll loop is perpetual once started (`jFi` loops until aborted, catches errors
+with a 2s backoff), so the fault is in its lifecycle after a reload, which the
+relay cannot reach or repair from outside.
+
+Two more caveats even if it did hold. The `/execute` action set is `click,
+dblclick, fill, clear, check, uncheck, selectOption, hover, focus, blur, press` —
+there is no right-click, and workspace status is a right-click context menu on
+the sidebar row, so that one operation may not be reachable through this API even
+when connected. And the server binds `127.0.0.1` with no auth on `/execute`, so
+enabling it opens an unauthenticated local control surface for the whole UI.
+
+Verdict: a real future path if Conductor ever keeps the automation client
+reliably connected, or ships a supported switch, and the first one to revisit
+then. Today it is not a reliable actuator, so the AX path
+(`setWorkspaceStatus`) stays. The `internal_settings_enabled` row written during
+this test was reverted afterwards.
+
 ### ✓ Sidecar IPC socket — the precise path (opt-in `WRITE_STRATEGY=sidecar`)
 Conductor's agents don't run under the Tauri app directly. A single
 **`conductor-runtime sidecar`** process (child of the app) **parents every live
@@ -124,10 +236,10 @@ was not auto-validated to avoid injecting a prompt into a running agent. The
 socket + auth + protocol *were* validated with the safe read RPCs. Implemented in
 `src/sidecar.ts`; wired as `SidecarActuator` in `src/writes.ts`.
 
-Also on this socket: an `app_actions` HTTP server exists but is gated
-("App actions server is only available for internal users"), and the
-`conductor cli` remains cloud-only (`api.conductor.build`) — both dead for local
-control.
+Also on this socket: the `app_actions` HTTP server above is unlocked by the
+`internal_settings_enabled` DB flag but will not hold a webview connection (see
+that section), while the `conductor cli` remains cloud-only
+(`api.conductor.build`) — neither is a reliable local-control path today.
 
 ### ✓ macOS Accessibility (AppleScript) — the safe default
 `AppleScriptActuator` activates Conductor and pastes+sends the prompt via
