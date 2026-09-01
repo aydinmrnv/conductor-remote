@@ -50,6 +50,7 @@ import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
 import { SendOnce } from './sendonce.ts'
 import { readSettings, writeSettings } from './settings.ts'
+import { withoutWindowEvidence } from './shared.ts'
 import {
 	discardStagedAttachment,
 	materializeStagedAttachments,
@@ -655,6 +656,29 @@ const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 class PayloadTooLargeError extends Error {}
 
 /**
+ * The last thing that happens to an error before it leaves the relay: the diagnostic
+ * tail `windowEvidence()` appends comes off, and the full text goes to the log instead.
+ *
+ * One place rather than the dozen routes that hand back a UI-write failure, for the
+ * same reason `redactSecrets` sits in front of every served log line: a rule applied at
+ * the boundary cannot be forgotten by the next route someone adds. What it prevents is
+ * what a tap on Fork against a locked Mac used to answer with — the sentence, then
+ * "[window server: 6; screen: locked] [processes: conductor=0] [menus: Apple, Conductor,
+ * File, ...]", in 11px red, on a phone that can do nothing with any of it. The evidence
+ * is still the fastest way to tell a wedged Conductor from a hidden window, so it lands
+ * in relay.log, which `/api/logs` serves to the same phone on request.
+ */
+function forTheClient(body: unknown): unknown {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return body
+	const error = (body as { error?: unknown }).error
+	if (typeof error !== 'string') return body
+	const clean = withoutWindowEvidence(error)
+	if (clean === error) return body
+	console.warn(`[relay] ${error}`)
+	return { ...body, error: clean }
+}
+
+/**
  * Successful GETs are conditional + compressed to keep the phone's polling cheap.
  * `no-cache` (not `no-store`) means the browser must revalidate on every tick —
  * the relay still runs the handler and auth each time, so data is never stale;
@@ -662,7 +686,7 @@ class PayloadTooLargeError extends Error {}
  * ~1 KB go out gzipped. Errors and non-GETs stay unconditional `no-store`.
  */
 function json(req: http.IncomingMessage, res: http.ServerResponse, status: number, body: unknown): void {
-	const payload = Buffer.from(JSON.stringify(body))
+	const payload = Buffer.from(JSON.stringify(forTheClient(body)))
 	if (status !== 200 || req.method !== 'GET') {
 		res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
 		return void res.end(payload)
@@ -932,15 +956,21 @@ const server = http.createServer(async (req, res) => {
 			// instead of asking someone to type a network name from memory on a phone keyboard.
 			// `ssid` is best-effort and often null (macOS gates it behind Location Services).
 			if (isRoute(routes.settings, req.method, pathname)) {
-				// Four subprocesses, all concurrent: this is the one route that shells out more
+				// Five subprocesses, all concurrent: this is the one route that shells out more
 				// than once, and serialising them would put the phone's polls behind the sum.
-				const [known, current, autoJoinHotspot, nosleep] = await Promise.all([
+				const [known, current, autoJoinHotspot, nosleep, locked] = await Promise.all([
 					preferredNetworks(),
 					currentSsid(),
 					// macOS's own Auto-join Hotspot setting. On "Never" the Mac won't reach for
 					// your phone unprompted, which no amount of relay code can substitute for.
 					autoJoinHotspotMode(),
-					nosleepState()
+					nosleepState(),
+					// Read here rather than polled: this sheet is where someone goes when the Mac
+					// stopped answering, and a keep-awake window that says "automatic screen lock
+					// is off" beside a Mac that is locked right now reads as the relay lying. The
+					// assertion blocks the *idle* lock; it cannot lift one already up, and a lid
+					// close or a manual lock puts one up whatever it holds.
+					screenLocked()
 				])
 				return json(req, res, 200, {
 					settings: readSettings(),
@@ -951,7 +981,8 @@ const server = http.createServer(async (req, res) => {
 						likelyHotspots: known.filter(looksLikeHotspot),
 						autoJoinHotspot
 					},
-					nosleep: { ...nosleep, maxSeconds: NOSLEEP_MAX_SECONDS }
+					nosleep: { ...nosleep, maxSeconds: NOSLEEP_MAX_SECONDS },
+					screenLocked: locked
 				})
 			}
 

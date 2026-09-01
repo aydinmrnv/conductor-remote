@@ -239,3 +239,39 @@ export function isPreviewableSource(filePath: string): boolean {
 export function isToolResult(e: { role: string; tool?: string; output?: string }): boolean {
 	return e.role === 'tool' && !e.tool && e.output !== undefined
 }
+
+/**
+ * The sentence every locked-Mac refusal starts with (src/conductor.applescript), and
+ * the one thing two sides must agree it means.
+ *
+ * The relay decides control flow on it — `lockBlocked` (src/writes.ts) parks the prompt
+ * rather than burning a phone's retry budget against a screen that will not answer for
+ * hours — and the phone decides what to draw: a link to Screen Sharing, because the
+ * relay will never unlock the Mac itself. Two matchers over one phrase, spelled out in
+ * two files, is how one of them quietly stops matching. macOS's own wording is never
+ * matched anywhere here; this sentence is ours, so it cannot drift under us.
+ */
+export const MAC_LOCKED = 'The Mac is locked'
+
+export function isLockedError(error: string | null | undefined): boolean {
+	return (error ?? '').includes(MAC_LOCKED)
+}
+
+/**
+ * The diagnostic tail `windowEvidence()` (src/conductor.applescript) appends to every
+ * window and lock refusal: the window server's count, the lock state, every process
+ * named Conductor with its window count, and the menu bar titles.
+ *
+ * It exists to separate "genuinely windowless" from "we are addressing the wrong
+ * process", which is a question for the relay's log. It reached the phone as well,
+ * where a tap on Fork against a locked Mac answered with four lines of red text ending
+ * in "[menus: Apple, Conductor, File, Edit, View, Window, Help]" and nothing to act on.
+ * So `json()` in src/server.ts cuts it on the way out and logs the full text instead.
+ *
+ * Anchored on our own format: the whole tail is one run of bracketed groups that starts
+ * at "[window server:", so a single cut takes all of it and never touches a message
+ * that carries none.
+ */
+export function withoutWindowEvidence(error: string): string {
+	return error.replace(/\s*\[window server:.*$/s, '').trim()
+}

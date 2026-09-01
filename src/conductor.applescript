@@ -340,7 +340,7 @@ on activateConductor()
 	-- retry loop polls this cheaply until its deadline, so an unlock mid-budget
 	-- lands the send by itself — that is the observed recovery, not a theory.
 	if (item 1 of firstProbe) < 1 and my screenLocked() is "locked" then
-		error "The Mac is locked - the lock screen hides Conductor from the relay, so a send can't reach it. Unlock the Mac and send again." & my windowEvidence()
+		error "The Mac is locked - the lock screen hides Conductor from the relay, so nothing can be sent or pressed. Unlock the Mac and try again." & my windowEvidence()
 	end if
 	try
 		tell application "Conductor" to activate
@@ -379,14 +379,14 @@ on activateConductor()
 		-- window server can tell the difference, so a window it CAN see blocks the
 		-- restart — this is a human's problem, said in words, not the relay's.
 		if my serverWindowCount() > 0 then
-			if lockState is "locked" then error "The Mac is locked - Conductor's window is open behind the lock screen, where the relay can't reach it. Unlock the Mac and send again." & ev
+			if lockState is "locked" then error "The Mac is locked - Conductor's window is open behind the lock screen, where the relay can't reach it. Unlock the Mac and try again." & ev
 			error "Conductor's window exists but is not reachable - it is probably full screen on another Space. Take Conductor out of full screen, then send again." & ev
 		end if
 		-- No window anywhere and the lock screen up: don't restart. Every relaunch
 		-- fired behind the lock screen in the live incident came up windowless, and
 		-- the last one came up wedged — answering deep links, hanging every AX
 		-- read. A restart here is not a lever, it is how the wreckage happened.
-		if lockState is "locked" then error "The Mac is locked and Conductor has no window. Relaunching behind the lock screen is what leaves it wedged, so the relay won't - unlock the Mac and send again." & ev
+		if lockState is "locked" then error "The Mac is locked and Conductor has no window. Relaunching behind the lock screen is what leaves it wedged, so the relay won't - unlock the Mac and try again." & ev
 		set restartError to my restartConductor()
 		if restartError is not "" then error restartError & ev
 		error "Conductor was running with no window and ignored both reopen and a Dock click, so the relay restarted it. Give it a few seconds and send again." & ev

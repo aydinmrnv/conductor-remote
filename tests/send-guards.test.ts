@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { withoutWindowEvidence } from '../src/shared.ts'
 import { lockBlocked, retryWontHelp, sendNeverStarted } from '../src/writes.ts'
 
 /**
@@ -16,10 +17,6 @@ import { lockBlocked, retryWontHelp, sendNeverStarted } from '../src/writes.ts'
  *  - `retryWontHelp` too wide stops retrying a send a second attempt would land.
  */
 const ERRORS = {
-	locked:
-		"The Mac is locked - the lock screen hides Conductor from the relay, so a send can't reach it. Unlock the Mac and send again.",
-	lockedNoWindow:
-		"The Mac is locked and Conductor has no window. Relaunching behind the lock screen is what leaves it wedged, so the relay won't - unlock the Mac and send again.",
 	notTrusted: 'Conductor is not trusted for Accessibility',
 	automationRefused: 'macOS blocked the relay from controlling the UI',
 	noSession: 'no session id to target',
@@ -30,6 +27,20 @@ const ERRORS = {
 	timeout: 'Conductor took too long to respond',
 	noWindow: "Can't get window 1 of process Conductor. Invalid index."
 }
+
+/**
+ * Every lock refusal the UI script can raise, read out of the script rather than copied
+ * here. Copies were the point of failure: three sentences in AppleScript, one predicate
+ * in TypeScript that parks on them, and nothing connecting the two — so rewording one
+ * (they are phone-facing prose, and they get reworded) silently stops the parking and
+ * hands a locked Mac a red failure instead.
+ */
+const LOCK_ERRORS = (() => {
+	const source = readFileSync(path.join(import.meta.dirname, '..', 'src', 'conductor.applescript'), 'utf8')
+	const found = [...source.matchAll(/error "(The Mac is locked[^"]*)"/g)].map(m => m[1])
+	if (found.length < 3) throw new Error(`expected the script's lock refusals, found ${found.length}`)
+	return found
+})()
 
 /** The sentence the send script itself errors with, read out of the script. */
 const composerHeld = (() => {
@@ -43,6 +54,7 @@ describe('send failure predicates', () => {
 	test('only a composer-held run counts as having sent nothing', () => {
 		expect(sendNeverStarted(composerHeld)).toBe(true)
 		for (const [name, error] of Object.entries(ERRORS)) expect(sendNeverStarted(error), name).toBe(false)
+		for (const error of LOCK_ERRORS) expect(sendNeverStarted(error), error).toBe(false)
 	})
 
 	test('a run that reported no error keeps its confirm window', () => {
@@ -50,15 +62,22 @@ describe('send failure predicates', () => {
 		expect(sendNeverStarted('')).toBe(false)
 	})
 
-	test('both lock refusals park, nothing else does', () => {
-		expect(lockBlocked(ERRORS.locked)).toBe(true)
-		expect(lockBlocked(ERRORS.lockedNoWindow)).toBe(true)
-		for (const [name, error] of Object.entries(ERRORS)) {
-			if (name.startsWith('locked')) continue
-			expect(lockBlocked(error), name).toBe(false)
-		}
+	test('every lock refusal the script can raise parks, nothing else does', () => {
+		for (const error of LOCK_ERRORS) expect(lockBlocked(error), error).toBe(true)
+		// The evidence tail is cut before the phone sees it, so the predicate has to hold
+		// on both shapes — the relay parks on the raw one, the phone links to the unlock
+		// off the cut one.
+		for (const error of LOCK_ERRORS) expect(lockBlocked(withoutWindowEvidence(error)), error).toBe(true)
+		for (const [name, error] of Object.entries(ERRORS)) expect(lockBlocked(error), name).toBe(false)
 		expect(lockBlocked(composerHeld)).toBe(false)
 		expect(lockBlocked(undefined)).toBe(false)
+	})
+
+	test('only the window evidence is cut, and only where it is', () => {
+		const raw = `${LOCK_ERRORS[0]} [window server: 6; screen: locked] [processes: conductor=0] [menus: Apple, Conductor]`
+		expect(withoutWindowEvidence(raw)).toBe(LOCK_ERRORS[0])
+		for (const [name, error] of Object.entries(ERRORS)) expect(withoutWindowEvidence(error), name).toBe(error)
+		expect(withoutWindowEvidence(composerHeld)).toBe(composerHeld)
 	})
 
 	test('only refusals a retry cannot fix stop the loop', () => {
@@ -69,6 +88,8 @@ describe('send failure predicates', () => {
 		for (const name of ['paletteMiss', 'noStrip', 'tabMissing', 'timeout', 'noWindow'] as const) {
 			expect(retryWontHelp(ERRORS[name]), name).toBe(false)
 		}
+		// A lock is not terminal: the caller parks it, and an unlock mid-budget lands it.
+		for (const error of LOCK_ERRORS) expect(retryWontHelp(error), error).toBe(false)
 		expect(retryWontHelp(composerHeld)).toBe(false)
 		expect(retryWontHelp(undefined)).toBe(false)
 	})

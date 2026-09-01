@@ -336,6 +336,8 @@ export interface SettingsResponse {
 		autoJoinHotspot: string | null
 	}
 	nosleep: NoSleepStatus
+	/** Is the lock screen up right now — `null` when the probe itself couldn't say. */
+	screenLocked: boolean | null
 }
 
 /** GET/PATCH /api/prefs — the host's durable copy of local-first PWA state. */

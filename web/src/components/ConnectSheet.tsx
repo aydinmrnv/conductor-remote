@@ -7,6 +7,7 @@ import { cn } from '../lib/cn.ts'
 import type { SettingsResponse } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { QRCode } from './QRCode.tsx'
+import { UnlockLink } from './ui.tsx'
 
 /**
  * Connection sheet — shows a QR + copyable link for THIS device's token URL so you can re-scan it onto
@@ -298,6 +299,10 @@ function MacRow() {
 	}
 
 	const nosleep = data?.nosleep
+	// The one thing that stops every write, and the one the card used to talk over: a
+	// keep-awake window blocks the idle lock, so it cannot lift a lock already up and
+	// does not survive a lid close or a manual lock.
+	const locked = data?.screenLocked === true
 	const known = data?.wifi.known ?? []
 	const fallback = data?.settings.fallbackSsids[0] ?? ''
 
@@ -353,12 +358,19 @@ function MacRow() {
 						? 'Run `conductor-remote nosleep setup` on the Mac to install or refresh the helper.'
 						: nosleep.armed
 							? nosleep.preventsScreenLock
-								? `Awake ${untilLabel(nosleep.until)}, lid closed. Automatic screen lock is off; anyone at the Mac can use it.`
+								? locked
+									? `Awake ${untilLabel(nosleep.until)}, lid closed. It blocks the idle screen lock from starting; it can’t lift one already up.`
+									: `Awake ${untilLabel(nosleep.until)}, lid closed. The idle screen lock is off; anyone at the Mac can use it. Shutting the lid or locking it by hand still locks the session.`
 								: `Awake ${untilLabel(nosleep.until)}, lid closed. Sends park if macOS locks.`
 							: goingToSleep
 								? 'The lid is shut, so the Mac is going to sleep now — this app will be unreachable until you wake it.'
 								: 'Stops system sleep. Screen-lock behavior follows the Mac CLI configuration.'}
 			</p>
+			{locked ? (
+				<p className="text-xs text-del">
+					The Mac is locked right now, so writes park until it’s unlocked. <UnlockLink />
+				</p>
+			) : null}
 
 			<div className="border-t border-border pt-2.5">
 				<div className="flex items-center justify-between gap-3">
