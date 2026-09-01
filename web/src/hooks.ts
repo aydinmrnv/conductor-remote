@@ -6,6 +6,7 @@ import { ApiError, client } from './lib/api.ts'
 import { localPrefsGeneration, localPrefsSnapshot, mergeRemotePrefs, subscribeLocalPrefs } from './lib/prefs.ts'
 import type { PushSupport } from './lib/push.ts'
 import { currentSubscription, deviceLabel, pushSupport, subscribe, syncSubscription, toJson } from './lib/push.ts'
+import { hasSelection, overSelection } from './lib/selection.ts'
 import { mergeEntries } from './lib/transcript-merge.ts'
 import type { ModelCatalogResponse, Session, TranscriptEntry } from './lib/types.ts'
 import { useApp } from './store.ts'
@@ -58,6 +59,7 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 		let tracking = false
 		let horizontal = false
 		let bailed = false
+		let selecting = false
 		let startX = 0
 		let startY = 0
 		let width = 0
@@ -105,9 +107,14 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 				const right = drawer()?.getBoundingClientRect().right ?? 0
 				if (t.clientX > right) return // drag must start over the drawer to close it
 			} else if (t.clientX > EDGE || overScrolledContent(e.target)) return // …or at the edge to open it
+			// A selection handle sits within reach of the left margin often enough, and
+			// dragging one is a horizontal drag we would `preventDefault` — cancelling the
+			// selection and sliding the drawer out in its place.
+			if (overSelection(t.clientX, t.clientY)) return
 			tracking = true
 			horizontal = false
 			bailed = false
+			selecting = hasSelection()
 			startX = t.clientX
 			startY = t.clientY
 			width = drawer()?.offsetWidth ?? 0
@@ -115,6 +122,12 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 
 		const onMove = (e: TouchEvent) => {
 			if (!tracking || bailed) return
+			// Text selected under a finger that arrived with none is a long press, not a
+			// swipe: the drag from here belongs to the handles.
+			if (!selecting && hasSelection()) {
+				bailed = true
+				return
+			}
 			const t = e.touches[0]
 			const dx = t.clientX - startX
 			const dy = t.clientY - startY
