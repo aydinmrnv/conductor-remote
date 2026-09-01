@@ -2363,6 +2363,102 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@opentui/core-darwin-arm64@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-darwin-arm64@npm:0.4.5"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@opentui/core-darwin-x64@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-darwin-x64@npm:0.4.5"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@opentui/core-linux-arm64-musl@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-linux-arm64-musl@npm:0.4.5"
+  conditions: os=linux & cpu=arm64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"@opentui/core-linux-arm64@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-linux-arm64@npm:0.4.5"
+  conditions: os=linux & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@opentui/core-linux-x64-musl@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-linux-x64-musl@npm:0.4.5"
+  conditions: os=linux & cpu=x64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"@opentui/core-linux-x64@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-linux-x64@npm:0.4.5"
+  conditions: os=linux & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@opentui/core-win32-arm64@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-win32-arm64@npm:0.4.5"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@opentui/core-win32-x64@npm:0.4.5":
+  version: 0.4.5
+  resolution: "@opentui/core-win32-x64@npm:0.4.5"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@opentui/core@npm:^0.4.1":
+  version: 0.4.5
+  resolution: "@opentui/core@npm:0.4.5"
+  dependencies:
+    "@opentui/core-darwin-arm64": "npm:0.4.5"
+    "@opentui/core-darwin-x64": "npm:0.4.5"
+    "@opentui/core-linux-arm64": "npm:0.4.5"
+    "@opentui/core-linux-arm64-musl": "npm:0.4.5"
+    "@opentui/core-linux-x64": "npm:0.4.5"
+    "@opentui/core-linux-x64-musl": "npm:0.4.5"
+    "@opentui/core-win32-arm64": "npm:0.4.5"
+    "@opentui/core-win32-x64": "npm:0.4.5"
+    bun-ffi-structs: "npm:0.2.4"
+    diff: "npm:9.0.0"
+    marked: "npm:17.0.1"
+    string-width: "npm:7.2.0"
+    strip-ansi: "npm:7.1.2"
+  peerDependencies:
+    web-tree-sitter: 0.25.10
+  dependenciesMeta:
+    "@opentui/core-darwin-arm64":
+      optional: true
+    "@opentui/core-darwin-x64":
+      optional: true
+    "@opentui/core-linux-arm64":
+      optional: true
+    "@opentui/core-linux-arm64-musl":
+      optional: true
+    "@opentui/core-linux-x64":
+      optional: true
+    "@opentui/core-linux-x64-musl":
+      optional: true
+    "@opentui/core-win32-arm64":
+      optional: true
+    "@opentui/core-win32-x64":
+      optional: true
+  checksum: 10c0/014f8d7836f96a2dac5399a6dd76c3a7203d48b8f6ec6f401905b340ccd7b7df12f0cd91980eb50143ee33e1178f1f2d7ca18bd5feaa469278bdee5d4578d821
+  languageName: node
+  linkType: hard
+
 "@oxc-project/types@npm:=0.146.0":
   version: 0.146.0
   resolution: "@oxc-project/types@npm:0.146.0"
@@ -2394,6 +2490,13 @@ __metadata:
     "@pnpm/network.ca-file": "npm:^1.0.1"
     config-chain: "npm:^1.1.11"
   checksum: 10c0/74a276b4acf609edd60300afef3e5c632ecf9f3e9b9da486314edd0478964815f4a03e9c9b1e0cb1f38e2acfef07e5c2d3211527b8f97a0c44cbb040f2755e5c
+  languageName: node
+  linkType: hard
+
+"@resvg/resvg-wasm@npm:^2.6.2":
+  version: 2.6.2
+  resolution: "@resvg/resvg-wasm@npm:2.6.2"
+  checksum: 10c0/74eb061c53510dad516e42375d1802a5b70ff531abd3c858921178add5acd136382a2f0afc1bd83fa72ec2c2c9bd40a636000572a152b53a9b04e9c131ba0223
   languageName: node
   linkType: hard
 
@@ -3566,6 +3669,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"ansi-regex@npm:^6.0.1":
+  version: 6.3.0
+  resolution: "ansi-regex@npm:6.3.0"
+  checksum: 10c0/bc047786d0531f1f22d1e22e9863e8554488a399f1ee5270b753efa6de938a788d27456f2b256770f11fdd8b1e847483bc1b55ddc2b3ffe82ec45c875292c651
+  languageName: node
+  linkType: hard
+
 "ansi-regex@npm:^6.1.0, ansi-regex@npm:^6.2.2":
   version: 6.2.2
   resolution: "ansi-regex@npm:6.2.2"
@@ -3869,6 +3979,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"bun-ffi-structs@npm:0.2.4":
+  version: 0.2.4
+  resolution: "bun-ffi-structs@npm:0.2.4"
+  peerDependencies:
+    typescript: ^5
+  checksum: 10c0/ac947f9dc35404dafd2c372682a9254bf35aa195a72111a5c3bfd22638d9920cb0ad7b932cd1a28420886dd6be79f1cc1c8727481cffd759b54b0c6830cdae21
+  languageName: node
+  linkType: hard
+
 "cacache@npm:^20.0.0, cacache@npm:^20.0.1, cacache@npm:^20.0.4":
   version: 20.0.4
   resolution: "cacache@npm:20.0.4"
@@ -4102,6 +4221,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"clone@npm:^1.0.2":
+  version: 1.0.4
+  resolution: "clone@npm:1.0.4"
+  checksum: 10c0/2176952b3649293473999a95d7bebfc9dc96410f6cbd3d2595cf12fd401f63a4bf41a7adbfd3ab2ff09ed60cb9870c58c6acdd18b87767366fabfc163700f13b
+  languageName: node
+  linkType: hard
+
 "clsx@npm:^2.1.1":
   version: 2.1.1
   resolution: "clsx@npm:2.1.1"
@@ -4205,6 +4331,7 @@ __metadata:
     husky: "npm:^9.1.7"
     jsqr: "npm:^1.4.0"
     lucide-react: "npm:^0.563.0"
+    numux: "npm:^2.18.0"
     react: "npm:^19.2.4"
     react-dom: "npm:^19.2.4"
     react-markdown: "npm:^10.1.0"
@@ -4472,6 +4599,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"defaults@npm:^1.0.3":
+  version: 1.0.4
+  resolution: "defaults@npm:1.0.4"
+  dependencies:
+    clone: "npm:^1.0.2"
+  checksum: 10c0/9cfbe498f5c8ed733775db62dfd585780387d93c17477949e1670bfcfb9346e0281ce8c4bf9f4ac1fc0f9b851113bd6dc9e41182ea1644ccd97de639fa13c35a
+  languageName: node
+  linkType: hard
+
 "define-data-property@npm:^1.0.1, define-data-property@npm:^1.1.4":
   version: 1.1.4
   resolution: "define-data-property@npm:1.1.4"
@@ -4514,6 +4650,13 @@ __metadata:
   dependencies:
     dequal: "npm:^2.0.0"
   checksum: 10c0/e0928ab8f94c59417a2b8389c45c55ce0a02d9ac7fd74ef62d01ba48060129e1d594501b77de01f3eeafc7cb00773819b0df74d96251cf20b31c5b3071f45c0e
+  languageName: node
+  linkType: hard
+
+"diff@npm:9.0.0":
+  version: 9.0.0
+  resolution: "diff@npm:9.0.0"
+  checksum: 10c0/a971cc88f66071a33bd3942db2f51b57d484e9856265ae45cf44fb28ab2fde91f132d9c26d8be0fb6082d2be94d29e1295c1adb251b7461935d6a2dd304cd161
   languageName: node
   linkType: hard
 
@@ -5301,6 +5444,22 @@ __metadata:
     es-errors: "npm:^1.3.0"
     get-intrinsic: "npm:^1.2.6"
   checksum: 10c0/d6a7d6afca375779a4b307738c9e80dbf7afc0bdbe5948768d54ab9653c865523d8920e670991a925936eb524b7cb6a6361d199a760b21d0ca7620194455aa4b
+  languageName: node
+  linkType: hard
+
+"ghostty-opentui@npm:^1.5.0":
+  version: 1.5.0
+  resolution: "ghostty-opentui@npm:1.5.0"
+  dependencies:
+    "@resvg/resvg-wasm": "npm:^2.6.2"
+    strip-ansi: "npm:^7.1.2"
+    wcwidth: "npm:^1.0.1"
+  peerDependencies:
+    "@opentui/core": "*"
+  peerDependenciesMeta:
+    "@opentui/core":
+      optional: true
+  checksum: 10c0/40752557fba9a00437470b05d936aaf1686bd0ea6c139ee526a57b65113654262a9cefc8905775224eebd00e6cc299ec6f1c378e85280718a4adeafdc17ef33d
   languageName: node
   linkType: hard
 
@@ -6927,6 +7086,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"marked@npm:17.0.1":
+  version: 17.0.1
+  resolution: "marked@npm:17.0.1"
+  bin:
+    marked: bin/marked.js
+  checksum: 10c0/0197337aad33882308cea52d2c86d7b830a89be729a4010a26a488ae1c224cdc7520b8cce056832a81a127fc39a3827f45e3865c1ff257324cb553cb06ce0e57
+  languageName: node
+  linkType: hard
+
 "marked@npm:^15.0.0":
   version: 15.0.12
   resolution: "marked@npm:15.0.12"
@@ -7998,6 +8166,18 @@ __metadata:
     npm: bin/npm-cli.js
     npx: bin/npx-cli.js
   checksum: 10c0/13471a2e548c295044d16f4a117387edb69ee2e41e016a914a3a32739514252069c7213399d196fd7a906488503dc61a0cd5cd25afddf696a2048888ae70c0a6
+  languageName: node
+  linkType: hard
+
+"numux@npm:^2.18.0":
+  version: 2.18.0
+  resolution: "numux@npm:2.18.0"
+  dependencies:
+    "@opentui/core": "npm:^0.4.1"
+    ghostty-opentui: "npm:^1.5.0"
+  bin:
+    numux: dist/bin.js
+  checksum: 10c0/d2c9c2200d9bc11a5bd3667080aab4205dc88e8161b46642b500a082203f29dbcff12c95c02a57fa6d7c2c6522928c7e1113da56daba57b036a39a5650402b5e
   languageName: node
   linkType: hard
 
@@ -9569,6 +9749,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"string-width@npm:7.2.0, string-width@npm:^7.0.0, string-width@npm:^7.2.0":
+  version: 7.2.0
+  resolution: "string-width@npm:7.2.0"
+  dependencies:
+    emoji-regex: "npm:^10.3.0"
+    get-east-asian-width: "npm:^1.0.0"
+    strip-ansi: "npm:^7.1.0"
+  checksum: 10c0/eb0430dd43f3199c7a46dcbf7a0b34539c76fe3aa62763d0b0655acdcbdf360b3f66f3d58ca25ba0205f42ea3491fa00f09426d3b7d3040e506878fc7664c9b9
+  languageName: node
+  linkType: hard
+
 "string-width@npm:^4.1.0, string-width@npm:^4.2.0, string-width@npm:^4.2.3":
   version: 4.2.3
   resolution: "string-width@npm:4.2.3"
@@ -9577,17 +9768,6 @@ __metadata:
     is-fullwidth-code-point: "npm:^3.0.0"
     strip-ansi: "npm:^6.0.1"
   checksum: 10c0/1e525e92e5eae0afd7454086eed9c818ee84374bb80328fc41217ae72ff5f065ef1c9d7f72da41de40c75fa8bb3dee63d92373fd492c84260a552c636392a47b
-  languageName: node
-  linkType: hard
-
-"string-width@npm:^7.0.0, string-width@npm:^7.2.0":
-  version: 7.2.0
-  resolution: "string-width@npm:7.2.0"
-  dependencies:
-    emoji-regex: "npm:^10.3.0"
-    get-east-asian-width: "npm:^1.0.0"
-    strip-ansi: "npm:^7.1.0"
-  checksum: 10c0/eb0430dd43f3199c7a46dcbf7a0b34539c76fe3aa62763d0b0655acdcbdf360b3f66f3d58ca25ba0205f42ea3491fa00f09426d3b7d3040e506878fc7664c9b9
   languageName: node
   linkType: hard
 
@@ -9681,6 +9861,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"strip-ansi@npm:7.1.2":
+  version: 7.1.2
+  resolution: "strip-ansi@npm:7.1.2"
+  dependencies:
+    ansi-regex: "npm:^6.0.1"
+  checksum: 10c0/0d6d7a023de33368fd042aab0bf48f4f4077abdfd60e5393e73c7c411e85e1b3a83507c11af2e656188511475776215df9ca589b4da2295c9455cc399ce1858b
+  languageName: node
+  linkType: hard
+
 "strip-ansi@npm:^6.0.0, strip-ansi@npm:^6.0.1":
   version: 6.0.1
   resolution: "strip-ansi@npm:6.0.1"
@@ -9690,7 +9879,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"strip-ansi@npm:^7.1.0":
+"strip-ansi@npm:^7.1.0, strip-ansi@npm:^7.1.2":
   version: 7.2.0
   resolution: "strip-ansi@npm:7.2.0"
   dependencies:
@@ -10648,6 +10837,15 @@ __metadata:
   version: 4.0.0
   resolution: "walk-up-path@npm:4.0.0"
   checksum: 10c0/fabe344f91387d1d41df230af962ef18bf703dd4178006d55cd6412caacd187b54440002d4d53a982d4f7f0455567dcffb6d3884533c8b2268928eca3ebd8a19
+  languageName: node
+  linkType: hard
+
+"wcwidth@npm:^1.0.1":
+  version: 1.0.1
+  resolution: "wcwidth@npm:1.0.1"
+  dependencies:
+    defaults: "npm:^1.0.3"
+  checksum: 10c0/5b61ca583a95e2dd85d7078400190efd452e05751a64accb8c06ce4db65d7e0b0cde9917d705e826a2e05cc2548f61efde115ffa374c3e436d04be45c889e5b4
   languageName: node
   linkType: hard
 

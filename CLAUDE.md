@@ -829,7 +829,7 @@ Two asymmetric halves — keep them separate:
 ## Commands
 
 ```bash
-yarn verify   # typecheck + lint + Vitest + repository checks — before every commit
+yarn verify   # typecheck + lint + repository checks + Vitest (slowest last) — before every commit
 yarn test     # run the Vitest suite once
 yarn test:watch # rerun affected Vitest tests while editing
 yarn test:coverage # run Vitest with V8 text + HTML coverage reports
@@ -838,7 +838,7 @@ yarn fix      # Biome autofix (format + safe lints)
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
-yarn dev      # Vite :5173 (HMR) proxying /api → relay :8787
+yarn dev      # numux TUI (numux.config.ts): Vite :5173 (HMR) proxying /api → relay :8787
 yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```

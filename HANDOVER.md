@@ -61,7 +61,7 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
 yarn install
 yarn build          # → dist/
 yarn start          # relay serves dist/ + /api  (or `yarn preview` = build+start)
-# dev with HMR:  yarn dev   (Vite :5173 proxying /api → relay :8787)
+# dev with HMR:  yarn dev   (numux TUI: Vite :5173 proxying /api → relay :8787; needs bun)
 # deploy:  yarn deploy      (build + install a login LaunchAgent; yarn service {status,restart,uninstall})
 ```
 
@@ -153,7 +153,8 @@ web/              React PWA (Vite root)
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
   push-sw.js      push / notificationclick handlers, pulled into the generated SW by workbox.importScripts
-scripts/         dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
+numux.config.ts  `yarn dev` — Vite + relay in one numux TUI, on per-workspace ports
+scripts/         gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
                  + qr.ts (dep-free QR of the phone URL, printed by service.ts)
                  + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
                  + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)

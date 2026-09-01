@@ -5,7 +5,7 @@
 	// (which let Node run them unbuilt) and rewrites them to `.js` on emit — one set of sources, both worlds.
 	//
 	// Only the runtime set is emitted (src + the two scripts bin/cli.js dispatches to); dev-only scripts
-	// (dev.ts, gen-icons.ts) are excluded so they don't ship dead references to devDependencies.
+	// (gen-icons.ts) are excluded so they don't ship dead references to devDependencies.
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"noEmit": false,
