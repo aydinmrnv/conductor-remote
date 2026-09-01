@@ -674,7 +674,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'set_workspace_status',
 			description:
-				'Set a workspace’s status in Conductor’s sidebar (backlog, in-progress, in-review, done, canceled). Drives the real UI through the sidebar row menu, but changes nothing on screen. Fails if the sidebar section holding that row is collapsed, because a collapsed row is invisible to Accessibility and there is no fallback.',
+				'Set a workspace’s status in Conductor’s sidebar (backlog, in-progress, in-review, done, canceled). Drives the real UI through the sidebar row menu, but changes nothing on screen. A collapsed section hides its rows from Accessibility, so folded sections are opened, used, and folded back — which makes this run a few seconds longer.',
 			inputSchema: {
 				type: 'object',
 				properties: {

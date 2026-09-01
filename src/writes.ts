@@ -765,9 +765,15 @@ export const WORKSPACE_STATUS_LABELS: Record<string, string> = {
  *
  * Unlike every other write here this one never changes what's on screen: it
  * right-clicks the workspace's *row* (AXShowMenu) and works the menu, so the
- * workspace you were reading stays open. It does need the row to be rendered,
- * which a collapsed sidebar section prevents — that case is reported in words
- * rather than guessed around, because there is no palette command to fall back to.
+ * workspace you were reading stays open. It does need the row to be rendered, and
+ * a collapsed sidebar section renders none — so the script opens the folded
+ * sections itself, looks again, and folds back exactly the ones it opened. That
+ * costs a second sidebar scan, which is affordable only because that scan reads
+ * every row's name in two Apple events rather than one per row (15s → ~1s on a
+ * 50-workspace sidebar; see findSidebarRow). Measured end to end on 2026-09-01:
+ * 8.2s through a folded section, 5.4s through an open one. The budget is 35s
+ * anyway, because sidebarRowsAndNames falls back to the per-row reads when the
+ * list no longer matches its shape, and that path pays the old 15s twice.
  */
 export async function setWorkspaceStatus(workspace: Workspace, status: string): Promise<SendResult> {
 	const label = WORKSPACE_STATUS_LABELS[status]
@@ -787,7 +793,7 @@ return "ok"`.trim()
 						...targetEnvironment,
 						RELAY_SET_STATUS: label
 					},
-					timeout: 25000
+					timeout: 35000
 				})
 			)
 		)
