@@ -103,6 +103,10 @@ export const routes = {
 	diff: param('GET', '/api/workspaces/:workspaceId/diff'),
 	merge: param('POST', '/api/workspaces/:workspaceId/merge'),
 	workspaceStatus: param('POST', '/api/workspaces/:workspaceId/status'),
+	/** Read, start/forward, or stop a local workspace's selected Conductor Run task. */
+	devServer: param('GET', '/api/workspaces/:workspaceId/dev-server'),
+	startDevServer: param('POST', '/api/workspaces/:workspaceId/dev-server'),
+	stopDevServer: param('DELETE', '/api/workspaces/:workspaceId/dev-server'),
 	/** Dismiss a first prompt the relay never managed to deliver (src/firstprompt.ts). */
 	dismissFirstPrompt: param('DELETE', '/api/workspaces/:workspaceId/prompt'),
 

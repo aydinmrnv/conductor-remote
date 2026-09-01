@@ -22,6 +22,7 @@
  */
 
 import type { UpdateStatus } from './autoupdate.ts'
+import type { DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
 import type { CachedModelGroup } from './model-cache.ts'
@@ -45,6 +46,8 @@ export type {
 	ActuatorInfo,
 	CachedModelGroup,
 	DeviceInfo as PushDevice,
+	DevServerResult,
+	DevServerState,
 	IndexStatus as SearchIndexStatus,
 	LogEntry,
 	LogFileInfo,

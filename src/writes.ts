@@ -146,6 +146,15 @@ export interface SendResult {
 	error?: string
 }
 
+export interface RunTaskResult {
+	ok: boolean
+	state?: 'running' | 'stopped'
+	task?: string
+	changed?: boolean
+	ports?: number[]
+	error?: string
+}
+
 /**
  * Where the target chat sits in Conductor's tab strip. `index` is 1-based in
  * `reads.listSessions` order (created_at ASC) — verified to match the strip's
@@ -881,6 +890,48 @@ end tell`.trim()
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
+ * Start or stop the selected workspace Run task through Conductor's own toolbar.
+ *
+ * The task stays owned by Conductor — it appears in the Run panel, inherits the
+ * repository's run mode and environment, and Conductor performs its normal
+ * process-group shutdown. The relay only presses the same Run/Stop button a
+ * person would, after focusing and asserting the target workspace.
+ */
+export async function setRunTask(workspace: Workspace, running: boolean): Promise<RunTaskResult> {
+	if (!focusQuery(workspace)) return { ok: false, error: 'workspace has no branch to focus' }
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+set wantRunning to (system attribute "RELAY_RUN_WANTED") is "1"
+return my setRunTask(wantRunning)`.trim()
+	try {
+		const { stdout } = await withTargetEnvironment(
+			{ workspace, sessionId: workspace.active_session_id },
+			targetEnvironment =>
+				uiTurn(() =>
+					exec('osascript', ['-e', script], {
+						env: {
+							...process.env,
+							...targetEnvironment,
+							RELAY_RUN_WANTED: running ? '1' : '0'
+						},
+						timeout: SEND_ATTEMPT_MS
+					})
+				)
+		)
+		const [state, task, changed, rawPorts = ''] = stdout.trim().split('\t')
+		if (state !== 'running' && state !== 'stopped') throw new Error(`unexpected Run state: ${state || 'empty'}`)
+		const ports = rawPorts
+			.split(',')
+			.map(Number)
+			.filter(port => Number.isInteger(port) && port > 0 && port <= 65535)
+		return { ok: true, state, task, changed: changed === 'true', ports }
+	} catch (err) {
+		return { ok: false, error: osaError(err, 'Conductor took too long to change the Run task') }
 	}
 }
 
