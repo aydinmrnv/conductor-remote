@@ -491,7 +491,13 @@ Two asymmetric halves — keep them separate:
   `-`, `*`, `:`, `AND`, `NEAR` as syntax, so an unquoted apostrophe is a *parse
   error* rather than a poor result — `matchQuery` quotes every token and ORs them,
   leaving BM25 to rank, because someone reaching for a workspace is recalling it and
-  not filtering it. And chunk hits are folded up into **workspaces** by summing only
+  not filtering it. **OR alone loses the query made of common words** (measured
+  2026-09-01: "may i run the", a sentence one chat verifiably held, ranked nowhere in
+  the top 300 chunks — OR rewards word density and nothing rewarded adjacency), so
+  each unquoted run also enters as one OR'd FTS5 phrase term, whose rarity is its
+  weight, and a `"quoted phrase"` — curly `“”` included, which is what iOS sends —
+  is *required*: a typed quote is the one signal the user is filtering after all.
+  And chunk hits are folded up into **workspaces** by summing only
   the best 3, which was measured rather than chosen: searching "removing adding lamp
   manual" for a chat that says "Add by name is gone. Removed the form", summing every
   hit put the right answer **9th** (a 32-message conversation about lamps won on

@@ -103,7 +103,10 @@ export function SearchSheet({
 					{query.trim() ? (
 						<SearchPane query={query} live={live} selectedId={selectedId} onOpen={onOpen} />
 					) : (
-						<Empty>Every workspace on this Mac, archived included — by name, or by something said in the chat.</Empty>
+						<Empty>
+							Every workspace on this Mac, archived included — by name, or by something said in the chat. Quote a
+							“phrase” to require it word for word.
+						</Empty>
 					)}
 				</div>
 			</div>

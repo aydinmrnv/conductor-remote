@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
@@ -92,6 +92,21 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
+	// ⌘K / Ctrl+K opens search from any screen. This component is always mounted —
+	// drawer on phones, static rail on md+ — so the one listener covers the whole app
+	// without a second copy next to the router. It toggles, palette-style, and the
+	// preventDefault keeps Ctrl+K away from the browser's own address-bar search.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+				e.preventDefault()
+				setSearchOpen(o => !o)
+			}
+		}
+		window.addEventListener('keydown', onKey)
+		return () => window.removeEventListener('keydown', onKey)
+	}, [])
+
 	const repoIcons = new Map(workspaces.map(w => [w.repo_name, w.icon] as const))
 	const repos: RepoChoice[] = [
 		...new Set([...workspaces.map(w => w.repo_name).filter((r): r is string => !!r), ...view.repos])
@@ -152,6 +167,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 								type="button"
 								onClick={() => setSearchOpen(true)}
 								aria-label="Search workspaces and chats"
+								title="Search (⌘K)"
 								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
 								<Search size={18} />
