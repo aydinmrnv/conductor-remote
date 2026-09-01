@@ -309,6 +309,68 @@
 	.md input[type="checkbox"] {
 		margin-right: 0.4em;
 	}
+
+	/* Highlight.js token classes (web/src/lib/highlight.ts), drawn from this app's own
+	   palette rather than from a shipped theme: the same six colours the rest of the
+	   phone uses, so a fenced block, a Bash step and a source preview read alike.
+	   Unscoped on purpose — the class prefix is unique, and the three places that show
+	   code sit in different trees. */
+	.hljs-comment,
+	.hljs-quote {
+		color: var(--color-faint);
+		font-style: italic;
+	}
+	.hljs-keyword,
+	.hljs-literal,
+	.hljs-type,
+	.hljs-built_in,
+	.hljs-selector-tag,
+	.hljs-doctag,
+	.hljs-meta .hljs-keyword {
+		color: var(--color-accent);
+	}
+	.hljs-string,
+	.hljs-regexp,
+	.hljs-char.escape_,
+	.hljs-addition,
+	.hljs-meta .hljs-string {
+		color: var(--color-add);
+	}
+	.hljs-number,
+	.hljs-symbol,
+	.hljs-bullet,
+	.hljs-link,
+	.hljs-meta,
+	.hljs-template-variable {
+		color: var(--color-working);
+	}
+	.hljs-title,
+	.hljs-title.class_,
+	.hljs-title.function_,
+	.hljs-name,
+	.hljs-section,
+	.hljs-selector-id,
+	.hljs-selector-class {
+		color: var(--color-done);
+	}
+	.hljs-attr,
+	.hljs-attribute,
+	.hljs-property,
+	.hljs-variable,
+	.hljs-params,
+	.hljs-subst,
+	.hljs-template-tag {
+		color: var(--color-text);
+	}
+	.hljs-deletion {
+		color: var(--color-del);
+	}
+	.hljs-emphasis {
+		font-style: italic;
+	}
+	.hljs-strong {
+		font-weight: 600;
+	}
 }
 
 @keyframes typing {

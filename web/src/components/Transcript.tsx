@@ -5,10 +5,12 @@ import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
+import { languageForTool } from '../lib/highlight.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { latestAssistantForActions } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { Code } from './Code.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
@@ -663,7 +665,7 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 							{e.detail}
 						</ChatLink>
 					) : (
-						<Mono text={e.detail} className="text-muted" />
+						<Mono text={e.detail} className="text-muted" language={languageForTool(e.tool)} />
 					)
 				) : null}
 				{e.output ? (
@@ -694,9 +696,15 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 /** Shared by every mono block in a tool row: the call's input, its output, an error. */
 const MONO = 'whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed [overflow-wrap:anywhere]'
 
-/** Output as it was printed. `text` stays inline, or <pre> would render this file's indentation. */
-function Mono({ text, className }: { text: string; className?: string }) {
-	return <pre className={cn(MONO, className)}>{text}</pre>
+/**
+ * Output as it was printed. `text` stays inline, or <pre> would render this file's indentation.
+ *
+ * `language` colours the block. Only the *open* body passes one: the closed row shows a
+ * single truncated line, so colouring it would buy a comma and cost a tokenise per step
+ * on every chat's first paint — 256 Bash calls in the largest chat on this Mac.
+ */
+function Mono({ text, className, language }: { text: string; className?: string; language?: string | null }) {
+	return <pre className={cn(MONO, className)}>{language ? <Code text={text} language={language} /> : text}</pre>
 }
 
 /** A tool's image, pulled through the relay so the token stays in the header, not the URL. */
