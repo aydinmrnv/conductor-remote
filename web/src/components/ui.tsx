@@ -155,20 +155,7 @@ export function Spinner({ label }: { label?: string }) {
 	)
 }
 
-const AVATAR_TILE = 'grid place-items-center overflow-hidden bg-surface-2 font-semibold text-muted'
-
-/** The tile at a given edge, with the glyph sizes that keep every kind optically equal. */
-function tile(size: number) {
-	return {
-		className: cn(AVATAR_TILE, size >= 32 ? 'rounded-lg' : 'rounded-md'),
-		box: { width: size, height: size },
-		// 18px in the default 32px tile — the size every glyph was drawn at before.
-		glyph: Math.round(size * 0.5625),
-		// An icon file is a solid square and would otherwise fill the tile edge to edge,
-		// reading twice the size of the emoji and lucide glyphs beside it in the same list.
-		pad: Math.round(size * 0.19)
-	}
-}
+const AVATAR_TILE = 'grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 font-semibold text-muted'
 
 /**
  * Repo avatar, mirroring Conductor's resolution: an emoji or named glyph the user
@@ -176,27 +163,17 @@ function tile(size: number) {
  * letter monogram. Takes icon + name rather than a workspace so the repo picker
  * in NewWorkspaceSheet renders exactly the same glyphs as the workspace list.
  */
-export function RepoAvatar({ icon, name, size = 32 }: { icon: RepoIcon | null; name: string; size?: number }) {
-	const { className, box, glyph, pad } = tile(size)
-	const monogram = (
-		<div className={className} style={{ ...box, fontSize: Math.max(10, Math.round(size * 0.375)) }}>
-			{(name.trim()[0] ?? '?').toUpperCase()}
-		</div>
-	)
+export function RepoAvatar({ icon, name }: { icon: RepoIcon | null; name: string }) {
+	const monogram = <div className={cn(AVATAR_TILE, 'text-xs')}>{(name.trim()[0] ?? '?').toUpperCase()}</div>
 	if (!icon) return monogram
 
-	if (icon.kind === 'emoji')
-		return (
-			<div className={cn(className, 'leading-none')} style={{ ...box, fontSize: glyph }}>
-				{icon.value}
-			</div>
-		)
+	if (icon.kind === 'emoji') return <div className={cn(AVATAR_TILE, 'text-lg leading-none')}>{icon.value}</div>
 
 	if (icon.kind === 'named') {
 		const Glyph = LUCIDE_ICONS[icon.value]
 		return Glyph ? (
-			<div className={className} style={box}>
-				<Glyph size={glyph} className="text-muted" />
+			<div className={AVATAR_TILE}>
+				<Glyph size={18} className="text-muted" />
 			</div>
 		) : (
 			monogram
@@ -204,40 +181,29 @@ export function RepoAvatar({ icon, name, size = 32 }: { icon: RepoIcon | null; n
 	}
 
 	// GitHub owner avatar: public, external, no token — loads straight from github.com.
-	// A photo, so it fills the tile; only the icon files get the inset.
 	if (icon.kind === 'github')
 		return (
 			<ImgTile
 				src={`https://github.com/${encodeURIComponent(icon.owner)}.png?size=64`}
 				fit="cover"
-				className={className}
-				style={box}
 				fallback={monogram}
 			/>
 		)
 
 	// Relay-served repo file: fetched with the auth header (token stays out of the URL). Monogram until then.
-	return <RepoFileIcon repoName={name} className={className} style={{ ...box, padding: pad }} fallback={monogram} />
+	return <RepoFileIcon repoName={name} fallback={monogram} />
 }
 
-/** A raster avatar tile that falls back to the monogram if the image fails to load. */
-function ImgTile({
-	src,
-	fit,
-	className,
-	style,
-	fallback
-}: {
-	src: string
-	fit: 'cover' | 'contain'
-	className: string
-	style: CSSProperties
-	fallback: ReactNode
-}) {
+/**
+ * A raster avatar tile that falls back to the monogram if the image fails to load.
+ * The image is inset to the 18px the emoji and lucide glyphs are drawn at, or it fills
+ * the tile edge to edge and reads at nearly twice their size in the same list.
+ */
+function ImgTile({ src, fit, fallback }: { src: string; fit: 'cover' | 'contain'; fallback: ReactNode }) {
 	const [failed, setFailed] = useState(false)
 	if (failed) return <>{fallback}</>
 	return (
-		<div className={className} style={style}>
+		<div className={cn(AVATAR_TILE, 'p-1.5')}>
 			<img
 				src={src}
 				alt=""
@@ -250,18 +216,8 @@ function ImgTile({
 }
 
 /** Repo icon served by the relay, fetched with the auth header. Shows the monogram while loading or on error. */
-function RepoFileIcon({
-	repoName,
-	className,
-	style,
-	fallback
-}: {
-	repoName: string | null
-	className: string
-	style: CSSProperties
-	fallback: ReactNode
-}) {
+function RepoFileIcon({ repoName, fallback }: { repoName: string | null; fallback: ReactNode }) {
 	const { data, isError } = useRepoIcon(repoName)
 	if (!repoName || isError || !data) return <>{fallback}</>
-	return <ImgTile src={data} fit="contain" className={className} style={style} fallback={fallback} />
+	return <ImgTile src={data} fit="contain" fallback={fallback} />
 }
