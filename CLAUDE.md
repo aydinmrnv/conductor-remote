@@ -2,8 +2,9 @@
 
 Phone control panel for **local** Conductor agents: a dependency-free Node relay
 serves an installable React PWA, reads agent state, and relays prompts back into
-Conductor. Deep dives live in [HANDOVER.md](./HANDOVER.md) (status, file map) and
-[FINDINGS.md](./FINDINGS.md) (the Conductor reverse-engineering the design rests on).
+Conductor. Deep dives live in [ARCHITECTURE.md](./ARCHITECTURE.md) (file map, and how
+to re-derive Conductor's internals) and [FINDINGS.md](./FINDINGS.md) (the Conductor
+reverse-engineering the design rests on).
 
 > [!IMPORTANT]
 > This repository supports **local Conductor workspaces on macOS only**. Do not add
@@ -1470,9 +1471,40 @@ bind trap below), not by unit test.
     first paint. `tests/mention-render.test.tsx` renders the chat to static markup for
     the fence trap alone — it caught it — because everything else about it typechecks
     and the failure is silent in both directions.
+- **Releases key off reachable version tags — never rewind `main` after a tagged
+  release.** CI's `release` job runs `semantic-release` on every `main` push: it
+  takes the highest `vX.Y.Z` tag *reachable from `main`* as the last release and
+  bumps from there. Drop an already-released commit from `main` (force-reset /
+  rewind) and its tag goes unreachable — semantic-release recomputes the *same*
+  next version and dies on `git tag vX.Y.Z already exists`, wedging every later
+  release. npm publishes are immutable, so that number is **burned**. Recovery:
+  move the colliding tag onto a commit that *is* on `main` — co-locate it with the
+  current release tag as a skip-marker — so the next run advances past it
+  (`git push origin --force <main-sha>:refs/tags/vX.Y.Z`), then `npm deprecate` the
+  burned version. (This is exactly how the stray `v1.17.0` from a reverted
+  merge-button take was cleared.)
+- **The relay updates itself fine; the phone is what gets stuck.** `src/autoupdate.ts`
+  pulls a new version and serves a fresh `dist/`, but an installed iOS home-screen PWA
+  rarely re-fetches `sw.js` on its own, so it can keep running a stale precached shell
+  while `/api/state` still reports the new relay version — the version *label* comes
+  over the network, the *code* from the SW precache, so they disagree. Three layers
+  answer that, in `web/src/components/ReloadPrompt.tsx` + `public/self-heal.js`:
+  (1) `registerType: 'prompt'` (**not** `autoUpdate`, which reloads mid-compose) plus a
+  60s `registration.update()` poll to discover a waiting worker; (2) a **version gate** —
+  the app bakes its build version in as `__APP_VERSION__` (`vite.config.ts` ▸ `define`,
+  read from the same `package.json` the relay reports), and when `/api/state`'s `version`
+  is ahead it forces an immediate `update()`, so recovery takes one state-poll rather
+  than 60s, and the Connect sheet shows `relay vX · app vY · update pending`;
+  (3) `self-heal.js` runs before the bundle and, if a removed hashed asset fails to load
+  (the relay's SPA fallback answers `/assets/*` with `index.html` as `text/html`, so the
+  MIME check trips), unregisters the SW, clears the caches and hard-reloads with a `_v=`
+  cache-bust. A client too stale to carry *any* of this needs one manual kick (re-add to
+  the home screen); after that it heals itself. There is no `scripts/fix-sw.ts` dance
+  here — plain Vite already gives `index.html` a content-hash precache revision, so a
+  no-op build doesn't re-fire the banner.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
-  are in HANDOVER ▸ "Re-deriving Conductor internals."
+  are in ARCHITECTURE ▸ "Re-deriving Conductor internals."
 
 ## Conventions
 
@@ -1489,7 +1521,7 @@ bind trap below), not by unit test.
   PWA assets at the **repo root** (not under `web/`) so Conductor's repo-icon lookup
   finds them (`vite.config.ts` sets `publicDir: '../public'`); `scripts/` = dev,
   icon-gen, service installer, AppleScript check. `dist/` = build output
-  (gitignored, relay-served).
+  (gitignored, relay-served). Per-file map in [ARCHITECTURE.md](./ARCHITECTURE.md).
 - **Utility scripts** run under plain `node` (default type-stripping), stdlib-only —
   keep them strip-clean too (no param-property constructors/enums/namespaces).
 - **Commit author** is the GitHub noreply address (privacy) — keep it for public commits.

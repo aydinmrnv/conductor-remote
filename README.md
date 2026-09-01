@@ -376,29 +376,20 @@ thing.
 ## Layout
 
 ```
-src/                the Node relay (no build step)
-  server.ts         HTTP router: /api/* (token-gated) + static PWA
-  config.ts         paths, port, Tailscale bind, token, write strategy
-  db.ts             read-only node:sqlite handle to conductor.db
-  reads.ts          workspaces / sessions / messages + worktree resolution
-  transcript.ts     Claude Code SDK stream JSON → phone-renderable entries
-  git.ts            workspace diff vs target branch (incl. untracked)
-  sidecar.ts        Conductor sidecar IPC client (precise write path)
-  writes.ts         Actuator interface + AppleScript (default) + Sidecar (opt-in)
-  dev-server.ts     Conductor Run task + tailnet-only HTTPS forwarding
-  notify.ts         watches session status for ended turns → push; subscription store
-  webpush.ts        Web Push (VAPID + aes128gcm) on node:crypto — no dependencies
-  logbuf.ts         console capture + log-file tail behind /api/logs (token redacted)
-web/                the React PWA (Vite)
-  index.html, src/  app shell, components, hooks, api client
-public/             icon.svg + PWA PNGs (repo-root so Conductor's icon lookup finds them)
-  push-sw.js        push / notification-click handlers, imported into the generated SW
-numux.config.ts     `yarn dev`: Vite + relay in one TUI, on per-workspace ports
-scripts/
-  gen-icons.ts      rasterizes icon.svg → PWA PNGs (sharp)
-  devtools-recon.js invoke-logger — only usable if a future build ships devtools
-dist/               built PWA (gitignored) — what the relay serves
+src/       the Node relay: HTTP router, read-only SQLite reads, git diffs, the
+           AppleScript/sidecar write path, both delivery queues, search, push,
+           the MCP tools, and the keep-awake helper
+web/       the React PWA (Vite root): app shell, components, hooks, api client
+public/    icon.svg + PWA PNGs, at the repo root so Conductor's icon lookup
+           finds them, plus the push and self-heal service-worker halves
+scripts/   icon generation, the macOS LaunchAgent installer, the keep-awake
+           setup, and the repository source validators
+tests/     Vitest unit, contract, concurrency and integration tests
+dist/      built PWA (gitignored) — what the relay serves
 ```
+
+A per-file map, with what each one owns, is in
+[ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Security notes
 
