@@ -278,7 +278,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 						aria-expanded={pickerOpen}
 						className="flex w-full items-center gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 text-left transition active:bg-surface-2"
 					>
-						{selected ? <RepoAvatar icon={selected.icon} name={selected.name} /> : null}
+						{selected ? <RepoAvatar icon={selected.icon} name={selected.name} artwork="inset" /> : null}
 						<span className="min-w-0 flex-1 truncate text-[15px] font-medium">{selected?.name ?? 'Choose a repo'}</span>
 						<ChevronDown size={18} className={cn('shrink-0 text-muted transition', pickerOpen && 'rotate-180')} />
 					</button>
@@ -295,7 +295,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 										}}
 										className="flex w-full items-center gap-3 px-3 py-2 text-left active:bg-surface-2"
 									>
-										<RepoAvatar icon={r.icon} name={r.name} />
+										<RepoAvatar icon={r.icon} name={r.name} artwork="inset" />
 										<span className="min-w-0 flex-1 truncate text-[15px]">{r.name}</span>
 										{r.name === repo ? <Check size={16} className="shrink-0 text-accent" /> : null}
 									</button>
