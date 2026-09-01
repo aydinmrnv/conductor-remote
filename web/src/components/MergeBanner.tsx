@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpRight, Check, GitMerge, Loader2, UploadCloud } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, GitMerge, Loader2, UploadCloud, XCircle } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -16,6 +16,14 @@ interface LocalState {
  *  - push    → uncommitted/unpushed work; button asks the agent to commit & push
  *  - resolve → PR has merge conflicts; button asks the agent to resolve them
  *  - merge   → PR is mergeable; button merges it (gh pr merge)
+ *  - checks  → CI is still running; the same Merge button, drawn plain rather
+ *    than green. GitHub won't stop this merge (no required checks on an
+ *    unprotected base), so the label is the only thing between a tap and a red
+ *    build — but merging ahead of a slow job is a real choice, so it stays a
+ *    choice rather than a disabled button.
+ *  - failed  → CI failed; shown, no action. It has no button for the same reason
+ *    draft doesn't, and it is here at all because the bar used to vanish on this
+ *    state and take the #NN link with it.
  *  - draft   → PR isn't ready; shown, no action
  *  - merged  → the PR landed; shown purple, no action, purely to keep the #NN
  *    link reachable. The bar used to vanish on merge, which took the only route
@@ -23,7 +31,7 @@ interface LocalState {
  *    read it.
  * `push`/`resolve` just send a chat message (like Conductor); `merge` acts.
  */
-type Action = 'push' | 'resolve' | 'merge' | 'draft' | 'merged'
+type Action = 'push' | 'resolve' | 'merge' | 'checks' | 'failed' | 'draft' | 'merged'
 
 function pickAction(ws: Workspace, local?: LocalState): Action | null {
 	// merged outranks local dirt: pushing more onto a landed branch isn't the
@@ -33,6 +41,10 @@ function pickAction(ws: Workspace, local?: LocalState): Action | null {
 	switch (ws.pr_status) {
 		case 'conflicts':
 			return 'resolve'
+		case 'checks_failed':
+			return 'failed'
+		case 'checks_pending':
+			return 'checks'
 		case 'mergeable':
 			return 'merge'
 		case 'draft':
@@ -46,6 +58,8 @@ const STATUS: Record<Action, { label: string; tone: string; icon?: ReactNode }> 
 	push: { label: 'Uncommitted changes', tone: 'text-working', icon: <UploadCloud size={14} /> },
 	resolve: { label: 'Merge conflicts', tone: 'text-muted', icon: <AlertTriangle size={14} /> },
 	merge: { label: 'Ready to merge', tone: 'text-add' },
+	checks: { label: 'Checks running', tone: 'text-working', icon: <Loader2 size={14} className="animate-spin" /> },
+	failed: { label: 'Checks failed', tone: 'text-del', icon: <XCircle size={14} /> },
 	draft: { label: 'Draft', tone: 'text-muted' },
 	merged: { label: 'Merged', tone: 'text-pr-merged', icon: <GitMerge size={14} /> }
 }
@@ -141,16 +155,23 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 
 			<div className="ml-auto flex shrink-0 items-center gap-2">
 				{done && !done.ok ? <span className="max-w-36 truncate text-[11px] text-del">{done.msg}</span> : null}
-				{action === 'draft' || action === 'merged' ? null : action === 'merge' ? (
+				{action === 'merge' || action === 'checks' ? (
 					confirming ? (
 						<>
 							<CancelBtn onClick={() => setConfirming(false)} />
-							<Cta onClick={runMerge} busy={busy} className="bg-add text-black">
+							<Cta
+								onClick={runMerge}
+								busy={busy}
+								className={action === 'merge' ? 'bg-add text-black' : 'bg-working text-black'}
+							>
 								Confirm
 							</Cta>
 						</>
 					) : (
-						<Cta onClick={() => setConfirming(true)} className="bg-add text-black">
+						<Cta
+							onClick={() => setConfirming(true)}
+							className={action === 'merge' ? 'bg-add text-black' : 'border border-border bg-surface-2 text-text'}
+						>
 							<GitMerge size={13} />
 							Merge
 						</Cta>
@@ -159,7 +180,7 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 					<Cta onClick={() => sendMessage('push')} busy={busy} className="bg-working text-black">
 						Commit &amp; push
 					</Cta>
-				) : (
+				) : action === 'resolve' ? (
 					<Cta
 						onClick={() => sendMessage('resolve')}
 						busy={busy}
@@ -167,7 +188,7 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 					>
 						Resolve
 					</Cta>
-				)}
+				) : null}
 			</div>
 		</Bar>
 	)

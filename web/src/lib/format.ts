@@ -77,6 +77,7 @@ const PR_DOT_COLORS: Record<NonNullable<Workspace['pr_status']>, string> = {
 	draft: 'var(--color-pr-draft)',
 	conflicts: 'var(--color-pr-attention)',
 	checks_failed: 'var(--color-pr-attention)',
+	checks_pending: 'var(--color-working)',
 	mergeable: 'var(--color-pr-mergeable)'
 }
 
