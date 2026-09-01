@@ -13,32 +13,9 @@
  */
 import type { Session, Workspace } from './types.ts'
 
-const KEY = 'conductor-remote-read'
-/** Marks are per session and sessions only accumulate — keep the newest, drop the rest. */
-const LIMIT = 300
+export const READ_MARKS_KEY = 'conductor-remote-read'
 
 export type ReadMarks = Record<string, string>
-
-export function loadReadMarks(): ReadMarks {
-	try {
-		const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}')
-		if (!raw || typeof raw !== 'object') return {}
-		return Object.fromEntries(Object.entries(raw).filter(([, at]) => typeof at === 'string')) as ReadMarks
-	} catch {
-		return {}
-	}
-}
-
-/** Persist marks (pruned to `LIMIT`) and hand back exactly what was stored. */
-export function writeReadMarks(marks: ReadMarks): ReadMarks {
-	const entries = Object.entries(marks)
-	const kept = entries.length > LIMIT ? entries.sort((a, b) => b[1].localeCompare(a[1])).slice(0, LIMIT) : entries
-	const pruned = Object.fromEntries(kept)
-	try {
-		localStorage.setItem(KEY, JSON.stringify(pruned))
-	} catch {}
-	return pruned
-}
 
 const unseen = (marks: ReadMarks, id: string, at: string) => (marks[id] ?? '') < at
 

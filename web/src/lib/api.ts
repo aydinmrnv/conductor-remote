@@ -16,6 +16,8 @@ import type {
 	ModelsResult,
 	NewChatResult,
 	NoSleepResult,
+	Prefs,
+	PrefsResponse,
 	PushConfig,
 	PushSubscribeResult,
 	PushTestResult,
@@ -384,6 +386,14 @@ export const client = {
 		api<{ settings: RelaySettings }>(routes.updateSettings.path(), {
 			method: routes.updateSettings.method,
 			body: JSON.stringify(patch)
+		}),
+	/** The host's durable mirror of read marks and unsent composer intent. */
+	prefs: () => api<PrefsResponse>(routes.prefs.path()),
+	patchPrefs: (prefs: Prefs, keepalive = false) =>
+		api<PrefsResponse>(routes.updatePrefs.path(), {
+			method: routes.updatePrefs.method,
+			body: JSON.stringify(prefs),
+			keepalive
 		}),
 	/**
 	 * Hold the Mac awake with the lid shut for `seconds`. The relay waits for the helper

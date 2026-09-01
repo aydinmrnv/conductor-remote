@@ -3,6 +3,7 @@ import { ArrowUp, Info, LoaderCircle, Paperclip, Square, WifiOff, X } from 'luci
 import { useEffect, useRef, useState } from 'react'
 import { useSendPrompt } from '../hooks.ts'
 import { client } from '../lib/api.ts'
+import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { ActuatorInfo, Attachment, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
@@ -54,6 +55,7 @@ export function Composer({
 	const text = useApp(s => s.drafts[draftKey] ?? '')
 	const setDraft = useApp(s => s.setDraft)
 	const moveDraft = useApp(s => s.moveDraft)
+	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const online = useApp(s => s.online)
 	const clearWorking = useApp(s => s.clearWorking)
 	const sendPrompt = useSendPrompt()
@@ -75,6 +77,15 @@ export function Composer({
 	useEffect(() => {
 		if (sessionId) moveDraft(workspaceId, sessionId)
 	}, [workspaceId, sessionId, moveDraft])
+
+	// This component survives chat-tab switches. Keep the sync guard pointed at the
+	// textarea's current key if the switch happens while it still owns focus.
+	useEffect(() => {
+		if (document.activeElement === ref.current) setFocusedDraft(draftKey)
+		return () => {
+			if (useApp.getState().focusedDraft === draftKey) setFocusedDraft(null)
+		}
+	}, [draftKey, setFocusedDraft])
 
 	const autosize = () => {
 		const el = ref.current
@@ -303,6 +314,11 @@ export function Composer({
 					// takes focus, and never zooms back out on blur.
 					className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
 					onChange={e => setDraft(draftKey, e.target.value)}
+					onFocus={() => setFocusedDraft(draftKey)}
+					onBlur={() => {
+						if (useApp.getState().focusedDraft === draftKey) setFocusedDraft(null)
+						requestPrefsFlush()
+					}}
 					onPaste={event => {
 						const files = event.clipboardData.files
 						if (!files.length) return

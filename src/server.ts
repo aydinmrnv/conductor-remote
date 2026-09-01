@@ -44,6 +44,7 @@ import {
 } from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
+import { readPrefs, writePrefs } from './prefs.ts'
 import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
@@ -924,6 +925,23 @@ const server = http.createServer(async (req, res) => {
 				if (typeof body.autoRejoin === 'boolean') patch.autoRejoin = body.autoRejoin
 				if (Object.keys(patch).length === 0) return json(req, res, 400, { error: 'nothing to change' })
 				return json(req, res, 200, { settings: writeSettings(patch) })
+			}
+
+			// PWA state remains local-first; this host copy survives origin changes and
+			// reconciles phones. PATCH accepts a full client snapshot and merges per key.
+			if (isRoute(routes.prefs, req.method, pathname)) {
+				return json(req, res, 200, { prefs: readPrefs() })
+			}
+			if (isRoute(routes.updatePrefs, req.method, pathname)) {
+				const raw = JSON.parse((await readBody(req)) || '{}') as unknown
+				if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+					return json(req, res, 400, { error: 'preferences must be an object' })
+				}
+				const body = raw as Record<string, unknown>
+				if (!Object.hasOwn(body, 'readMarks') && !Object.hasOwn(body, 'drafts')) {
+					return json(req, res, 400, { error: 'nothing to sync' })
+				}
+				return json(req, res, 200, { prefs: writePrefs(body) })
 			}
 
 			// GET /api/nosleep — is the Mac being held awake, and can this relay do it at all

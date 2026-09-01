@@ -86,6 +86,9 @@ export const routes = {
 	logs: flat('GET', '/api/logs'),
 	settings: flat('GET', '/api/settings'),
 	updateSettings: flat('PATCH', '/api/settings'),
+	/** Durable, device-independent PWA state. localStorage remains its offline-first mirror. */
+	prefs: flat('GET', '/api/prefs'),
+	updatePrefs: flat('PATCH', '/api/prefs'),
 	nosleep: flat('GET', '/api/nosleep'),
 	armNoSleep: flat('POST', '/api/nosleep'),
 	disarmNoSleep: flat('DELETE', '/api/nosleep'),

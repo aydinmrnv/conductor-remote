@@ -136,6 +136,11 @@ Open that on the phone and **Add to Home Screen**. The token is stored in
 `localStorage`; every `/api/*` call carries it, so other devices on the LAN
 can't read your sessions.
 
+Read marks and unsent prompt drafts stay local-first for offline use and are also
+mirrored to `~/Library/Application Support/conductor-remote/prefs.json`. That durable
+copy survives a PWA hostname/origin change and restores the same state on another
+authenticated device. Access tokens and in-flight send state remain device-local.
+
 ### Deploy (run on login as a background service)
 
 The relay must run on the Mac that runs Conductor — it reads the local state DB

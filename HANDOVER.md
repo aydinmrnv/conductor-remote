@@ -127,6 +127,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   funnel-watchdog.ts  end-to-end probe of the PUBLIC ingress; re-registers a stale funnel, and
                   can move the Mac to a fallback network when it has no route at all
   settings.ts     relay preferences the phone edits (fallback SSIDs, autoRejoin) → stateDir()/settings.json
+  prefs.ts        durable sync peer for PWA read marks + draft/agent intent → stateDir()/prefs.json
   wifi.ts         networksetup reads + the one narrow write (join a network macOS already knows).
                   All async: it is slowest exactly when the link is wedged, and the relay is one thread
   nosleep-helper.ts  the root half in one place: the shared POSIX-sh body, the helper file it is
@@ -141,6 +142,7 @@ web/              React PWA (Vite root)
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
                   useSendPrompt (applies the staged agent settings, then sends)
   src/lib/        api client, types, format helpers, cn, composer drafts, staged agent settings,
+                  local-first host preference sync (prefs.ts),
                   model-list cache, read marks (unread the phone has seen), push (permission/subscribe/reconcile),
                   transcript-merge (folds each tool result onto the call it answers, identity intact)
   src/components/ Patch.tsx renders a unified diff (workspace diff + an edit step's result)
