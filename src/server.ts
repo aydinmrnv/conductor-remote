@@ -72,6 +72,7 @@ import {
 	retryWontHelp,
 	type SendResult,
 	screenLocked,
+	sendNeverStarted,
 	setAgentOptions,
 	setRestartGuard,
 	setWorkspaceStatus,
@@ -329,7 +330,14 @@ async function deliverPrompt(
 			deadline: deadline - MIN_CONFIRM_MS,
 			queue
 		})
-		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
+		// A run that left the prompt in the composer proved it wrote no row, so the
+		// window would be six seconds of watching for nothing. One check still happens:
+		// an *earlier* attempt's row can be arriving, and typing again over that is the
+		// duplicate this whole path exists to avoid.
+		const landed = sendNeverStarted(last.error)
+			? deliveredSince(sessionId, text, beforeRowid)
+			: await confirmDelivery(sessionId, text, beforeRowid, deadline)
+		if (landed) {
 			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
 			return { ok: true, strategy: last.strategy, attempts }
 		}

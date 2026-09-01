@@ -320,11 +320,31 @@ Two asymmetric halves — keep them separate:
        of the read — the prompt is still there, so nothing was consumed, so there
        is nothing to duplicate — and a Conductor too busy to have handled the
        first Enter is also too busy to answer an AX read, which blocks rather than
-       returning stale text. Bounded at three presses, then it errors and hands
-       back to `deliverPrompt`'s retry, which re-focuses and re-fills. The box is
-       resolved once (`composerField`) and passed to both halves: finding it is a
-       ~0.5s walk of the pane, while reading it back off the reference is ~10ms,
-       so the whole confirm adds ~0.2s to a send that works.
+       returning stale text. The box is resolved once (`composerField`) and passed
+       to both halves: finding it is a ~0.5s walk of the pane, while reading it
+       back off the reference is ~10ms, so the whole confirm adds ~0.2s to a send
+       that works.
+       - **What the read buys is the *diagnosis*, not the second press.** The
+         first occurrence in the wild (2026-09-01 16:59:57, `hyldmo/lamp-pairing-question`)
+         had the box survive all three presses, and no send has ever been logged
+         as rescued by a later one — so pressing is bounded at **two** and every
+         press past the first is delay added to a send already failing. The value
+         is that the caller now *knows*: `sendNeverStarted` (`writes.ts`) reads
+         that sentence back and `deliverPrompt` checks the transcript **once**
+         instead of watching it for the full 6s, because a run that never
+         consumed the draft cannot have written a row. The one check stays — an
+         *earlier* attempt's row may still be arriving, and typing over that is
+         the duplicate the window exists to prevent. `tests/send-guards.test.ts`
+         pins all three retry predicates, since each is a substring match on a
+         sentence this repo writes and each fails silently.
+       - **Why Enter gets ignored is still open.** The evidence says the box holds
+         the text while Conductor acts as though it is empty, which is what a
+         React-controlled composer looks like when the value was written past its
+         change tracker — and the AX write is exactly that write. If that is it,
+         the fix is to re-enter the text the way a person does (the existing
+         `pasteComposer` fallback makes real key events) rather than to press
+         Enter again. Not yet tried: the failure is intermittent, so it needs a
+         reproduction before a fix can be believed.
 
     Landing in the wrong agent is worse than not sending, so every step errors out
     rather than guessing. No private protocol, nothing to rebreak on a Conductor

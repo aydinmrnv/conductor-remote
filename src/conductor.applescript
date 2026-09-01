@@ -813,11 +813,21 @@ on submitComposer(textBox, promptText, queueIt)
 	--
 	-- Pressing again is safe *because* of the read, not in spite of it: the prompt is
 	-- still in the box, so nothing was consumed, so there is nothing to duplicate.
+	-- The one state that would break that is a Conductor which queues on Command-Return
+	-- and *keeps* the draft, since the box would then read as unsent after a send that
+	-- worked. Unverified against the live app, and the only path that could reach it is
+	-- Command-Return in the phone's composer (Composer.tsx, a hardware keyboard); a tap
+	-- always sends. Worth checking before anything else starts queueing.
 	-- A Conductor too busy to have handled the first Enter is also too busy to answer
-	-- an AX read, which blocks here rather than handing back stale text. Bounded at
-	-- three presses — a box that survives those is stuck on something this script
-	-- cannot see, and the caller's own retry, which re-focuses and re-fills, is the
-	-- better lever than a fourth keystroke.
+	-- an AX read, which blocks here rather than handing back stale text.
+	--
+	-- **Two presses, not three, and the second one is on probation.** The first
+	-- occurrence in the wild (2026-09-01 16:59:57) had the box survive all three, and
+	-- no send has ever been recorded as rescued by a later press — so the value here
+	-- is the *detection*, which lets the caller stop watching for a row that cannot
+	-- come (`sendNeverStarted` in writes.ts) rather than spending the 6s window on it.
+	-- Every press past the first that doesn't work is pure delay added to a send that
+	-- is already failing, which is why the budget shrank from 3×1.2s to 2×0.8s.
 	--
 	-- Returns the press that cleared the box, or 0 for a box that never cleared. The
 	-- count is the point: a rescued send is otherwise indistinguishable from one that
@@ -828,10 +838,10 @@ on submitComposer(textBox, promptText, queueIt)
 		my pressSend(queueIt)
 		return 1
 	end if
-	repeat with pressCount from 1 to 3
+	repeat with pressCount from 1 to 2
 		my pressSend(queueIt)
 		if textBox is missing value then return pressCount
-		repeat with tick from 1 to 6
+		repeat with tick from 1 to 4
 			delay 0.2
 			set seen to my composerTextOf(textBox)
 			if seen is missing value then return pressCount
