@@ -490,7 +490,7 @@ export function createTools(call: RelayCall): Tool[] {
 		{
 			name: 'split_chat',
 			description:
-				'Move a tangent out of a chat: copy that chat into a fresh tab beside it, as a Conductor attachment, and ask the new agent your question there. Use it when a conversation has grown a second topic — a running agent steered mid-turn ends up holding three threads at once, which reads badly for everyone afterwards. The copy carries the prose and the reasoning, not the tool calls, so the new agent knows what was said and decided but not every file that was read. This DRIVES THE REAL UI twice (a new tab, then the send) and steals focus for a few seconds. To split the chat you are in, find its session_id with list_chats on your own workspace.',
+				'Move a tangent out of a chat: copy that chat into a fresh tab beside it, as a Conductor attachment, and ask the new agent your question there. Use it when a conversation has grown a second topic — a running agent steered mid-turn ends up holding three threads at once, which reads badly for everyone afterwards. The copy carries the prose and the reasoning, not the tool calls, so the new agent knows what was said and decided but not every file that was read. It runs to the end of the chat unless through names an earlier message to stop at, which is how you branch from before the conversation turned. This DRIVES THE REAL UI twice (a new tab, then the send) and steals focus for a few seconds. To split the chat you are in, find its session_id with list_chats on your own workspace.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -505,6 +505,11 @@ export function createTools(call: RelayCall): Tool[] {
 						type: 'boolean',
 						description:
 							'Carry tool calls across as one line each (default false — mostly noise, and most of the bytes).'
+					},
+					through: {
+						type: 'string',
+						description:
+							'Stop the copy at this message, it included — a cursor from read_chat or search_chats. Default: the whole chat.'
 					}
 				},
 				required: ['session_id', 'prompt']
@@ -512,13 +517,19 @@ export function createTools(call: RelayCall): Tool[] {
 			run: async args => {
 				const sessionId = need(args, 'session_id')
 				const prompt = need(args, 'prompt')
+				const through = str(args.through)
+				const throughRowid = through ? parseChatCursor(through) : null
+				if (through && throughRowid === null) {
+					throw new Error('through must be a cursor returned by read_chat or search_chats')
+				}
 				const split = await call<SplitChatResult>(routes.splitChat.path(sessionId), {
 					method: routes.splitChat.method,
 					body: {
 						prompt,
 						workspaceId: str(args.workspace_id),
 						includeThinking: args.include_thinking !== false,
-						includeTools: args.include_tools === true
+						includeTools: args.include_tools === true,
+						throughRowid: throughRowid ?? undefined
 					},
 					timeoutMs: WRITE_TIMEOUT_MS
 				})
@@ -528,7 +539,8 @@ export function createTools(call: RelayCall): Tool[] {
 				// like a complete one to whoever gets it next.
 				const cut = [
 					file.elided.tools ? plural(file.elided.tools, 'tool call') : '',
-					file.elided.thinking ? plural(file.elided.thinking, 'thinking block') : ''
+					file.elided.thinking ? plural(file.elided.thinking, 'thinking block') : '',
+					file.elided.later ? plural(file.elided.later, 'entry after the cut', 'entries after the cut') : ''
 				].filter(Boolean)
 				const lines = [
 					`copied ${plural(file.kept, 'entry', 'entries')} (${Math.round(file.bytes / 1024)}kB) to ${file.path}${

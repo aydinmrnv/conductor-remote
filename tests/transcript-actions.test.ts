@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { latestAssistantForActions } from '../web/src/lib/transcript-actions.ts'
+import { assistantTurnEnds, latestAssistantForActions } from '../web/src/lib/transcript-actions.ts'
 import type { TranscriptEntry } from '../web/src/lib/types.ts'
 
 function entry(role: TranscriptEntry['role'], id: string, rowid: number): TranscriptEntry {
@@ -41,5 +41,35 @@ describe('latest assistant action target', () => {
 
 	test('returns no target without an assistant response', () => {
 		expect(latestAssistantForActions([entry('system', 'notice', 1)])).toBeNull()
+	})
+})
+
+describe('per-turn action targets', () => {
+	test('offers one cut per turn, at the answer that closed it', () => {
+		const first = entry('assistant', 'first answer', 3)
+		const second = entry('assistant', 'second answer', 8)
+		expect(
+			assistantTurnEnds([
+				entry('user', 'ask', 1),
+				entry('thinking', 'reasoning', 2),
+				first,
+				entry('user', 'ask again', 4),
+				entry('tool', 'bash', 5),
+				entry('assistant', 'an update mid-turn', 6),
+				entry('tool', 'more work', 7),
+				second
+			])
+		).toEqual([first, second])
+	})
+
+	// The turn is unanswered, so its own cut does not exist yet — the previous answer
+	// keeps the one it already offered rather than the control vanishing under it.
+	test('keeps the last closed turn when a new prompt is waiting', () => {
+		const answer = entry('assistant', 'answer', 2)
+		expect(assistantTurnEnds([entry('user', 'ask', 1), answer, entry('user', 'ask again', 3)])).toEqual([answer])
+	})
+
+	test('has no target in a chat the agent has not answered', () => {
+		expect(assistantTurnEnds([entry('user', 'ask', 1), entry('tool', 'bash', 2)])).toEqual([])
 	})
 })

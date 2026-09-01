@@ -184,8 +184,12 @@ export interface SplitAttachment {
 	bytes: number
 	/** Transcript entries written. */
 	kept: number
-	/** Entries dropped, by kind, so a caller can report the cut instead of implying none. */
-	elided: { thinking: number; tools: number }
+	/**
+	 * Entries dropped, so a caller can report the cut instead of implying none. `thinking`
+	 * and `tools` are the format's doing; `later` is the caller's, and counts what a
+	 * `throughRowid` left behind — zero when the whole chat was copied.
+	 */
+	elided: { thinking: number; tools: number; later: number }
 }
 
 /** POST /api/sessions/:id/agent — the chat is re-read from the DB before this answers. */

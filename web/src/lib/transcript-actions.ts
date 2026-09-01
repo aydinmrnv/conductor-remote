@@ -15,3 +15,25 @@ export function latestAssistantForActions(entries: readonly TranscriptEntry[]): 
 	}
 	return null
 }
+
+/**
+ * The response that closes each turn — the last thing the agent said before the next
+ * prompt, and the only place in that turn a fork can be cut from.
+ *
+ * An agent speaks several times inside one turn (a short update, more work, then the
+ * answer), so a control under every assistant row would offer four cuts of one exchange,
+ * three of which end a copy mid-answer.
+ */
+export function assistantTurnEnds(entries: readonly TranscriptEntry[]): TranscriptEntry[] {
+	const ends: TranscriptEntry[] = []
+	let latest: TranscriptEntry | null = null
+	for (const entry of entries) {
+		if (entry.role === 'assistant') latest = entry
+		else if (entry.role === 'user') {
+			if (latest) ends.push(latest)
+			latest = null
+		}
+	}
+	if (latest) ends.push(latest)
+	return ends
+}

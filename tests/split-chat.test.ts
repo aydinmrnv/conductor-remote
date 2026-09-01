@@ -1,0 +1,87 @@
+import { describe, expect, test } from 'vitest'
+import { chatCursor } from '../src/chat-cursor.ts'
+import { createTools, type RelayCall } from '../src/mcp-tools.ts'
+import { routes } from '../src/routes.ts'
+import { type TranscriptEntry, transcriptThrough } from '../src/transcript.ts'
+
+function entry(rowid: number, role: TranscriptEntry['role'], text: string): TranscriptEntry {
+	return { id: `entry-${rowid}-${role}`, rowid, role, text, ts: '2026-09-01T00:00:00Z', queued: false }
+}
+
+const chat = [
+	entry(10, 'user', 'the original question'),
+	entry(20, 'thinking', 'why it might go this way'),
+	entry(20, 'assistant', 'the answer'),
+	entry(30, 'user', 'the tangent'),
+	entry(40, 'assistant', 'the tangent answered')
+]
+
+function splitTool(seen: { body?: Record<string, unknown> }) {
+	const call: RelayCall = async <T>(route: string, opts?: { body?: unknown }) => {
+		if (route === routes.splitChat.path('chat-1')) {
+			seen.body = opts?.body as Record<string, unknown>
+			return {
+				ok: true,
+				sessionId: 'chat-2',
+				workspaceId: 'ws-1',
+				text: 'Forked from @⟦x⟧(y)',
+				attachment: {
+					name: 'Transcript of chat.md',
+					path: '.context/attachments/abc123/Transcript of chat.md',
+					bytes: 2048,
+					kept: 3,
+					elided: { thinking: 0, tools: 4, later: 2 }
+				}
+			} as T
+		}
+		return { ok: true } as T
+	}
+	const tool = createTools(call).find(candidate => candidate.name === 'split_chat')
+	if (!tool) throw new Error('split_chat does not exist')
+	return tool
+}
+
+describe('splitting a chat at an earlier message', () => {
+	test('carries every entry of the cut row and counts what it left', () => {
+		const cut = transcriptThrough(chat, 20)
+		expect(cut?.entries.map(e => e.text)).toEqual(['the original question', 'why it might go this way', 'the answer'])
+		expect(cut?.later).toBe(2)
+	})
+
+	test('copies the whole chat when the cut is its last message', () => {
+		expect(transcriptThrough(chat, 40)).toEqual({ entries: chat, later: 0 })
+	})
+
+	// A cursor from another chat would otherwise cut at whatever rowid happened to be
+	// smaller, and a transcript that stops early reads exactly like a complete one.
+	test('refuses a rowid this chat does not have', () => {
+		expect(transcriptThrough(chat, 25)).toBeNull()
+		expect(transcriptThrough(chat, 999)).toBeNull()
+	})
+
+	test('sends the cursor to the relay as a row id', async () => {
+		const seen: { body?: Record<string, unknown> } = {}
+		await splitTool(seen).run({ session_id: 'chat-1', prompt: 'take it from here', through: chatCursor(20) })
+		expect(seen.body?.throughRowid).toBe(20)
+	})
+
+	test('leaves the cut out of the request when nobody asked for one', async () => {
+		const seen: { body?: Record<string, unknown> } = {}
+		await splitTool(seen).run({ session_id: 'chat-1', prompt: 'take it from here' })
+		expect(seen.body?.throughRowid).toBeUndefined()
+	})
+
+	test('rejects a raw row id in place of a cursor', async () => {
+		const seen: { body?: Record<string, unknown> } = {}
+		await expect(
+			splitTool(seen).run({ session_id: 'chat-1', prompt: 'take it from here', through: '20' })
+		).rejects.toThrow(/cursor/)
+		expect(seen.body).toBeUndefined()
+	})
+
+	test('names the entries the cut left behind', async () => {
+		const output = await splitTool({}).run({ session_id: 'chat-1', prompt: 'take it from here' })
+		expect(output).toContain('4 tool calls')
+		expect(output).toContain('2 entries after the cut')
+	})
+})
