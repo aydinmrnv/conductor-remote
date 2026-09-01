@@ -280,6 +280,21 @@ export function lockBlocked(error: string | undefined): boolean {
 }
 
 /**
+ * A run that ended with the prompt still sitting in Conductor's composer
+ * (`submitComposer`). The draft was never consumed, so this run wrote no row and
+ * the caller's confirm window has nothing to wait for — six seconds spent watching
+ * for something the run already proved didn't happen. Only the *waiting* is
+ * skipped: an earlier attempt's row can still be arriving, so the caller checks
+ * once before typing again.
+ *
+ * Matched on the phrase the send script writes itself, like `lockBlocked` above,
+ * so macOS wording can't drift under it.
+ */
+export function sendNeverStarted(error: string | undefined): boolean {
+	return (error ?? '').includes('still sitting in its composer')
+}
+
+/**
  * Node's own read of the lock screen — the same CGSessionCopyCurrentDictionary
  * probe `screenLocked()` in conductor.applescript makes, minus the AppleScript
  * wrapper, so the parked-prompt queue can poll it without spinning up a whole
