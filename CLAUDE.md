@@ -5,6 +5,12 @@ serves an installable React PWA, reads agent state, and relays prompts back into
 Conductor. Deep dives live in [HANDOVER.md](./HANDOVER.md) (status, file map) and
 [FINDINGS.md](./FINDINGS.md) (the Conductor reverse-engineering the design rests on).
 
+> [!IMPORTANT]
+> This repository supports **local Conductor workspaces on macOS only**. Do not add
+> compatibility branches, setup paths, or fallbacks for Conductor Cloud workspaces.
+> The relay intentionally depends on the local Conductor database, macOS
+> Accessibility, local worktrees, and local `CONDUCTOR_PORT` allocations.
+
 ## The load-bearing mental model
 
 Two asymmetric halves — keep them separate:
@@ -994,6 +1000,26 @@ bind trap below), not by unit test.
   tailnet (Admin console nodeAttr) or it falls back to tailnet-only and says so.
   `curl 127.0.0.1:8787` works for local checks; `yarn service status` prints the URL
   and whether it's public or tailnet-only.
+- **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
+  `src/dev-server.ts` presses Conductor's selected Run/Stop task through the same
+  fail-closed Accessibility path as other writes; Conductor still owns the process
+  and its cleanup. The relay discovers that process's allocated `CONDUCTOR_PORT`
+  from `ps eww` only after Run (never log the snapshot — it contains environments
+  and secrets), then gives it a separate root-mounted `tailscale serve` HTTPS port.
+  A discovered allocation is cached per workspace, and a **stopped** one has no
+  allocation to cache, so the reads also share a single 5s `ps` snapshot: the phone
+  polls this state every 2.5s per open chat and each snapshot costs ~650 kB and
+  ~40ms here. Only a start reads fresh, because the task it just pressed is younger
+  than any cached snapshot.
+  A loopback bridge rewrites the public Host/Origin to localhost and tunnels raw
+  WebSocket upgrades, which keeps strict Vite-style host checks and HMR working.
+  `dev-forwards.json` is the ownership receipt: remove or replace only the exact
+  Serve target it records, because every other mapping belongs to the user. It also
+  records the bridge process and a private loopback challenge: `yarn dev` runs a
+  second relay beside the LaunchAgent, and a node-watch restart must not steal the
+  installed relay's live forward. On an owning relay restart, rebuild the ephemeral
+  bridge only when that exact old mapping and the target process still exist;
+  otherwise retain enough evidence for safe cleanup.
 - **The LaunchAgent plist *is* the daemon's environment, and `process.env` in a shell is
   not.** `service install` bakes every runtime knob into the plist (`buildPlist`), so the
   daemon reads its port, its DB path and its Funnel posture from there and from nothing

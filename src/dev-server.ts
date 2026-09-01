@@ -1,0 +1,725 @@
+/**
+ * Local workspace dev servers: Conductor owns the process; Tailscale Serve owns
+ * the tailnet-only HTTPS port.
+ *
+ * The relay never spawns a repository command itself. Starting and stopping go
+ * through Conductor's real Run button (`writes.ts`), which preserves its task
+ * selection, environment, run-mode rules and process-group cleanup. This module
+ * discovers that workspace's allocated `CONDUCTOR_PORT`, waits for it, and gives
+ * it a root-mounted HTTPS origin on the Mac's MagicDNS name.
+ *
+ * Tailscale's reverse proxy preserves the public Host header. Dev servers such
+ * as Vite reject that by default, so a tiny loopback bridge rewrites Host/Origin
+ * to the local target while leaving paths and WebSocket upgrades untouched.
+ * Root-relative assets and HMR therefore work without application-specific base
+ * paths or HTML rewriting.
+ */
+
+import { execFile } from 'node:child_process'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import http, { type IncomingHttpHeaders } from 'node:http'
+import net from 'node:net'
+import path from 'node:path'
+import { promisify } from 'node:util'
+import { stateDir } from './config.ts'
+import type { Workspace } from './reads.ts'
+import { magicDnsName, tailscaleBin } from './tailscale.ts'
+import { setRunTask } from './writes.ts'
+
+const exec = promisify(execFile)
+const STORE_VERSION = 1
+const PORT_WAIT_MS = 15_000
+const PORT_SNAPSHOT_TTL_MS = 5000
+
+export interface DevServerState {
+	/** The local Tailscale prerequisites needed to expose a Run task are ready. */
+	available: boolean
+	/** Something currently accepts TCP connections on the workspace's primary port. */
+	running: boolean
+	/** This relay owns an active tailnet-only Tailscale Serve mapping. */
+	forwarded: boolean
+	/** The workspace's primary `CONDUCTOR_PORT`, when it can be discovered. */
+	port: number | null
+	/** Tailnet-only HTTPS URL, present only while forwarded. */
+	url: string | null
+	/** The selected Conductor Run task, known after a start/stop action. */
+	task?: string
+	/** Why this workspace cannot currently be controlled or forwarded. */
+	error?: string
+}
+
+export interface DevServerResult extends DevServerState {
+	ok: boolean
+	/** Conductor's button actually changed, rather than already matching the request. */
+	changed?: boolean
+}
+
+interface StoredForward {
+	workspaceId: string
+	targetPort: number
+	servePort: number
+	bridgePort: number
+	host: string
+	/** Relay process holding the loopback bridge; absent on version-1 receipts. */
+	ownerPid?: number
+	/** Private loopback challenge proving that process still owns this bridge. */
+	bridgeToken?: string
+}
+
+interface ForwardStore {
+	version: number
+	forwards: StoredForward[]
+}
+
+interface DevProxy {
+	port: number
+	token: string
+	close: () => Promise<void>
+}
+
+interface ServeStatus {
+	TCP?: Record<string, { HTTPS?: boolean }>
+	Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
+}
+
+function validPort(value: number): boolean {
+	return Number.isInteger(value) && value > 0 && value <= 65535
+}
+
+function processAlive(pid: number | undefined): boolean {
+	if (!pid || !Number.isInteger(pid) || pid <= 0) return false
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch {
+		return false
+	}
+}
+
+function bridgeMatches(record: StoredForward): Promise<boolean> {
+	if (!record.bridgeToken) {
+		// Compatibility for the first local prototype receipts. PID plus an open
+		// bridge is enough to avoid stealing one during this upgrade; every newly
+		// written receipt carries the unambiguous challenge below.
+		return processAlive(record.ownerPid) ? tcpOpen(record.bridgePort) : Promise.resolve(false)
+	}
+	return new Promise(resolve => {
+		let settled = false
+		const finish = (matches: boolean) => {
+			if (settled) return
+			settled = true
+			request.destroy()
+			resolve(matches)
+		}
+		const request = http.request(
+			{
+				host: '127.0.0.1',
+				port: record.bridgePort,
+				method: 'GET',
+				path: '/',
+				headers: { 'x-conductor-remote-bridge': record.bridgeToken }
+			},
+			response => {
+				response.resume()
+				finish(response.statusCode === 204)
+			}
+		)
+		request.setTimeout(500, () => finish(false))
+		request.once('error', () => finish(false))
+		request.end()
+	})
+}
+
+/**
+ * Parse a macOS `ps eww -axo command=` snapshot without ever logging it: process
+ * environments can contain credentials. Multiple processes are expected, but
+ * conflicting ports for one workspace are not safe to guess through.
+ */
+export function parseWorkspacePort(snapshot: string, workspaceId: string): number | null {
+	const ports = new Set<number>()
+	for (const line of snapshot.split('\n')) {
+		const id = line.match(/(?:^|\s)CONDUCTOR_WORKSPACE_ID=([^\s]+)/)?.[1]
+		if (id !== workspaceId) continue
+		const port = Number(line.match(/(?:^|\s)CONDUCTOR_PORT=(\d+)(?:\s|$)/)?.[1])
+		if (validPort(port)) ports.add(port)
+	}
+	return ports.size === 1 ? [...ports][0] : null
+}
+
+let portSnapshot: { at: number; text: string } | null = null
+let portSnapshotInFlight: Promise<string> | null = null
+
+async function readProcesses(): Promise<string> {
+	const { stdout } = await exec('ps', ['eww', '-axo', 'command='], {
+		encoding: 'utf8',
+		maxBuffer: 64 * 1024 * 1024,
+		timeout: 5000
+	})
+	portSnapshot = { at: Date.now(), text: stdout }
+	return stdout
+}
+
+/**
+ * One `ps` snapshot shared by every workspace. It carries every process
+ * environment on the Mac (~650 kB here), and the phone polls this state every
+ * 2.5s per open chat, so a read reuses a recent one and simultaneous readers
+ * await the same child process. A workspace whose Run task is stopped has no
+ * port to remember, which is why the miss path needs this and not just the hit
+ * path. A start asks for `maxAgeMs` 0, because the task it just pressed is
+ * younger than any cached snapshot.
+ */
+function processSnapshot(maxAgeMs: number): Promise<string> {
+	if (maxAgeMs <= 0) return readProcesses()
+	if (portSnapshot && Date.now() - portSnapshot.at <= maxAgeMs) return Promise.resolve(portSnapshot.text)
+	portSnapshotInFlight ??= readProcesses().finally(() => {
+		portSnapshotInFlight = null
+	})
+	return portSnapshotInFlight
+}
+
+async function workspacePort(workspaceId: string, maxAgeMs = 0): Promise<number | null> {
+	try {
+		return parseWorkspacePort(await processSnapshot(maxAgeMs), workspaceId)
+	} catch {
+		// Never reflect the error: `execFile` includes stdout, which is the process
+		// environment snapshot and may contain secrets.
+		return null
+	}
+}
+
+function tcpOpen(port: number, timeoutMs = 300): Promise<boolean> {
+	return new Promise(resolve => {
+		const socket = net.connect({ host: '127.0.0.1', port })
+		const finish = (open: boolean) => {
+			socket.destroy()
+			resolve(open)
+		}
+		socket.setTimeout(timeoutMs)
+		socket.once('connect', () => finish(true))
+		socket.once('timeout', () => finish(false))
+		socket.once('error', () => finish(false))
+	})
+}
+
+async function waitForPort(port: number, open: boolean, timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs
+	do {
+		if ((await tcpOpen(port)) === open) return true
+		await new Promise(resolve => setTimeout(resolve, 250))
+	} while (Date.now() < deadline)
+	return false
+}
+
+function externalOrigin(req: http.IncomingMessage): string {
+	const forwardedProto = String(req.headers['x-forwarded-proto'] ?? 'https')
+		.split(',')[0]
+		.trim()
+	const forwardedHost = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')
+		.split(',')[0]
+		.trim()
+	return `${forwardedProto || 'https'}://${forwardedHost}`
+}
+
+function localOrigin(targetPort: number): string {
+	return `http://127.0.0.1:${targetPort}`
+}
+
+function proxyHeaders(req: http.IncomingMessage, targetPort: number): IncomingHttpHeaders {
+	const headers = { ...req.headers }
+	const publicHost = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')
+	headers.host = `127.0.0.1:${targetPort}`
+	if (publicHost) headers['x-forwarded-host'] = publicHost
+	headers['x-forwarded-proto'] = String(req.headers['x-forwarded-proto'] ?? 'https')
+	// Framework dev servers commonly apply the same allowlist to WebSocket Origin
+	// that they apply to Host. Present the local origin they were configured for.
+	if (headers.origin) headers.origin = localOrigin(targetPort)
+	if (headers.referer) {
+		try {
+			const ref = new URL(headers.referer)
+			headers.referer = `${localOrigin(targetPort)}${ref.pathname}${ref.search}`
+		} catch {
+			// Preserve an unusual Referer rather than inventing one.
+		}
+	}
+	return headers
+}
+
+function rewriteLocation(
+	location: string | undefined,
+	req: http.IncomingMessage,
+	targetPort: number
+): string | undefined {
+	if (!location) return undefined
+	const local = new RegExp(`^https?://(?:127\\.0\\.0\\.1|localhost)(?::${targetPort})?`, 'i')
+	return location.replace(local, externalOrigin(req))
+}
+
+function writeUpgradeRequest(upstream: net.Socket, req: http.IncomingMessage, head: Buffer, targetPort: number): void {
+	const headers = proxyHeaders(req, targetPort)
+	const lines = [`${req.method ?? 'GET'} ${req.url ?? '/'} HTTP/${req.httpVersion}`]
+	for (const [name, value] of Object.entries(headers)) {
+		if (value === undefined) continue
+		if (Array.isArray(value)) {
+			for (const item of value) lines.push(`${name}: ${item}`)
+		} else {
+			lines.push(`${name}: ${value}`)
+		}
+	}
+	upstream.write(`${lines.join('\r\n')}\r\n\r\n`)
+	if (head.length) upstream.write(head)
+}
+
+/** Loopback reverse proxy with raw WebSocket tunnelling for Vite-style HMR. */
+export function createDevProxy(targetPort: number): Promise<DevProxy> {
+	return new Promise((resolve, reject) => {
+		const token = crypto.randomBytes(16).toString('hex')
+		const sockets = new Set<net.Socket>()
+		const server = http.createServer((req, res) => {
+			if (req.headers['x-conductor-remote-bridge'] === token) {
+				res.writeHead(204)
+				return res.end()
+			}
+			const upstream = http.request(
+				{
+					host: '127.0.0.1',
+					port: targetPort,
+					method: req.method,
+					path: req.url,
+					headers: proxyHeaders(req, targetPort)
+				},
+				upstreamRes => {
+					const headers = { ...upstreamRes.headers }
+					const location = rewriteLocation(upstreamRes.headers.location, req, targetPort)
+					if (location) headers.location = location
+					res.writeHead(upstreamRes.statusCode ?? 502, headers)
+					upstreamRes.pipe(res)
+				}
+			)
+			upstream.once('error', () => {
+				if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+				res.end('Dev server is not reachable')
+			})
+			req.pipe(upstream)
+		})
+
+		server.on('connection', socket => {
+			sockets.add(socket)
+			socket.once('close', () => sockets.delete(socket))
+		})
+		server.on('upgrade', (req, socket, head) => {
+			const upstream = net.connect({ host: '127.0.0.1', port: targetPort }, () => {
+				writeUpgradeRequest(upstream, req, head, targetPort)
+				socket.pipe(upstream).pipe(socket)
+			})
+			sockets.add(upstream)
+			upstream.once('close', () => sockets.delete(upstream))
+			upstream.once('error', () => socket.destroy())
+			socket.once('error', () => upstream.destroy())
+		})
+
+		server.once('error', reject)
+		server.listen(0, '127.0.0.1', () => {
+			const address = server.address()
+			if (!address || typeof address === 'string') {
+				server.close()
+				return reject(new Error('could not allocate the dev-server bridge port'))
+			}
+			resolve({
+				port: address.port,
+				token,
+				close: () =>
+					new Promise<void>(done => {
+						for (const socket of sockets) socket.destroy()
+						server.close(() => done())
+					})
+			})
+		})
+	})
+}
+
+export function serveProxyAt(status: ServeStatus, port: number): string | null {
+	for (const [origin, web] of Object.entries(status.Web ?? {})) {
+		if (!origin.endsWith(`:${port}`)) continue
+		return web.Handlers?.['/']?.Proxy ?? null
+	}
+	return null
+}
+
+function servePorts(status: ServeStatus): Set<number> {
+	return new Set(
+		Object.keys(status.TCP ?? {})
+			.map(Number)
+			.filter(validPort)
+	)
+}
+
+function chooseServePort(status: ServeStatus, targetPort: number): number | null {
+	const used = servePorts(status)
+	for (let offset = 0; offset < 10; offset++) {
+		const candidate = targetPort + offset
+		if (validPort(candidate) && !used.has(candidate)) return candidate
+	}
+	for (let candidate = 49152; candidate <= 65535; candidate++) {
+		if (!used.has(candidate)) return candidate
+	}
+	return null
+}
+
+function forwardUrl(record: StoredForward): string {
+	return `https://${record.host}${record.servePort === 443 ? '' : `:${record.servePort}`}/`
+}
+
+export class DevServerController {
+	private readonly storeFile: string
+	private bin: string | null
+	private host: string | null
+	private readonly records = new Map<string, StoredForward>()
+	private readonly proxies = new Map<string, DevProxy>()
+	private readonly ports = new Map<string, number>()
+	private readonly actions = new Map<string, Promise<DevServerResult>>()
+
+	constructor(storeFile = path.join(stateDir(), 'dev-forwards.json')) {
+		this.storeFile = storeFile
+		this.bin = tailscaleBin()
+		this.host = this.bin ? magicDnsName(this.bin) : null
+		this.load()
+	}
+
+	private refreshTailscale(): void {
+		this.bin ??= tailscaleBin()
+		if (this.bin && !this.host) this.host = magicDnsName(this.bin)
+	}
+
+	private load(): void {
+		try {
+			const parsed = JSON.parse(fs.readFileSync(this.storeFile, 'utf8')) as ForwardStore
+			if (parsed.version !== STORE_VERSION || !Array.isArray(parsed.forwards)) return
+			for (const record of parsed.forwards) {
+				if (
+					record.workspaceId &&
+					validPort(record.targetPort) &&
+					validPort(record.servePort) &&
+					validPort(record.bridgePort) &&
+					typeof record.host === 'string' &&
+					record.host.length > 0
+				) {
+					this.records.set(record.workspaceId, record)
+				}
+			}
+		} catch {
+			// First run, or a disposable corrupt cache. Never touch an unrecognised
+			// Tailscale mapping without a valid record proving this relay owns it.
+		}
+	}
+
+	private save(): void {
+		try {
+			fs.mkdirSync(path.dirname(this.storeFile), { recursive: true })
+			const body: ForwardStore = { version: STORE_VERSION, forwards: [...this.records.values()] }
+			fs.writeFileSync(this.storeFile, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 })
+		} catch (err) {
+			console.warn(`⚠ could not persist dev-server forwards (${err instanceof Error ? err.message : err})`)
+		}
+	}
+
+	private async portFor(workspaceId: string): Promise<number | null> {
+		const cached = this.ports.get(workspaceId)
+		if (cached) return cached
+		const discovered = await workspacePort(workspaceId, PORT_SNAPSHOT_TTL_MS)
+		if (discovered) this.ports.set(workspaceId, discovered)
+		return discovered
+	}
+
+	private async serveStatus(): Promise<ServeStatus> {
+		if (!this.bin) throw new Error('Tailscale CLI is not available on this Mac')
+		const { stdout } = await exec(this.bin, ['serve', 'status', '--json'], {
+			encoding: 'utf8',
+			timeout: 10_000
+		})
+		return JSON.parse(stdout) as ServeStatus
+	}
+
+	private async setServe(servePort: number, bridgePort: number): Promise<void> {
+		if (!this.bin) throw new Error('Tailscale CLI is not available on this Mac')
+		await exec(this.bin, ['serve', '--bg', '--yes', `--https=${servePort}`, `http://127.0.0.1:${bridgePort}`], {
+			encoding: 'utf8',
+			timeout: 15_000
+		})
+	}
+
+	private async unsetServe(record: StoredForward): Promise<void> {
+		if (!this.bin) return
+		try {
+			const status = await this.serveStatus()
+			// The user may have replaced this endpoint since the relay created it.
+			// Only remove the exact loopback bridge our persisted receipt names.
+			if (serveProxyAt(status, record.servePort) !== `http://127.0.0.1:${record.bridgePort}`) return
+			await exec(this.bin, ['serve', '--yes', `--https=${record.servePort}`, 'off'], {
+				encoding: 'utf8',
+				timeout: 15_000
+			})
+		} catch {
+			// Cleanup is best-effort. Keep the record so the next relay start can
+			// identify and remove its own stale mapping rather than forgetting it.
+			throw new Error(`could not remove the Tailscale Serve mapping on :${record.servePort}`)
+		}
+	}
+
+	private async release(workspaceId: string): Promise<void> {
+		const record = this.records.get(workspaceId)
+		const proxy = this.proxies.get(workspaceId)
+		let cleanupError: unknown
+		if (record) {
+			try {
+				await this.unsetServe(record)
+			} catch (err) {
+				cleanupError = err
+			}
+		}
+		// Even when the Serve CLI is temporarily unavailable, close the bridge so
+		// its stale HTTPS mapping cannot reach a later process that reuses the port.
+		if (proxy) await proxy.close()
+		this.proxies.delete(workspaceId)
+		if (!cleanupError) this.records.delete(workspaceId)
+		this.save()
+		if (cleanupError) throw cleanupError
+	}
+
+	private async forward(workspaceId: string, targetPort: number): Promise<StoredForward> {
+		const existing = this.records.get(workspaceId)
+		if (existing?.targetPort === targetPort) {
+			const status = await this.serveStatus()
+			const expected = `http://127.0.0.1:${existing.bridgePort}`
+			if (serveProxyAt(status, existing.servePort) === expected && (await bridgeMatches(existing))) return existing
+		}
+		if (existing) await this.release(workspaceId)
+		if (!this.bin || !this.host) throw new Error('Tailscale is not connected on this Mac')
+
+		const status = await this.serveStatus()
+		const servePort = chooseServePort(status, targetPort)
+		if (!servePort) throw new Error('no free Tailscale Serve port is available')
+		const proxy = await createDevProxy(targetPort)
+		try {
+			await this.setServe(servePort, proxy.port)
+		} catch (err) {
+			// `tailscale serve` may have applied the mapping just before its child
+			// process timed out. Remove only this exact bridge if it did, so a failed
+			// action never leaves an untracked endpoint behind.
+			try {
+				const statusAfterFailure = await this.serveStatus()
+				if (serveProxyAt(statusAfterFailure, servePort) === `http://127.0.0.1:${proxy.port}` && this.bin) {
+					await exec(this.bin, ['serve', '--yes', `--https=${servePort}`, 'off'], {
+						encoding: 'utf8',
+						timeout: 15_000
+					})
+				}
+			} catch {
+				// The bridge closes below regardless, making any stale mapping inert.
+			}
+			await proxy.close()
+			throw err
+		}
+		const record: StoredForward = {
+			workspaceId,
+			targetPort,
+			servePort,
+			bridgePort: proxy.port,
+			host: this.host,
+			ownerPid: process.pid,
+			bridgeToken: proxy.token
+		}
+		this.proxies.set(workspaceId, proxy)
+		this.records.set(workspaceId, record)
+		this.save()
+		return record
+	}
+
+	/** Rebuild loopback bridges after launchd or the self-updater restarts the relay. */
+	async restore(): Promise<void> {
+		this.refreshTailscale()
+		// Tailscale can come up after a login LaunchAgent. Retain the receipts in
+		// that case; a later tap can safely replace or remove their exact mappings.
+		if (!this.bin || !this.host) return
+		for (const record of [...this.records.values()]) {
+			try {
+				this.ports.set(record.workspaceId, record.targetPort)
+				// `yarn dev` runs another relay beside the installed LaunchAgent. A
+				// node --watch restart must not steal the installed relay's live bridge
+				// merely because both instances share the same state directory.
+				if (record.ownerPid !== process.pid && (await bridgeMatches(record))) continue
+				const status = await this.serveStatus()
+				const owned = serveProxyAt(status, record.servePort) === `http://127.0.0.1:${record.bridgePort}`
+				if (!owned) {
+					this.records.delete(record.workspaceId)
+					continue
+				}
+				if (!(await tcpOpen(record.targetPort))) {
+					await this.release(record.workspaceId)
+					continue
+				}
+				const proxy = await createDevProxy(record.targetPort)
+				await this.setServe(record.servePort, proxy.port)
+				record.bridgePort = proxy.port
+				record.ownerPid = process.pid
+				record.bridgeToken = proxy.token
+				this.proxies.set(record.workspaceId, proxy)
+				this.records.set(record.workspaceId, record)
+			} catch (err) {
+				console.warn(
+					`⚠ could not restore dev-server forward for ${record.workspaceId} (${err instanceof Error ? err.message : err})`
+				)
+			}
+		}
+		this.save()
+	}
+
+	async state(workspace: Workspace): Promise<DevServerState> {
+		this.refreshTailscale()
+		const record = this.records.get(workspace.id)
+		const port = (await this.portFor(workspace.id)) ?? record?.targetPort ?? null
+		if (port) this.ports.set(workspace.id, port)
+		const running = port ? await tcpOpen(port) : false
+		let forwarded = false
+		if (running && record) {
+			try {
+				const status = await this.serveStatus()
+				forwarded =
+					serveProxyAt(status, record.servePort) === `http://127.0.0.1:${record.bridgePort}` &&
+					(await bridgeMatches(record))
+			} catch {
+				// A disconnected CLI makes the URL unverified, never optimistically live.
+			}
+		}
+		let error: string | undefined
+		if (!this.bin || !this.host) error = 'Tailscale is not connected on this Mac'
+		return {
+			available: !!this.bin && !!this.host,
+			running,
+			forwarded,
+			port,
+			url: forwarded && record ? forwardUrl(record) : null,
+			error
+		}
+	}
+
+	private exclusive(workspace: Workspace, operation: () => Promise<DevServerResult>): Promise<DevServerResult> {
+		const previous = this.actions.get(workspace.id)
+		// Two phones can tap opposite actions at once. Preserve their order instead
+		// of answering Stop with the in-flight Start result.
+		const action = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(operation)
+		this.actions.set(workspace.id, action)
+		void action
+			.finally(() => {
+				if (this.actions.get(workspace.id) === action) this.actions.delete(workspace.id)
+			})
+			.catch(() => undefined)
+		return action
+	}
+
+	start(workspace: Workspace): Promise<DevServerResult> {
+		return this.exclusive(workspace, async () => {
+			this.refreshTailscale()
+			if (!this.bin || !this.host) return { ok: false, ...(await this.state(workspace)) }
+			try {
+				// Fail before pressing Run when this Mac cannot currently configure
+				// Serve. Starting a process the requested one-tap action cannot expose
+				// would leave the phone showing failure while the task keeps running.
+				await this.serveStatus()
+			} catch {
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					error: 'Tailscale Serve is not available on this Mac'
+				}
+			}
+			let port = await this.portFor(workspace.id)
+			const run = await setRunTask(workspace, true)
+			if (!run.ok) return { ok: false, ...(await this.state(workspace)), error: run.error }
+			port ??= run.ports?.[0] ?? null
+			if (!port) port = await workspacePort(workspace.id)
+			if (port) this.ports.set(workspace.id, port)
+			if (!port) {
+				const rollback = run.changed ? await setRunTask(workspace, false) : null
+				const suffix = rollback
+					? rollback.ok
+						? '; it was stopped again'
+						: `; stopping it again also failed: ${rollback.error}`
+					: ''
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					task: run.task,
+					changed: run.changed,
+					error: `Conductor started the task, but its CONDUCTOR_PORT wasn’t visible${suffix}`
+				}
+			}
+			if (!(await waitForPort(port, true, PORT_WAIT_MS))) {
+				const rollback = run.changed ? await setRunTask(workspace, false) : null
+				const suffix = rollback
+					? rollback.ok
+						? '; it was stopped again'
+						: `; stopping it again also failed: ${rollback.error}`
+					: ''
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					task: run.task,
+					changed: run.changed,
+					error: `${run.task ?? 'Run task'} started, but nothing listened on :${port}${suffix}`
+				}
+			}
+			try {
+				await this.forward(workspace.id, port)
+				return { ok: true, ...(await this.state(workspace)), task: run.task, changed: run.changed }
+			} catch (err) {
+				const rollback = run.changed ? await setRunTask(workspace, false) : null
+				const suffix = rollback
+					? rollback.ok
+						? '; it was stopped again'
+						: `; stopping it again also failed: ${rollback.error}`
+					: ''
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					task: run.task,
+					changed: run.changed,
+					error: `${err instanceof Error ? err.message : String(err)}${suffix}`
+				}
+			}
+		})
+	}
+
+	stop(workspace: Workspace): Promise<DevServerResult> {
+		return this.exclusive(workspace, async () => {
+			const before = await this.state(workspace)
+			const run = await setRunTask(workspace, false)
+			if (!run.ok) return { ok: false, ...before, error: run.error }
+			let cleanupError: unknown
+			try {
+				await this.release(workspace.id)
+			} catch (err) {
+				cleanupError = err
+			}
+			if (before.port && !(await waitForPort(before.port, false, 5000))) {
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					task: run.task,
+					changed: run.changed,
+					error: `${run.task ?? 'Run task'} stopped, but :${before.port} is still listening`
+				}
+			}
+			if (cleanupError) {
+				return {
+					ok: false,
+					...(await this.state(workspace)),
+					task: run.task,
+					changed: run.changed,
+					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+				}
+			}
+			return { ok: true, ...(await this.state(workspace)), task: run.task, changed: run.changed }
+		})
+	}
+}

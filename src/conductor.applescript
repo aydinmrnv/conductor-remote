@@ -807,6 +807,106 @@ on selectChatTab()
 	end tell
 end selectChatTab
 
+-- The workspace toolbar's run process. This is deliberately separate from the
+-- chat-strip targeting above: the terminal strip is the sibling AXTabGroup whose
+-- direct radio buttons include Setup / Run / Terminal, and its task button is
+-- named "Run <task>" or "Stop <task>". Conductor may add more terminal tabs, so
+-- identify the strip by the Run radio rather than by its position.
+on runStrip()
+	set matches to {}
+	repeat with entry in my tabGroups()
+		set tg to contents of entry
+		set hasRunTab to false
+		repeat with r in my stripRadios(tg)
+			if (my axName(contents of r)) is "Run" then set hasRunTab to true
+		end repeat
+		if hasRunTab then set end of matches to tg
+	end repeat
+	if (count of matches) is 0 then error "couldn't find Conductor's Run panel"
+	if (count of matches) > 1 then error "can't tell which panel holds Conductor's Run task"
+	return item 1 of matches
+end runStrip
+
+on runTaskButton(tg)
+	set matches to {}
+	tell application "System Events" to tell process "Conductor"
+		repeat with entry in (UI elements of tg whose role is "AXButton")
+			set node to contents of entry
+			set label to my axName(node)
+			if label starts with "Run " or label starts with "Stop " then set end of matches to node
+		end repeat
+	end tell
+	if (count of matches) is 0 then error "this workspace has no selected Run task"
+	if (count of matches) > 1 then error "Conductor exposed more than one selected Run task"
+	return item 1 of matches
+end runTaskButton
+
+on runTaskState(btn)
+	set label to my axName(btn)
+	if label starts with "Stop " then return "running"
+	if label starts with "Run " then return "stopped"
+	error "couldn't read Conductor's Run task state"
+end runTaskState
+
+on runTaskName(btn)
+	set label to my axName(btn)
+	if label starts with "Stop " then return text 6 thru -1 of label
+	if label starts with "Run " then return text 5 thru -1 of label
+	return label
+end runTaskName
+
+on openRunPorts(tg)
+	set found to {}
+	tell application "System Events" to tell process "Conductor"
+		repeat with entry in (UI elements of tg whose role is "AXButton")
+			set label to my axName(contents of entry)
+			if label starts with "Open :" then set end of found to text 7 thru -1 of label
+		end repeat
+	end tell
+	return found
+end openRunPorts
+
+on setRunTask(wantRunning)
+	my activateConductor()
+	my focusWorkspace()
+	set tg to my runStrip()
+	my assertWorkspace(tg)
+	set btn to my runTaskButton(tg)
+	set beforeState to my runTaskState(btn)
+	set taskName to my runTaskName(btn)
+	set wantedState to "stopped"
+	if wantRunning then set wantedState to "running"
+	set changed to "false"
+
+	if beforeState is not wantedState then
+		tell application "System Events" to tell process "Conductor"
+			perform action "AXPress" of btn
+		end tell
+		set changed to "true"
+	end if
+
+	-- The panel re-renders after the press, invalidating every old AX handle.
+	-- Re-find it on each poll and require the opposite label before reporting the
+	-- action as complete. A started web server gets a short second window in which
+	-- Conductor can surface its "Open :<port>" button; non-server tasks simply
+	-- return with an empty port list.
+	set currentState to beforeState
+	set ports to {}
+	repeat with attempt from 1 to 44
+		set tg to my runStrip()
+		set btn to my runTaskButton(tg)
+		set currentState to my runTaskState(btn)
+		set taskName to my runTaskName(btn)
+		if currentState is wantedState then
+			set ports to my openRunPorts(tg)
+			if not wantRunning or (count of ports) > 0 or attempt > 20 then exit repeat
+		end if
+		delay 0.25
+	end repeat
+	if currentState is not wantedState then error "Conductor's Run task did not switch to " & wantedState
+	return currentState & tab & taskName & tab & changed & tab & my joinList(ports, ",")
+end setRunTask
+
 on cancelAgent()
 	-- Stop the answer this chat is streaming: Conductor's own "Cancel agent"
 	-- command, Command-Shift-Delete (key code 51). Taken from its Keyboard

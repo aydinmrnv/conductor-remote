@@ -74,6 +74,7 @@ across re-deploys.
                                       ├─ writes: Actuator ⟶ Conductor
                                       │          ├─ applescript (default): osascript ⟶ focused session
                                       │          └─ sidecar (opt-in):      unix socket ⟶ exact session
+                                      ├─ dev:    Run/Stop ⟶ CONDUCTOR_PORT ⟶ tailnet-only HTTPS
                                       └─ push:   turn ended ⟶ Web Push ⟶ your lock screen
 ```
 
@@ -220,6 +221,13 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   incremental polling.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,
   including untracked files).
+- ✅ **Launch and forward dev servers** — the workspace header's Play button
+  presses Conductor's selected Run task, waits for its allocated
+  `CONDUCTOR_PORT`, and exposes it at a tailnet-only HTTPS URL. Open and Stop
+  controls appear once it is running; Stop uses Conductor's own button and
+  removes only this relay's Serve mapping. This requires a Run task configured
+  in Conductor and Tailscale on the viewing device, even when the relay itself
+  uses public Funnel.
 - ✅ **Send prompt** — two strategies:
   - **`applescript`** (default): drives Conductor's real UI send, landing in the
     *focused* session. Uses the session's own model/permission mode (zero risk of
@@ -368,6 +376,7 @@ src/                the Node relay (no build step)
   git.ts            workspace diff vs target branch (incl. untracked)
   sidecar.ts        Conductor sidecar IPC client (precise write path)
   writes.ts         Actuator interface + AppleScript (default) + Sidecar (opt-in)
+  dev-server.ts     Conductor Run task + tailnet-only HTTPS forwarding
   notify.ts         watches session status for ended turns → push; subscription store
   webpush.ts        Web Push (VAPID + aes128gcm) on node:crypto — no dependencies
   logbuf.ts         console capture + log-file tail behind /api/logs (token redacted)

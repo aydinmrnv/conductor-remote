@@ -401,6 +401,16 @@ export function useSessions(workspaceId: string | undefined, poll = true) {
 	return query
 }
 
+/** The selected Conductor Run task and its tailnet-only forwarded URL. */
+export function useDevServer(workspaceId: string | undefined) {
+	return useQuery({
+		queryKey: ['dev-server', workspaceId],
+		queryFn: () => client.devServer(workspaceId as string),
+		enabled: !!workspaceId,
+		refetchInterval: 2500
+	})
+}
+
 export function useDiff(workspaceId: string | undefined, enabled: boolean) {
 	const report = useOnline()
 	const query = useQuery({

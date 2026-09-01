@@ -11,6 +11,7 @@ import type { Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { ArchivedChat } from './ArchivedChat.tsx'
 import { Composer } from './Composer.tsx'
+import { DevServerControls } from './DevServerControls.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
 import { StatusPicker } from './StatusPicker.tsx'
@@ -143,6 +144,7 @@ export function SessionView() {
 					menu
 					right={
 						<>
+							<DevServerControls workspaceId={ws.id} />
 							<StatusPicker workspace={ws} />
 							<button
 								type="button"

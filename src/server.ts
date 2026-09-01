@@ -8,6 +8,7 @@ import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { DevServerController } from './dev-server.ts'
 import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
@@ -88,6 +89,7 @@ const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
+const devServers = new DevServerController()
 const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
 // Picker labels cannot be reconstructed from `sessions.model`, so they belong to
 // relay state alongside the prompt queues. This lets a brand-new workspace choose
@@ -1265,6 +1267,32 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, { ok: true, workspace: reads.getWorkspace(workspaceId) })
 			}
 
+			// The selected Conductor Run task plus a tailnet-only HTTPS forward for
+			// its allocated port. Reads never touch Conductor's UI; start/stop use the
+			// same Accessibility lock and target assertion as every other UI write.
+			const devServerOf = routeParam(routes.devServer, req.method, pathname)
+			if (devServerOf) {
+				const ws = reads.getWorkspace(devServerOf)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				return json(req, res, 200, await devServers.state(ws))
+			}
+
+			const startDevServerIn = routeParam(routes.startDevServer, req.method, pathname)
+			if (startDevServerIn) {
+				const ws = reads.getWorkspace(startDevServerIn)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const result = await devServers.start(ws)
+				return json(req, res, result.ok ? 200 : result.available ? 502 : 409, result)
+			}
+
+			const stopDevServerIn = routeParam(routes.stopDevServer, req.method, pathname)
+			if (stopDevServerIn) {
+				const ws = reads.getWorkspace(stopDevServerIn)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const result = await devServers.stop(ws)
+				return json(req, res, result.ok ? 200 : 502, result)
+			}
+
 			// GET /api/sessions/:id/messages?after=<rowid>
 			const messagesOf = routeParam(routes.messages, req.method, pathname)
 			if (messagesOf) {
@@ -1620,6 +1648,10 @@ server.listen(cfg.port, cfg.host, () => {
 	firstPrompts.start()
 	// Same for prompts parked behind the lock screen — a lock outlives relay restarts.
 	parkedPrompts.start()
+	// A launchd/self-update restart kills the loopback bridge but not Tailscale's
+	// persisted Serve mapping. Rebuild bridges for dev servers that are still up,
+	// and remove this relay's stale mappings for ones that are not.
+	void devServers.restore()
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a
