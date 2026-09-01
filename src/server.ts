@@ -1589,16 +1589,23 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(cfg.port, cfg.host, () => {
+	// Under `yarn dev` the app comes from Vite and only /api comes from here, so the URL worth
+	// printing is Vite's — carrying the token, which Vite itself has no way to print.
+	const dev = cfg.devWebPort !== undefined
 	console.info(
 		[
 			'conductor-remote relay up',
 			`  db:         ${cfg.dbPath}`,
 			`  worktrees:  ${cfg.workspacesRoot}`,
 			`  actuator:   ${actuator.name}`,
-			`  bound:      ${cfg.host}:${cfg.port}`,
+			`  bound:      ${cfg.host}:${cfg.port}${dev ? '  (/api only — Vite serves the app)' : ''}`,
 			'',
-			`  Local:  http://${cfg.host}:${cfg.port}/#token=${cfg.token}`,
-			'  Phone:  fronted by `tailscale funnel`/`serve` — run `yarn service status` for the HTTPS URL'
+			dev
+				? `  Local:  http://localhost:${cfg.devWebPort}/#token=${cfg.token}`
+				: `  Local:  http://${cfg.host}:${cfg.port}/#token=${cfg.token}`,
+			dev
+				? "  Phone:  same URL with this Mac's tailnet IP in place of localhost (Vite prints it as `Network:`)"
+				: '  Phone:  fronted by `tailscale funnel`/`serve` — run `yarn service status` for the HTTPS URL'
 		].join('\n')
 	)
 	// Loud, actionable warning in relay.log if the node's MagicDNS name drifted from the saved phone URL's host

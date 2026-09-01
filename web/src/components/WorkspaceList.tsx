@@ -383,7 +383,7 @@ function RepoFilter({
 							key={repo.name}
 							checked={selected.includes(repo.name)}
 							label={repo.name}
-							icon={<RepoAvatar icon={repo.icon} name={repo.name} size={REPO_OPTION_ICON} />}
+							icon={<RepoAvatar icon={repo.icon} name={repo.name} />}
 							onChange={() => toggle(repo.name)}
 						/>
 					))}
@@ -392,9 +392,6 @@ function RepoFilter({
 		</div>
 	)
 }
-
-/** Small enough that a repo row is little taller than its text. */
-const REPO_OPTION_ICON = 22
 
 function RepoOption({
 	checked,
@@ -410,7 +407,7 @@ function RepoOption({
 	return (
 		<label className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-0.5 text-left text-sm text-text active:bg-surface">
 			<input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
-			{icon ?? <span className="shrink-0" style={{ width: REPO_OPTION_ICON }} />}
+			{icon ?? <span className="size-8 shrink-0" />}
 			<span className="min-w-0 flex-1 truncate">{label}</span>
 			<span
 				className={cn(

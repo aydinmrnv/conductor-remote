@@ -8,7 +8,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // own SPA fallback. In dev, Vite serves `web/` with HMR and proxies /api to the
 // relay so the phone can hit one origin.
 //
-// Ports are injected by `scripts/dev.ts` (WEB_PORT / RELAY_PORT) so Conductor
+// Ports are injected by `numux.config.ts` (WEB_PORT / RELAY_PORT) so Conductor
 // workspaces can run concurrently on per-workspace ports; both default to the
 // classic 5173 / 8787 pair. This `server` block is dev-only — `vite build`
 // ignores it, so the prod bundle is unaffected.

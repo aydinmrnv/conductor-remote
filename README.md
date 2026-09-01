@@ -119,7 +119,10 @@ yarn start          # serves dist/ + the API (node bin/cli.js)
 ```
 
 Or in one step: `yarn preview` (build + start). For live development with HMR,
-`yarn dev` runs Vite (`:5173`, proxying `/api`) alongside the relay.
+`yarn dev` runs Vite (`:5173`, proxying `/api`) alongside the relay in a
+[numux](https://github.com/hyldmo/numux) TUI — one tab each, `numux.config.ts`
+picks the ports (needs [Bun](https://bun.sh) on PATH). Open the URL the relay tab
+prints: it points at Vite's origin and carries the token, which Vite can't print.
 
 The relay prints a phone URL with an embedded token:
 
@@ -372,8 +375,8 @@ web/                the React PWA (Vite)
   index.html, src/  app shell, components, hooks, api client
 public/             icon.svg + PWA PNGs (repo-root so Conductor's icon lookup finds them)
   push-sw.js        push / notification-click handlers, imported into the generated SW
+numux.config.ts     `yarn dev`: Vite + relay in one TUI, on per-workspace ports
 scripts/
-  dev.ts            runs Vite + relay together
   gen-icons.ts      rasterizes icon.svg → PWA PNGs (sharp)
   devtools-recon.js invoke-logger — only usable if a future build ships devtools
 dist/               built PWA (gitignored) — what the relay serves
