@@ -190,6 +190,7 @@ export function SessionView() {
 						workspaceId={ws.id}
 						working={working}
 						workingSince={workingSince}
+						turnStartedAt={activeSession?.turn_started_at}
 						queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 						onFork={forkChat}
 					/>

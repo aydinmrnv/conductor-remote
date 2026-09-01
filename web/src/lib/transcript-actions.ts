@@ -37,3 +37,29 @@ export function assistantTurnEnds(entries: readonly TranscriptEntry[]): Transcri
 	if (latest) ends.push(latest)
 	return ends
 }
+
+/**
+ * When the turn holding `target` was dispatched — the origin for how long that answer
+ * took.
+ *
+ * `sessions.turn_started_at` is the better source and is what `dispatched` carries: it
+ * reads `queue_order`, so a message typed *into* a running turn (steering) does not
+ * restart the clock. Conductor stopped writing that column on 2026-08-31 and every row
+ * since is NULL, so on a live chat it arrives null and the user row in front of the
+ * response is what is left — which does time from the steer rather than the question.
+ * A dispatch at or after the response belongs to a *later* turn, which is every turn
+ * but the newest, so it measures nothing about this one.
+ */
+export function turnOrigin(
+	entries: readonly TranscriptEntry[],
+	target: TranscriptEntry,
+	dispatched?: string | null
+): string | null {
+	const end = Date.parse(target.ts)
+	if (dispatched && Date.parse(dispatched) < end) return dispatched
+	const from = entries.lastIndexOf(target)
+	for (let i = (from < 0 ? entries.length : from) - 1; i >= 0; i--) {
+		if (entries[i].role === 'user') return entries[i].ts
+	}
+	return null
+}

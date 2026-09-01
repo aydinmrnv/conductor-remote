@@ -66,7 +66,12 @@ export function ArchivedChat({ workspace }: { workspace: SearchWorkspace }) {
 			{!isLoading && !sessionId ? (
 				<Empty>This workspace was archived with no chat in it.</Empty>
 			) : (
-				<Transcript sessionId={sessionId} workspaceId={workspace.id} poll={false} />
+				<Transcript
+					sessionId={sessionId}
+					workspaceId={workspace.id}
+					turnStartedAt={sessions.find(s => s.id === sessionId)?.turn_started_at}
+					poll={false}
+				/>
 			)}
 			{/* Where the composer would be. Saying it plainly beats a disabled box: the chat
 			    reads exactly like a live one, and nothing else on screen says why typing does

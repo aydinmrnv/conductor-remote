@@ -318,6 +318,30 @@ export function elapsed(ms: number): string {
 	return `${s}s`
 }
 
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+/** Where an age in words stops being useful and a date takes over. */
+const AGE_LIMIT = 7 * DAY
+
+/** The clock alone, in the phone's own locale and timezone. */
+function clockTime(at: Date): string {
+	return at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+/**
+ * `Jul 7, 04:40`, carrying the year once it isn't the current one — most of the chats
+ * this reaches are archived, and half of them are older than the calendar on screen.
+ */
+function dateStamp(at: Date, now: Date): string {
+	const date = at.toLocaleDateString(undefined, {
+		month: 'short',
+		day: 'numeric',
+		...(at.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' })
+	})
+	return `${date}, ${clockTime(at)}`
+}
+
 /**
  * When a message was sent, in the phone's own locale and timezone. The date is only
  * spelled out once the message isn't from today — a chat left open overnight would
@@ -326,10 +350,25 @@ export function elapsed(ms: number): string {
 export function messageTime(iso: string): string {
 	const at = new Date(iso)
 	if (!Number.isFinite(at.getTime())) return ''
-	const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-	const today = new Date()
-	if (at.toDateString() === today.toDateString()) return time
-	return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
+	const now = new Date()
+	return at.toDateString() === now.toDateString() ? clockTime(at) : dateStamp(at, now)
+}
+
+/**
+ * How long ago something happened, for a row with the width to say it in words.
+ *
+ * Under a week it is `relativeAge`, the same wording the sidebar prints, because one
+ * age said two ways in one app reads as two different ages. From a week on it becomes
+ * the date instead: "23 days ago" is arithmetic where "9 Aug, 22:43" is the answer,
+ * and it is the cut-off that keeps this from ever reaching that helper's month and
+ * year buckets.
+ */
+export function timeAgo(iso: string, now: number = Date.now()): string {
+	const at = new Date(iso)
+	const age = now - at.getTime()
+	if (!Number.isFinite(age)) return ''
+	if (age >= AGE_LIMIT) return dateStamp(at, new Date(now))
+	return relativeAge(iso, now)
 }
 
 export function relativeTime(iso: string): string {
@@ -358,10 +397,10 @@ let relativeWords: Intl.RelativeTimeFormat | undefined
  * "yesterday" rather than "1 day ago" where that reads better; only "now" is ours,
  * because Intl has no word for the age a row spends most of its life at.
  */
-export function relativeAge(iso: string): string {
+export function relativeAge(iso: string, now: number = Date.now()): string {
 	const then = new Date(iso).getTime()
 	if (!Number.isFinite(then)) return ''
-	const secs = Math.round((Date.now() - then) / 1000)
+	const secs = Math.round((now - then) / 1000)
 	if (secs < 45) return 'now'
 	relativeWords ??= new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
 	if (secs < 90) return relativeWords.format(-1, 'minute')
