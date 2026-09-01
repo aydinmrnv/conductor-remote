@@ -344,3 +344,36 @@ export function relativeTime(iso: string): string {
 	if (hrs < 24) return `${hrs}h`
 	return `${Math.round(hrs / 24)}d`
 }
+
+/**
+ * One formatter, kept: a `Intl.RelativeTimeFormat` costs real work to build and the
+ * sidebar prints one age per row on a list that re-reads every 2.5s. The locale is
+ * the phone's own and doesn't change under a running app.
+ */
+let relativeWords: Intl.RelativeTimeFormat | undefined
+
+/**
+ * The same age as `relativeTime`, spelled out — "2 hours ago" where a row has the
+ * width for it. Intl does the wording, so it follows the phone's language and says
+ * "yesterday" rather than "1 day ago" where that reads better; only "now" is ours,
+ * because Intl has no word for the age a row spends most of its life at.
+ */
+export function relativeAge(iso: string): string {
+	const then = new Date(iso).getTime()
+	if (!Number.isFinite(then)) return ''
+	const secs = Math.round((Date.now() - then) / 1000)
+	if (secs < 45) return 'now'
+	relativeWords ??= new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+	if (secs < 90) return relativeWords.format(-1, 'minute')
+	const mins = Math.round(secs / 60)
+	if (mins < 60) return relativeWords.format(-mins, 'minute')
+	const hrs = Math.round(mins / 60)
+	if (hrs < 24) return relativeWords.format(-hrs, 'hour')
+	const days = Math.round(hrs / 24)
+	// Days stop being a unit anyone reads at a glance somewhere around a month: the
+	// short form can afford "157d", where the words cannot.
+	if (days < 30) return relativeWords.format(-days, 'day')
+	const months = Math.round(days / 30.4)
+	if (months < 12) return relativeWords.format(-months, 'month')
+	return relativeWords.format(-Math.round(days / 365), 'year')
+}
