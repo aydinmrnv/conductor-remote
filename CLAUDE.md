@@ -551,6 +551,30 @@ Two asymmetric halves — keep them separate:
     last line of every stopped chat once the phone could do it. Measured live: the
     stop lands in ~3s, the neighbouring chat in the same workspace keeps working,
     and the composer's draft survives the chord untouched.
+
+    **Archiving a workspace** (`archiveWorkspace`, `POST /api/workspaces/:id/archive`)
+    is the second keystroke here and the only write that destroys something: the
+    worktree goes, and an agent still mid-turn goes with it. Conductor's chord is
+    **`⌘⇧A`**, and it acts on *whatever workspace the pane is showing*, so the branch
+    assertion a send makes is the entire guard — the branch is required, not
+    optional, exactly as it is for the stop. The row menu carries an Archive item
+    too, and it is not used: reaching it costs a sidebar scan plus two menu waits,
+    against one chord on a pane the run has already had to open and check.
+    **The second half of the question is Conductor's own**: a workspace with an agent
+    working draws *"Agents are still running… Archiving will stop them"* over Cancel
+    and **Stop agents and archive**, and an idle one draws nothing at all. So the
+    script waits a bounded moment for that dialog, presses it *only* with
+    `RELAY_ARCHIVE_AGENTS` set, and otherwise escapes and fails — ending someone
+    else's turn is not something to infer from a tap that said Archive. It finds the
+    button by the **pair** (a name mentioning the verb, with a Cancel beside it in the
+    same bounded sweep), the way `waitForMenuWith` identifies a menu by an item it
+    contains, since "the button called Archive" would press whatever else ever wears
+    that word. The relay counts the working chats from the DB *before* touching the
+    UI and refuses without `stopAgents`, so the phone's own dialog can quote the same
+    sentence; the receipt is `workspaces.state` reading `archived`. An already-archived
+    workspace answers `alreadyArchived` rather than 404 — a phone whose answer went
+    missing retries, and the chat it lands back on is `ArchivedChat`, which was
+    already there for search hits.
   - `sidecar` (opt-in, `WRITE_STRATEGY=sidecar`): JSON-RPC over Conductor's unix
     socket, addresses a session by id. Precise in principle but speaks a private
     `-v2-` protocol — the most update-fragile surface here, and **currently
@@ -678,7 +702,7 @@ Two asymmetric halves — keep them separate:
     chord, and asserts the pane before either. Both chords are Conductor's own.
 
 - **MCP is the same relay with an agent on the other end** (`src/mcp-tools.ts`).
-  Sixteen tools, and **every one of them is an HTTP call to the
+  Seventeen tools, and **every one of them is an HTTP call to the
   running relay** — nothing here opens `conductor.db` and nothing here runs
   AppleScript. That is the load-bearing part, not a convenience: `uiTurn` is a
   *process-local* lock, so an MCP server that drove the UI itself would sit outside
@@ -722,7 +746,10 @@ Two asymmetric halves — keep them separate:
     touch them; `dismiss_prompt`, for a prompt the relay is still holding; `keep_awake`,
     which is what keeps this Mac reachable at all through a long unattended run;
     `split_chat`, because Conductor's own fork sits on a hover menu no agent can press;
-    and `relay_logs`. `list_workspaces` prints `pending_prompt`/`parked_prompts` for the same
+    `archive_workspace`, so an agent that has finished can put its own workspace away
+    (Conductor offers that nowhere a prompt can reach either), which is also why it is
+    the one tool that refuses by default and needs `stop_agents` said out loud; and
+    `relay_logs`. `list_workspaces` prints `pending_prompt`/`parked_prompts` for the same
     reason — those live in the relay's queues, not the DB, so an agent reading only
     `status` calls a stalled workspace idle and sends a second copy of the prompt already
     waiting on it.
@@ -730,7 +757,7 @@ Two asymmetric halves — keep them separate:
     server of its own into every agent it runs and that one already holds the name
     `conductor` (AskUserQuestion, DiffComment, GetWorkspaceDiff…). Registered under the
     same name, the two collide inside a Conductor workspace: Conductor's tools win, these
-    sixteen are unreachable, and the *only* surviving trace is this server's
+    seventeen are unreachable, and the *only* surviving trace is this server's
     `INSTRUCTIONS` text landing in the prompt — so it reads exactly like a tool set that
     should be there and isn't. User scope, too: a workspace is a fresh worktree, which a
     project-scoped entry keyed to the main checkout does not cover.

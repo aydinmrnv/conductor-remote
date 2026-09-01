@@ -254,7 +254,7 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same sixteen tools.
+Two transports, same seventeen tools.
 
 | | |
 |---|---|
@@ -265,6 +265,7 @@ Two transports, same sixteen tools.
 | `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
 | `list_models` · `set_agent_options` | cached model labels, model, effort, plan, fast — Conductor keeps these in its UI and nowhere else |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
+| `archive_workspace` | put a finished workspace away (Conductor's ⌘⇧A) — deletes the worktree, keeps the chat |
 | `dismiss_prompt` | throw away a prompt the relay is still holding |
 | `keep_awake` | hold this Mac awake with the lid shut, so a long run stays reachable |
 | `relay_logs` | the relay's own log — why a send failed |
@@ -272,7 +273,7 @@ Two transports, same sixteen tools.
 **Name it `conductor-remote`, not `conductor`.** Conductor injects an MCP server of its
 own into every agent it runs, and that one is already called `conductor`. Register this
 under the same name and inside a Conductor workspace the two collide: Conductor's tools
-win, these sixteen vanish, and the only trace left is this server's instructions text —
+win, these seventeen vanish, and the only trace left is this server's instructions text —
 so it reads as if the tools should be there.
 
 **stdio** — for an agent running on this Mac. The client spawns it as a child process;
@@ -322,11 +323,12 @@ of the time.
 | `send_prompt` | send into an existing chat (drives the real UI) |
 | `stop_turn` | cancel a running answer (drives the real UI) |
 | `set_workspace_status` | set the sidebar status (drives the real UI) |
+| `archive_workspace` | archive a workspace (drives the real UI, deletes the worktree) |
 
 The first six touch nothing. `create_workspace` opens a Conductor deep link, so
 creation needs no Accessibility and steals no focus. Requested model, effort, plan,
 and fast settings are applied later through Conductor's UI, before the relay sends
-the first prompt. The last three drive Conductor's real window for a few seconds.
+the first prompt. The last four drive Conductor's real window for a few seconds.
 
 The HTTP transport is deliberately minimal: the server never initiates a message, so
 there is no SSE stream and `GET /mcp` answers 405, which the spec allows. It keeps no

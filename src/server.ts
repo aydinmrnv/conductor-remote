@@ -62,6 +62,7 @@ import { renderTranscript } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import {
 	type AgentOptions,
+	archiveWorkspace,
 	type ChatTab,
 	createWorkspace,
 	describeActuator,
@@ -1363,6 +1364,51 @@ const server = http.createServer(async (req, res) => {
 					})
 				}
 				return json(req, res, 200, { ok: true, workspace: reads.getWorkspace(workspaceId) })
+			}
+
+			// POST /api/workspaces/:id/archive { stopAgents? } — put the workspace away, the way
+			// Conductor's own ⌘⇧A does. The one write here that destroys something: the worktree
+			// goes, and any agent still working goes with it. So the running agents are counted
+			// from the DB *before* the UI is touched and refused unless the caller has said it
+			// meant that — the phone's own dialog then says so in the same words Conductor's does.
+			const archiveOf = routeParam(routes.archiveWorkspace, req.method, pathname)
+			if (archiveOf) {
+				const workspaceId = archiveOf
+				const body = JSON.parse((await readBody(req)) || '{}') as { stopAgents?: boolean }
+				const ws = reads.getWorkspace(workspaceId)
+				if (!ws) {
+					// Already archived is the answer the caller asked for, not a 404. A phone whose
+					// answer went missing retries, and `getWorkspace` only sees the live sidebar.
+					const known = reads.getAnyWorkspace(workspaceId)
+					if (known?.archived) return json(req, res, 200, { ok: true, alreadyArchived: true, workspace: known })
+					return json(req, res, 404, { error: 'workspace not found' })
+				}
+				const working = reads.listSessions(ws.id).filter(s => s.status === 'working').length
+				if (working > 0 && body.stopAgents !== true) {
+					return json(req, res, 409, {
+						ok: false,
+						agentsRunning: true,
+						error: `${working} agent${working === 1 ? ' is' : 's are'} still working here. Archiving stops them.`
+					})
+				}
+				const result = await archiveWorkspace(ws, body.stopAgents === true)
+				if (!result.ok) return json(req, res, 502, result)
+				// `state` becoming 'archived' is the receipt, like the status change above: the
+				// keystroke is fire-and-forget and Conductor writes the row a beat later.
+				let archived = reads.getAnyWorkspace(workspaceId)
+				for (let i = 0; i < 20 && !archived?.archived; i++) {
+					await sleep(300)
+					archived = reads.getAnyWorkspace(workspaceId)
+				}
+				if (!archived?.archived) {
+					return json(req, res, 502, {
+						ok: false,
+						strategy: result.strategy,
+						error:
+							'Conductor took the archive but the workspace is still in the sidebar. Try again, or archive it on your Mac.'
+					})
+				}
+				return json(req, res, 200, { ok: true, strategy: result.strategy, workspace: archived })
 			}
 
 			// The selected Conductor Run task plus a tailnet-only HTTPS forward for

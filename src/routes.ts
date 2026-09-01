@@ -108,6 +108,8 @@ export const routes = {
 	workspaceFiles: param('GET', '/api/workspaces/:workspaceId/files'),
 	merge: param('POST', '/api/workspaces/:workspaceId/merge'),
 	workspaceStatus: param('POST', '/api/workspaces/:workspaceId/status'),
+	/** Put the workspace away (Conductor's ⌘⇧A) — the one write that deletes a worktree. */
+	archiveWorkspace: param('POST', '/api/workspaces/:workspaceId/archive'),
 	/** Read, start/forward, or stop a local workspace's selected Conductor Run task. */
 	devServer: param('GET', '/api/workspaces/:workspaceId/dev-server'),
 	startDevServer: param('POST', '/api/workspaces/:workspaceId/dev-server'),

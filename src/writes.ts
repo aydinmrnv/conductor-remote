@@ -747,6 +747,51 @@ return "ok"`.trim()
 }
 
 /**
+ * Put a workspace away — Conductor's own "Archive workspace" (Command-Shift-A),
+ * pressed on the workspace this run has just focused and asserted.
+ *
+ * The chord acts on whatever the pane is showing, so the assertion is the entire
+ * guard and the branch is required rather than optional, exactly as it is for
+ * `stopTurn`. The damage is worse here than a mis-aimed prompt: archiving deletes
+ * the worktree and takes any agent mid-turn down with it, so a workspace whose pane
+ * cannot be checked is refused instead of guessed at.
+ *
+ * `stopAgents` is what the caller has said about that second half. Conductor draws a
+ * confirmation ("Stop agents and archive") when the workspace still has an agent
+ * working, and the script presses it only with this set; without it the dialog is
+ * dismissed and the run fails, so a tap that meant "archive" can never quietly end
+ * someone else's turn. An idle workspace draws no dialog at all.
+ *
+ * Nothing is confirmed here. `workspaces.state` becoming `archived` is the receipt
+ * and server.ts waits for it, the same way the stop and the status change do.
+ */
+export async function archiveWorkspace(workspace: Workspace, stopAgents: boolean): Promise<SendResult> {
+	if (!workspace.branch) {
+		return { ok: false, strategy: 'applescript', error: 'workspace has no branch to focus' }
+	}
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+my activateConductor()
+my focusWorkspace()
+my archiveWorkspace()
+return "ok"`.trim()
+	try {
+		await withTargetEnvironment({ workspace, sessionId: null }, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, ...targetEnvironment, RELAY_ARCHIVE_AGENTS: stopAgents ? '1' : '' },
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
+		)
+		return { ok: true, strategy: 'applescript' }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
  * The workspace statuses Conductor's sidebar groups by, mapped from the value it
  * stores in `workspaces.manual_status` to the label on its own menu. `canceled`
  * is on the menu but has never been written in this DB, so it's the one spelling
