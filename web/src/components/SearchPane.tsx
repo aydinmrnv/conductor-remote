@@ -154,7 +154,7 @@ function ResultRow({
 	const body = (
 		<>
 			<div className="flex items-start gap-3">
-				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} />
+				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} artwork="inset" />
 				<div className="min-w-0 flex-1 overflow-hidden">
 					<div className="flex items-center gap-2">
 						<span className="min-w-0 flex-1 truncate font-medium text-text">{workspaceTitle(w)}</span>

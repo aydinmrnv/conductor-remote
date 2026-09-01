@@ -175,12 +175,31 @@ export function Spinner({ label }: { label?: string }) {
 const AVATAR_TILE = 'grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 font-semibold text-muted'
 
 /**
+ * How a surface draws the *artwork* inside the tile. `inset` holds a raster icon to the
+ * 18px the emoji and lucide glyphs draw at, so a list mixing the two reads as one
+ * column; `full-bleed` gives that up for size.
+ *
+ * It is required rather than defaulted, and that is the point. Five surfaces share this
+ * component for its resolution, not for its looks, and while the treatment had a default
+ * the sidebar's answer was every other list's answer too — a change meant for the
+ * workspace row silently resized the repo filter, the search results and both pickers in
+ * the New workspace sheet. Naming it at the call site is what keeps one surface's taste
+ * from reaching the other four.
+ */
+export type RepoArtwork = 'inset' | 'full-bleed'
+
+/**
  * Repo avatar, mirroring Conductor's resolution: an emoji or named glyph the user
  * picked, else the repo's own icon file, else the GitHub owner's avatar, else a
  * letter monogram. Takes icon + name rather than a workspace so the repo picker
  * in NewWorkspaceSheet renders exactly the same glyphs as the workspace list.
+ *
+ * That ladder is why the surfaces share one component: five branches whose order has to
+ * match Conductor's, an authenticated fetch for the repo-file case, and a fallback for
+ * every way each can fail. Four copies of it would be four chances to disagree about
+ * which glyph a repo has. What is *not* shared is `artwork` — see above.
  */
-export function RepoAvatar({ icon, name }: { icon: RepoIcon | null; name: string }) {
+export function RepoAvatar({ icon, name, artwork }: { icon: RepoIcon | null; name: string; artwork: RepoArtwork }) {
 	const monogram = <div className={cn(AVATAR_TILE, 'text-xs')}>{(name.trim()[0] ?? '?').toUpperCase()}</div>
 	if (!icon) return monogram
 
@@ -203,29 +222,46 @@ export function RepoAvatar({ icon, name }: { icon: RepoIcon | null; name: string
 			<ImgTile
 				src={`https://github.com/${encodeURIComponent(icon.owner)}.png?size=64`}
 				fit="cover"
+				artwork={artwork}
 				fallback={monogram}
 			/>
 		)
 
 	// Relay-served repo file: fetched with the auth header (token stays out of the URL). Monogram until then.
-	return <RepoFileIcon repoName={name} fallback={monogram} />
+	return <RepoFileIcon repoName={name} artwork={artwork} fallback={monogram} />
 }
 
-/**
- * A raster avatar tile that falls back to the monogram if the image fails to load.
- * The image is inset to the 18px the emoji and lucide glyphs are drawn at, or it fills
- * the tile edge to edge and reads at nearly twice their size in the same list.
- */
-function ImgTile({ src, fit, fallback }: { src: string; fit: 'cover' | 'contain'; fallback: ReactNode }) {
+/** A raster avatar tile that falls back to the monogram if the image fails to load. */
+function ImgTile({
+	src,
+	fit,
+	artwork,
+	fallback
+}: {
+	src: string
+	fit: 'cover' | 'contain'
+	artwork: RepoArtwork
+	fallback: ReactNode
+}) {
 	const [failed, setFailed] = useState(false)
 	if (failed) return <>{fallback}</>
 	return (
-		<div className={cn(AVATAR_TILE, 'p-1.5')}>
+		<div className={cn(AVATAR_TILE, artwork === 'inset' && 'p-1.5')}>
+			{/* A full-bleed image reaches the tile's corners, so it takes the tile's own radius
+			    (`inherit`, not a second `rounded-lg`, so one value governs both) — and it needs
+			    its own copy, because WebKit drops a parent's rounded clip on a composited child
+			    and `.card`'s `active:scale-[0.985]` makes the workspace row exactly that.
+			    An inset one is a 20px box floating clear of those corners, where the same 8px
+			    reads as 40% of the artwork; it gets a radius proportional to itself instead. */}
 			<img
 				src={src}
 				alt=""
 				loading="lazy"
-				className={cn('size-full', fit === 'cover' ? 'object-cover' : 'object-contain')}
+				className={cn(
+					'size-full',
+					artwork === 'full-bleed' ? 'rounded-[inherit]' : 'rounded-sm',
+					fit === 'cover' ? 'object-cover' : 'object-contain'
+				)}
 				onError={() => setFailed(true)}
 			/>
 		</div>
@@ -233,8 +269,16 @@ function ImgTile({ src, fit, fallback }: { src: string; fit: 'cover' | 'contain'
 }
 
 /** Repo icon served by the relay, fetched with the auth header. Shows the monogram while loading or on error. */
-function RepoFileIcon({ repoName, fallback }: { repoName: string | null; fallback: ReactNode }) {
+function RepoFileIcon({
+	repoName,
+	artwork,
+	fallback
+}: {
+	repoName: string | null
+	artwork: RepoArtwork
+	fallback: ReactNode
+}) {
 	const { data, isError } = useRepoIcon(repoName)
 	if (!repoName || isError || !data) return <>{fallback}</>
-	return <ImgTile src={data} fit="contain" fallback={fallback} />
+	return <ImgTile src={data} fit="contain" artwork={artwork} fallback={fallback} />
 }

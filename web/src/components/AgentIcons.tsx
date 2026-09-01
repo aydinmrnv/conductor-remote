@@ -14,6 +14,18 @@ const PROVIDER_MARKS = {
 
 type Provider = keyof typeof PROVIDER_MARKS
 
+/**
+ * Claude's is the package's own `claude-color.svg` rather than a colour picked by eye.
+ * The other three ship no `-color.svg` at all — every path in them is
+ * `fill="currentColor"` — so OpenAI's white is a choice, not a brand value, and it holds
+ * only because this app has no light theme. `cursor` and `opencode` stay whatever the
+ * surface around them is.
+ */
+const PROVIDER_COLORS: Partial<Record<Provider, string>> = {
+	claude: '#D97757',
+	openai: '#FFF'
+}
+
 function providerFor(agentType: string | null, model: string | null): Provider | undefined {
 	const label = model?.toLowerCase() ?? ''
 	if (/^(?:anthropic\/|claude|fable|haiku|opus|sonnet)/.test(label)) return 'claude'
@@ -48,6 +60,8 @@ export function ProviderMark({
 			aria-hidden="true"
 			className={cn('inline-block shrink-0 bg-current', className)}
 			style={{
+				// `bg-current` paints the mask, so the tint is a `color` on the same element.
+				color: PROVIDER_COLORS[provider],
 				WebkitMaskImage: `url("${source}")`,
 				maskImage: `url("${source}")`,
 				WebkitMaskPosition: 'center',

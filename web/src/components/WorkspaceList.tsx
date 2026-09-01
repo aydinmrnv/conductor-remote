@@ -26,7 +26,7 @@ import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
-import { Badge, Chip, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
+import { Badge, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
 /** Pinned first (matches the relay's order), then the chosen sort key. */
 function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
@@ -247,10 +247,14 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 											const unread = unreadCount(w, readMarks)
 											return (
 												<li key={w.id} className="fade-in">
+													{/* Tighter than the shared `.card` (px-4 py-3.5): this row is the one
+													    card the app draws by the dozen, and the nav already pads it by 12px,
+													    so the card's own inset was double-spending the phone's narrow rail.
+													    `p-2` sits in the utilities layer, which is what lets it win. */}
 													<button
 														type="button"
 														className={cn(
-															'card w-full',
+															'card w-full px-3 py-2.5',
 															w.id === selectedId ? 'border-accent/50 bg-surface-2' : unread && 'border-l-accent'
 														)}
 														onClick={() => open(w.id)}
@@ -410,7 +414,7 @@ function RepoFilter({
 							key={repo.name}
 							checked={selected.includes(repo.name)}
 							label={repo.name}
-							icon={<RepoAvatar icon={repo.icon} name={repo.name} />}
+							icon={<RepoAvatar icon={repo.icon} name={repo.name} artwork="inset" />}
 							onChange={() => toggle(repo.name)}
 						/>
 					))}
@@ -546,16 +550,19 @@ function WorkspaceCard({
 	const model = modelLabel(w.model, catalogFor(modelGroups, w.agent_type))
 	return (
 		<>
-			<div className="relative shrink-0 self-start">
-				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} />
+			{/* No `self-start`: it pinned the tile to the top of the text column and left it
+			    high of the row's middle. Both lines beside it are single-line (truncate), so
+			    the column can never grow and centring can never drift. */}
+			<div className="relative shrink-0">
+				<RepoAvatar icon={w.icon} name={w.repo_name || workspaceTitle(w)} artwork="full-bleed" />
 				{/* `bg-surface` fills the spinner's hollow centre so the avatar doesn't show through it. */}
 				<StatusDot w={w} className="absolute -right-0.5 -bottom-0.5 bg-surface ring-2 ring-surface" />
 			</div>
-			<div className="min-w-0 flex-1 overflow-hidden">
+			<div className="min-w-0 flex-1 space-y-1.25 overflow-hidden">
 				<div className="flex items-center gap-2">
 					<span
 						className={cn(
-							'min-w-0 flex-1 truncate leading-none',
+							'min-w-0 flex-1 truncate text-sm leading-none',
 							unread ? 'font-bold' : 'font-medium',
 							unread || selected ? 'text-text' : 'text-muted'
 						)}
@@ -573,13 +580,13 @@ function WorkspaceCard({
 				{/* Age first: it is the one thing every row is scanned for, and the left edge is
 				    where that scan already is. The model sits at the right edge, where a column
 				    of marks reads at a glance and a long name has somewhere to truncate. */}
-				<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">
+				<div className="flex min-w-0 items-end gap-2 text-xs text-muted">
 					<span className="shrink-0 text-[11px] text-faint">{relativeAge(w.updated_at)}</span>
 					{model ? (
-						<Chip className="ml-auto flex min-w-0 items-center gap-1 pl-1 font-sans">
+						<span className="ml-auto flex min-w-0 items-center gap-1 text-[11px]">
 							<ProviderMark agentType={w.agent_type} model={w.model} className="size-3" />
 							<span className="truncate">{model}</span>
-						</Chip>
+						</span>
 					) : null}
 				</div>
 			</div>
