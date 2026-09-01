@@ -31,6 +31,8 @@ export interface WorkspaceRow {
 	session_status: string | null
 	session_title: string | null
 	model: string | null
+	/** The harness behind `model` ('claude', 'codex', 'cursor', 'acp'…), for the provider mark. */
+	agent_type: string | null
 }
 
 /**
@@ -293,7 +295,8 @@ export class Reads {
 			        w.state, w.created_at, w.updated_at, w.pinned_at, w.active_session_id, w.intended_target_branch,
 			        r.name AS repo_name, r.root_path AS repo_root, r.icon AS repo_icon,
 			        r.remote_url AS remote_url, r.default_branch AS default_branch,
-			        s.status AS session_status, s.title AS session_title, s.model AS model
+			        s.status AS session_status, s.title AS session_title, s.model AS model,
+			        s.agent_type AS agent_type
 			 FROM workspaces w
 			 LEFT JOIN repos r ON r.id = w.repository_id
 			 LEFT JOIN sessions s ON s.id = w.active_session_id

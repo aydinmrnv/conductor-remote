@@ -1,25 +1,26 @@
 import { Check, ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useWorkspaces } from '../hooks.ts'
+import { useModelCatalog, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
 	isDone,
 	isMerged,
+	modelLabel,
 	RECENT_BUCKETS,
 	recentBucket,
 	recentBucketLabel,
-	relativeTime,
+	relativeAge,
 	STATUS_COLORS,
 	STATUS_ORDER,
-	shortModel,
 	workspaceStatus,
 	workspaceStatusLabel,
 	workspaceTitle
 } from '../lib/format.ts'
 import { unreadCount } from '../lib/read.ts'
-import type { RepoIcon, Workspace } from '../lib/types.ts'
+import type { CachedModelGroup, RepoIcon, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
+import { ProviderMark } from './AgentIcons.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
@@ -91,6 +92,11 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [searchOpen, setSearchOpen] = useState(false)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
+	// Conductor's own names for the models these rows run on, read once for the whole
+	// list: the catalog is a single cached request, while a hook per card would be one
+	// subscription per row on a list that re-reads every 2.5s. It costs no UI trip —
+	// `GET /api/models` serves what the picker was last seen holding.
+	const modelGroups = useModelCatalog().data?.groups
 
 	// ⌘K / Ctrl+K opens search from any screen. This component is always mounted —
 	// drawer on phones, static rail on md+ — so the one listener covers the whole app
@@ -249,7 +255,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 														)}
 														onClick={() => open(w.id)}
 													>
-														<WorkspaceCard w={w} unread={unread} selected={w.id === selectedId} />
+														<WorkspaceCard
+															w={w}
+															unread={unread}
+															selected={w.id === selectedId}
+															modelGroups={modelGroups}
+														/>
 													</button>
 												</li>
 											)
@@ -509,8 +520,30 @@ function ViewSelect({
 	)
 }
 
-function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; selected: boolean }) {
-	const model = shortModel(w.model)
+/**
+ * The picker labels to name this workspace's model with. Its own agent's list when
+ * that picker has been read, and otherwise everything the relay has ever seen — an
+ * id that several of those labels could name resolves to none of them
+ * (`format.ts` ▸ `modelLabel`), so the wider list can't produce a wrong name.
+ */
+function catalogFor(groups: CachedModelGroup[] | undefined, agentType: string | null): string[] {
+	if (!groups?.length) return []
+	const own = groups.find(g => g.agentType === (agentType ?? 'unknown'))
+	return own?.models ?? [...new Set(groups.flatMap(g => g.models))]
+}
+
+function WorkspaceCard({
+	w,
+	unread,
+	selected,
+	modelGroups
+}: {
+	w: Workspace
+	unread: number
+	selected: boolean
+	modelGroups: CachedModelGroup[] | undefined
+}) {
+	const model = modelLabel(w.model, catalogFor(modelGroups, w.agent_type))
 	return (
 		<>
 			<div className="relative shrink-0 self-start">
@@ -537,9 +570,17 @@ function WorkspaceCard({ w, unread, selected }: { w: Workspace; unread: number; 
 				{/* Context usage is *not* here: a workspace holds several chats and this card can only
 				    speak for the active one, so the number read as the workspace's. It lives on the
 				    chat tab that owns it (components/SessionView.tsx ▸ SessionTabs). */}
+				{/* Age first: it is the one thing every row is scanned for, and the left edge is
+				    where that scan already is. The model sits at the right edge, where a column
+				    of marks reads at a glance and a long name has somewhere to truncate. */}
 				<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">
-					{model ? <Chip>{model}</Chip> : null}
-					<span className="ml-auto shrink-0 pl-2 text-[11px] text-faint">{relativeTime(w.updated_at)}</span>
+					<span className="shrink-0 text-[11px] text-faint">{relativeAge(w.updated_at)}</span>
+					{model ? (
+						<Chip className="ml-auto flex min-w-0 items-center gap-1 pl-1 font-sans">
+							<ProviderMark agentType={w.agent_type} model={w.model} className="size-3" />
+							<span className="truncate">{model}</span>
+						</Chip>
+					) : null}
 				</div>
 			</div>
 		</>
