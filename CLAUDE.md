@@ -1471,6 +1471,14 @@ bind trap below), not by unit test.
     first paint. `tests/mention-render.test.tsx` renders the chat to static markup for
     the fence trap alone — it caught it — because everything else about it typechecks
     and the failure is silent in both directions.
+    **A link the sanitiser emptied is not a link, and `ChatLink` now says so.**
+    react-markdown keeps only `http(s)`, `irc(s)`, `mailto` and `xmpp`, and rewrites every
+    other scheme to `href=""` — which a browser follows to the page it is already on, so
+    on a phone it is a tap that reloads the PWA and reads as a broken link. Nobody has to
+    write a bad link to reach it: gstack appends `<gstack-qid:{question_id}>` to a review
+    question on the belief that angle brackets hide it, and CommonMark reads
+    `<scheme:rest>` as an **autolink**, so the marker arrives visible *and* clickable. An
+    empty href now renders as text.
 - **Releases key off reachable version tags — never rewind `main` after a tagged
   release.** CI's `release` job runs `semantic-release` on every `main` push: it
   takes the highest `vX.Y.Z` tag *reachable from `main`* as the last release and

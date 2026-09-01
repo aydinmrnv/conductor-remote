@@ -82,6 +82,12 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 	const mention = useFileMention(href ?? null)
 	const reference = sourceReference(href) ?? mention
 	const [previewing, setPreviewing] = useState(false)
+	// react-markdown's sanitiser blanks the href of every scheme outside http(s), irc(s),
+	// mailto and xmpp, and an empty href follows to the page you are already on — a tap
+	// that silently reloads the PWA. It is reachable without anyone writing a bad link:
+	// gstack appends `<gstack-qid:plan-eng-review-…>` to a review question believing the
+	// angle brackets hide it, and CommonMark reads `<scheme:rest>` as an autolink.
+	if (!href) return <span title={props.title}>{children}</span>
 	if (attachment) {
 		return (
 			<span
