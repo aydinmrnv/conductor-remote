@@ -5,6 +5,7 @@ import { useRepoIcon } from '../hooks.ts'
 import { ApiError } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { statusDot } from '../lib/format.ts'
+import { unlockUrl } from '../lib/lock.ts'
 import { LUCIDE_ICONS } from '../lib/lucideIcons.ts'
 import type { RepoIcon, Workspace } from '../lib/types.ts'
 import { useApp } from '../store.ts'
@@ -61,6 +62,22 @@ export function OfflineBanner() {
 			<WifiOff size={13} />
 			<span>Offline — retrying…{lastSyncAt ? ` last synced ${syncedAgo(now - lastSyncAt)} ago` : ''}</span>
 		</div>
+	)
+}
+
+/**
+ * What the phone offers beside a refusal only a person at the Mac can clear: the lock
+ * screen accepts no relay write, so every locked-Mac failure ends here rather than in a
+ * Retry that would fail the same way (see src/parked.ts for why the relay won't unlock).
+ * Renders nothing when there is no host to hand off to — a dev checkout on loopback.
+ */
+export function UnlockLink({ className }: { className?: string }) {
+	const href = unlockUrl()
+	if (!href) return null
+	return (
+		<a href={href} className={cn('font-semibold text-accent underline underline-offset-2', className)}>
+			Unlock the Mac
+		</a>
 	)
 }
 

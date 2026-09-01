@@ -164,11 +164,25 @@ Two asymmetric halves — keep them separate:
   auto-updates itself from npm. "Only with `EXPOSE=tailnet`" doesn't rescue that:
   `readExposeMode()` falls back to **`public`**, and this posture has already
   healed itself back onto the open internet once (see the LaunchAgent-plist trap
-  below). So the phone links to the unlock instead of performing it — a parked
-  bubble carries **`vnc://<this host>`** (`Transcript.tsx` ▸ `unlockUrl`, built
-  from `location.hostname`, since the PWA is already served from the Mac's own
-  MagicDNS name), which hands off to whichever VNC client the phone has. Type the
-  password there and the 5s lock poll flushes the queue on its own.
+  below). So the phone links to the unlock instead of performing it —
+  **`vnc://<this host>`** (`web/src/lib/lock.ts` ▸ `unlockUrl`, built from
+  `location.hostname`, since the PWA is already served from the Mac's own MagicDNS
+  name), which hands off to whichever VNC client the phone has. Type the password
+  there and the 5s lock poll flushes the queue on its own.
+  **A parked bubble is not the only place that link belongs**, and for a while it
+  was the only one that had it. A send parks; a *fork*, a stop, a status change and
+  a model list have no queue to park into, so each of them ends at a refusal the
+  phone must be able to act on — measured live 2026-09-01, a tap on Fork against a
+  locked Mac answered with the lock sentence followed by
+  `[window server: 6; screen: locked] [processes: conductor=0] [menus: Apple,
+  Conductor, File, …]` in 11px red, with nothing to press. So the phrase every lock
+  refusal starts with is declared once (`src/shared.ts` ▸ `MAC_LOCKED`,
+  `isLockedError`) and read by both sides — the relay parks on it (`writes.ts` ▸
+  `lockBlocked`), the phone draws `UnlockLink` beside it — and that evidence tail is
+  cut on the way out of `json()` (`shared.ts` ▸ `withoutWindowEvidence`) and written
+  to the log instead, which `/api/logs` serves to the same phone on request. The
+  refusals themselves say "try again" rather than "send again", because three of the
+  four callers aren't sends.
 - **Only one UI operation at a time** (`writes.ts` ▸ `uiTurn`). Every AppleScript
   here drives Conductor's single shared window, so two overlapping runs interleave
   and land a prompt in whatever the other one focused — the exact failure every
@@ -740,7 +754,8 @@ Two asymmetric halves — keep them separate:
     as *values* by the web app, both stdlib-free on purpose. `src/shared.ts` holds
     what both sides must compute identically — `workspaceTitle` (three copies
     before, so the sidebar and a push notification could name one workspace two
-    ways), `queryTokens`, and the snippet hit markers. Everything else is
+    ways), `queryTokens`, the snippet hit markers, and the locked-Mac phrase both
+    sides match on (`MAC_LOCKED`, above). Everything else is
     `import type`, enforced by `scripts/check-imports.ts`, because the near miss
     (`import { type X }`, inline rather than statement-level) still emits a real
     import. A third exception should be an argument, not an edit: each one is a
@@ -894,8 +909,20 @@ Two asymmetric halves — keep them separate:
   armed window. `PREVENT_SCREEN_LOCK` defaults on and the CLI can opt out through
   `config set prevent-screen-lock off`; the pidfile's fourth field records the applied mode
   so the phone warns from fact.
-  The CLI warning names the physical-access cost. A manual lock or lid close can still
-  lock the session, and those sends park (`src/parked.ts`).
+  The CLI warning names the physical-access cost. **A lid close still locks the session,
+  and the assertion is not on that path at all** — measured from `loginwindow`'s own log
+  (2026-09-01): keep-awake armed 20:16:24, lid shut 20:16:27 (`clamshell closed, but
+  screen is not locked. Ignoring`), the display slept from that event 13s later and
+  `LWDisplayWillSleepCallback` locked the session as `kLWLockFromDisplayDim`, with
+  `PMDisplaySleepIsBlocked` never consulted — it guards the *screen saver*, which is a
+  different trigger. So `disablesleep` keeps the machine running with the lid down and
+  the session locks anyway ~16s in, which is the state this product is used in most.
+  Those sends park (`src/parked.ts`), and the phone stops overclaiming: the card says
+  *idle* screen lock rather than promising there is no lock, and `/api/settings` carries
+  a live `screenLocked` (one probe per sheet open, never polled) so an armed window
+  cannot say the lock is off while the lock screen is up. The only lever that would
+  cover the lid is the user's own `askForPassword` (Require password after the display
+  turns off), which is their security posture and not the relay's to flip.
 - **The Mac's own Wi-Fi is readable only in the parts that don't matter.** The
   funnel watchdog can move this Mac onto a phone hotspot when its link dies
   (`src/wifi.ts`, opt-in via `src/settings.ts`), and the guards are the design: it

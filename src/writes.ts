@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Workspace } from './reads.ts'
-import { modelPickerLabel } from './shared.ts'
+import { isLockedError, modelPickerLabel } from './shared.ts'
 import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
 
 const exec = promisify(execFile)
@@ -273,10 +273,12 @@ export function retryWontHelp(error: string | undefined): boolean {
  * warm-up cost a retry loop should burn budget on — the caller parks the prompt
  * instead (src/parked.ts) and the queue delivers it when the lock lifts. Matched
  * on the phrase every lock refusal in conductor.applescript starts with; the
- * words are ours, so they can't drift under us the way macOS's can.
+ * words are ours, so they can't drift under us the way macOS's can. The phrase
+ * itself lives in src/shared.ts because the phone matches it too — it is what
+ * puts the Screen Sharing link beside a refusal nobody else can clear.
  */
 export function lockBlocked(error: string | undefined): boolean {
-	return (error ?? '').includes('The Mac is locked')
+	return isLockedError(error)
 }
 
 /**

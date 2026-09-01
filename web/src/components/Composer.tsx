@@ -3,10 +3,12 @@ import { ArrowUp, Info, LoaderCircle, Paperclip, Square, WifiOff, X } from 'luci
 import { useEffect, useRef, useState } from 'react'
 import { useSendPrompt } from '../hooks.ts'
 import { client } from '../lib/api.ts'
+import { isLockedError } from '../lib/lock.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { ActuatorInfo, Attachment, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentBar } from './AgentBar.tsx'
+import { UnlockLink } from './ui.tsx'
 
 type StagedAttachment = Attachment & {
 	id: string
@@ -245,13 +247,12 @@ export function Composer({
 				)
 			)}
 			{stopError ? (
-				<button
-					type="button"
-					onClick={() => setStopError(null)}
-					className="mb-2 block w-full rounded-lg border border-del/40 bg-del/10 px-3 py-1.5 text-left text-xs text-del"
-				>
-					{stopError}
-				</button>
+				<div className="mb-2 rounded-lg border border-del/40 bg-del/10 px-3 py-1.5 text-xs text-del">
+					<button type="button" onClick={() => setStopError(null)} className="block w-full text-left">
+						{stopError}
+					</button>
+					{isLockedError(stopError) ? <UnlockLink className="mt-1 inline-block" /> : null}
+				</div>
 			) : null}
 			{/* `has-[textarea:focus]`, not `focus-within`: the controls inside the card take
 			    focus too, and lighting the whole card up on a Plan tap reads as a typo. */}

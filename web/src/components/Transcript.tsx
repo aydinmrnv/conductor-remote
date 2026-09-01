@@ -6,6 +6,7 @@ import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
 import { languageForTool } from '../lib/highlight.ts'
+import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { latestAssistantForActions } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
@@ -14,7 +15,7 @@ import { Code } from './Code.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
-import { Empty, Spinner } from './ui.tsx'
+import { Empty, Spinner, UnlockLink } from './ui.tsx'
 
 /** The three useful transcript cuts that `split_chat` exposes through MCP. */
 export interface SplitFormat {
@@ -287,7 +288,7 @@ function QueuedEntry({
 	const failed = queued.status === 'failed'
 	// A parked entry names its chat, a first prompt carries no `sessionId` (src/wire.ts) — and only
 	// the parked one is held by the lock screen, only for as long as it hasn't given up.
-	const unlock = !failed && queued.sessionId ? unlockUrl() : null
+	const unlock = !failed && !!queued.sessionId
 	return (
 		<div className="flex flex-col items-end gap-1" data-user-msg={messagePreview(queued.text)} data-msg-state="queued">
 			<Bubble className={cn('max-w-[85%] bg-accent-soft text-text opacity-60', failed && 'border border-del/40')}>
@@ -310,30 +311,11 @@ function QueuedEntry({
 				<span className="flex items-center gap-1 pr-1 text-[11px] text-faint">
 					<Loader2 size={11} className="animate-spin" />
 					{queued.reason ?? 'The relay is sending this'}
-					{unlock ? (
-						<a href={unlock} className="ml-1 font-semibold text-accent underline underline-offset-2">
-							Unlock the Mac
-						</a>
-					) : null}
+					{unlock ? <UnlockLink className="ml-1" /> : null}
 				</span>
 			)}
 		</div>
 	)
-}
-
-/**
- * Screen Sharing on the relay's Mac, addressed the way this phone already reaches it: the PWA is
- * served from that Mac's own MagicDNS name, so `location.hostname` is the host to unlock and no
- * relay round trip is needed to learn it. `vnc://` is the scheme the iOS clients register (Screens,
- * RealVNC, Jump), and it is the only remote path there is: macOS exposes no unlock API, the lock
- * screen refuses synthetic keystrokes, and Apple's own Screen Sharing server is the one input
- * channel it still accepts. So the button carries you to the password prompt; it doesn't answer it.
- * Loopback returns null because a dev checkout serves this same UI from 127.0.0.1.
- */
-function unlockUrl(): string | null {
-	const host = location.hostname
-	if (!host || host === 'localhost' || host.startsWith('127.')) return null
-	return `vnc://${host}`
 }
 
 /** An optimistic user prompt: greyed while `sending`, or a red bubble with Retry/Dismiss on failure. */
@@ -520,7 +502,12 @@ function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFo
 					) : null}
 				</div>
 			</div>
-			{forkError ? <span className="max-w-[85vw] text-[11px] text-del">{forkError}</span> : null}
+			{forkError ? (
+				<span className="max-w-[85vw] text-[11px] text-del">
+					{forkError}
+					{isLockedError(forkError) ? <UnlockLink className="ml-1" /> : null}
+				</span>
+			) : null}
 		</div>
 	)
 }
