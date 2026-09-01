@@ -1,10 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileDiff, Plus, X } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
-import { useAnyWorkspace, useSessions, useWorkspaces } from '../hooks.ts'
+import { useAnyWorkspace, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { buildResolver, MentionResolverProvider } from '../lib/fileMentions.ts'
 import { shortModel, workspaceTitle } from '../lib/format.ts'
 import { isUnread, type ReadMarks } from '../lib/read.ts'
 import type { Session } from '../lib/types.ts'
@@ -49,6 +50,15 @@ export function SessionView() {
 	const ws = liveWorkspace
 	const actuator = data?.actuator
 	const { data: anyWorkspace, isLoading: loadingAny } = useAnyWorkspace(workspaceId, missing)
+
+	// What turns a file an agent named in a message into a source link. The list is the
+	// worktree's own, so it belongs to the workspace on screen rather than to a chat, and
+	// the resolver is memoised because every inline code span in the transcript reads it —
+	// a new one per render would undo the bail-outs the whole transcript depends on.
+	const { data: workspaceFiles } = useWorkspaceFiles(workspaceId, !!liveWorkspace?.worktree)
+	const worktree = liveWorkspace?.worktree ?? null
+	const files = workspaceFiles?.files
+	const resolveMention = useMemo(() => buildResolver(worktree, files), [worktree, files])
 
 	const sessions = sessionsData?.sessions ?? []
 	const sessionId =
@@ -135,66 +145,68 @@ export function SessionView() {
 	}
 
 	return (
-		<div className="flex h-full min-w-0 overflow-hidden">
-			<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-				<Header
-					title={workspaceTitle(ws)}
-					subtitle={subtitle}
-					menu
-					right={
-						<>
-							<StatusPicker workspace={ws} />
-							<button
-								type="button"
-								onClick={() => setDiffOpen(o => !o)}
-								aria-label="Toggle diff panel"
-								aria-pressed={diffOpen}
-								className={cn(
-									'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
-									diffOpen && 'bg-surface-2 text-text'
-								)}
-							>
-								<FileDiff size={19} />
-							</button>
-						</>
-					}
-				/>
-				{sessions.length > 0 ? (
-					<SessionTabs
-						sessions={sessions}
-						activeId={sessionId}
-						readMarks={readMarks}
-						onSelect={pickSession}
-						onNewChat={createChat}
-						creating={creatingChat}
+		<MentionResolverProvider value={resolveMention}>
+			<div className="flex h-full min-w-0 overflow-hidden">
+				<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+					<Header
+						title={workspaceTitle(ws)}
+						subtitle={subtitle}
+						menu
+						right={
+							<>
+								<StatusPicker workspace={ws} />
+								<button
+									type="button"
+									onClick={() => setDiffOpen(o => !o)}
+									aria-label="Toggle diff panel"
+									aria-pressed={diffOpen}
+									className={cn(
+										'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+										diffOpen && 'bg-surface-2 text-text'
+									)}
+								>
+									<FileDiff size={19} />
+								</button>
+							</>
+						}
 					/>
-				) : null}
-				{/* The relay's undelivered prompt for this chat: one parked for the lock screen
+					{sessions.length > 0 ? (
+						<SessionTabs
+							sessions={sessions}
+							activeId={sessionId}
+							readMarks={readMarks}
+							onSelect={pickSession}
+							onNewChat={createChat}
+							creating={creatingChat}
+						/>
+					) : null}
+					{/* The relay's undelivered prompt for this chat: one parked for the lock screen
 				    wins (it names its session; oldest first, since delivery is FIFO), else the
 				    workspace's first prompt still waiting on setup. */}
-				<Transcript
-					sessionId={sessionId}
-					workspaceId={ws.id}
-					working={working}
-					workingSince={workingSince}
-					queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
-					onFork={forkChat}
-				/>
-				{/* The agent controls — and the Stop button — render inside the composer card. */}
-				<Composer
-					key={ws.id}
-					session={activeSession}
-					sessionId={sessionId}
-					workspaceId={ws.id}
-					working={working}
-					actuator={actuator}
-					focusDraft={sessionId === focusComposerFor}
-					onDraftFocused={() => setFocusComposerFor(null)}
-				/>
-			</div>
+					<Transcript
+						sessionId={sessionId}
+						workspaceId={ws.id}
+						working={working}
+						workingSince={workingSince}
+						queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
+						onFork={forkChat}
+					/>
+					{/* The agent controls — and the Stop button — render inside the composer card. */}
+					<Composer
+						key={ws.id}
+						session={activeSession}
+						sessionId={sessionId}
+						workspaceId={ws.id}
+						working={working}
+						actuator={actuator}
+						focusDraft={sessionId === focusComposerFor}
+						onDraftFocused={() => setFocusComposerFor(null)}
+					/>
+				</div>
 
-			{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}
-		</div>
+				{diffOpen ? <DiffPanel workspaceId={ws.id} onClose={() => setDiffOpen(false)} /> : null}
+			</div>
+		</MentionResolverProvider>
 	)
 }
 

@@ -30,6 +30,7 @@ import type {
 	StopResult,
 	UploadAttachmentResult,
 	WorkspaceDiff,
+	WorkspaceFilesResponse,
 	WorkspaceResponse
 } from './types.ts'
 
@@ -212,6 +213,8 @@ export const client = {
 			file
 		),
 	diff: (workspaceId: string) => api<WorkspaceDiff>(routes.diff.path(workspaceId)),
+	/** The worktree's file list, which is what turns a file an agent named into a link. */
+	workspaceFiles: (workspaceId: string) => api<WorkspaceFilesResponse>(routes.workspaceFiles.path(workspaceId)),
 	/**
 	 * The relay retries a failed send itself (and confirms each try against the
 	 * transcript), hence the long budget. `agent` is the staged settings patch,
