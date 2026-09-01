@@ -315,9 +315,19 @@ export class Reads {
 	}
 
 	/**
-	 * The repos Conductor knows about, in its own sidebar order. `root_path` is
+	 * The repos Conductor knows about, most recently used first. `root_path` is
 	 * what a `conductor://…&path=` deep link needs to pick the target repo — with
 	 * no path Conductor silently falls back to the *first* repo.
+	 *
+	 * "Used" is the newest workspace in the repo, never `repos.updated_at`: that
+	 * column moves when the repo's *settings* change, so the repo worked in every
+	 * day here reads as last touched six weeks ago. Repos with no workspace at all
+	 * keep Conductor's own sidebar order, behind every repo that has one.
+	 *
+	 * The `replace()`s are load-bearing: `created_at` is always `YYYY-MM-DD HH:MM:SS`
+	 * while `updated_at` is written both that way (306 rows) and as ISO with a `Z`
+	 * (1,819), and 'T' sorts after ' ', so an untouched string compare can rank an
+	 * earlier ISO row above a later plain one on the same day.
 	 */
 	listRepos(): RepoRow[] {
 		const rows = this.db.query<{
@@ -327,10 +337,14 @@ export class Reads {
 			icon: string | null
 			remote_url: string | null
 		}>(
-			`SELECT name, root_path, default_branch, icon, remote_url
-			 FROM repos
-			 WHERE COALESCE(hidden, 0) = 0
-			 ORDER BY (display_order IS NULL), display_order, name`
+			`SELECT r.name, r.root_path, r.default_branch, r.icon, r.remote_url
+			 FROM repos r
+			 LEFT JOIN workspaces w ON w.repository_id = r.id
+			 WHERE COALESCE(r.hidden, 0) = 0
+			 GROUP BY r.id
+			 ORDER BY (MAX(MAX(REPLACE(REPLACE(w.updated_at, 'T', ' '), 'Z', ''), w.created_at)) IS NULL),
+			          MAX(MAX(REPLACE(REPLACE(w.updated_at, 'T', ' '), 'Z', ''), w.created_at)) DESC,
+			          (r.display_order IS NULL), r.display_order, r.name`
 		)
 		return rows.map(r => ({
 			name: r.name,
