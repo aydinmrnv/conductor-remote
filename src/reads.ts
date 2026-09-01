@@ -125,7 +125,7 @@ function toSessionRow(row: SessionDbRow): SessionRow {
 }
 
 /** GitHub PR state of a workspace's branch, attached best-effort by src/pr.ts. */
-export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'checks_failed' | 'mergeable'
+export type PrStatus = 'merged' | 'draft' | 'conflicts' | 'checks_failed' | 'checks_pending' | 'mergeable'
 
 /** One chat's live status, with enough context to name it in a notification (see src/notify.ts). */
 export interface SessionState {

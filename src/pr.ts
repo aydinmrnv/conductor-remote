@@ -17,6 +17,18 @@ const exec = promisify(execFile)
  *     `pr_status = null` → the PWA shows the default blue dot. Nothing breaks.
  */
 
+/**
+ * One row of GitHub's check rollup. A check run reports progress in `status`
+ * (`QUEUED` / `IN_PROGRESS` / `COMPLETED`) and its verdict in `conclusion`; a
+ * legacy status context carries both in `state`. `gh pr list` returns all three
+ * already, so reading whether a check is still running costs no extra call.
+ */
+interface CheckResult {
+	conclusion?: string | null
+	state?: string | null
+	status?: string | null
+}
+
 interface GhPr {
 	headRefName: string
 	number: number
@@ -24,7 +36,7 @@ interface GhPr {
 	state: 'OPEN' | 'CLOSED' | 'MERGED'
 	isDraft: boolean
 	updatedAt: string
-	statusCheckRollup?: Array<{ conclusion?: string | null; state?: string | null }> | null
+	statusCheckRollup?: CheckResult[] | null
 }
 
 const REPO_TTL = 60_000
@@ -61,7 +73,13 @@ export function attachPrStatus(workspaces: Workspace[]): void {
 			else {
 				const c = w.worktree ? conflictCache.get(w.worktree) : undefined
 				// Optimistically green until the local merge check says otherwise (self-corrects within CONFLICT_TTL).
-				w.pr_status = c?.conflicts ? 'conflicts' : hasFailedChecks(pr.statusCheckRollup) ? 'checks_failed' : 'mergeable'
+				w.pr_status = c?.conflicts
+					? 'conflicts'
+					: hasFailedChecks(pr.statusCheckRollup)
+						? 'checks_failed'
+						: hasPendingChecks(pr.statusCheckRollup)
+							? 'checks_pending'
+							: 'mergeable'
 				if (w.worktree && (!c || now - c.at > CONFLICT_TTL)) refreshConflict(w.worktree, w.baseBranch)
 			}
 		}
@@ -121,13 +139,32 @@ const FAILED_CHECK_STATES = new Set(['ERROR', 'FAILURE'])
 
 /**
  * Check runs carry their terminal result in `conclusion`; legacy status contexts
- * use `state`. Pending checks remain green because this marker calls out failures.
+ * use `state`. A check still running is not a failure — `hasPendingChecks` reports
+ * that separately, and is only asked once this one has said no.
  */
 export function hasFailedChecks(checks: GhPr['statusCheckRollup']): boolean {
 	return !!checks?.some(
 		check =>
 			(check.conclusion && FAILED_CHECK_CONCLUSIONS.has(check.conclusion)) ||
 			(check.state && FAILED_CHECK_STATES.has(check.state))
+	)
+}
+
+const PENDING_CHECK_STATES = new Set(['EXPECTED', 'PENDING'])
+
+/**
+ * Is any check still running? A check run says so in `status` — anything short of
+ * `COMPLETED`, which covers `QUEUED`, `IN_PROGRESS`, `WAITING`, `REQUESTED` and
+ * whatever GitHub adds next — and a legacy status context says it in `state`.
+ *
+ * Worth its own status rather than folding into green: this repo's `main` carries
+ * no branch protection, so `gh pr merge` will not refuse a PR whose CI is still in
+ * flight (measured: the run takes ~50s). A phone showing "Ready to merge" for that
+ * minute is the one claim the relay makes that GitHub will not check for it.
+ */
+export function hasPendingChecks(checks: GhPr['statusCheckRollup']): boolean {
+	return !!checks?.some(
+		check => (check.status && check.status !== 'COMPLETED') || (check.state && PENDING_CHECK_STATES.has(check.state))
 	)
 }
 
