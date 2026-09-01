@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
-import { shortModel } from '../lib/format.ts'
+import { modelLabel } from '../lib/format.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls, nextEffort } from './AgentControls.tsx'
@@ -28,26 +28,6 @@ function change<T>(next: T, current: T): T | undefined {
 	return next === current ? undefined : next
 }
 
-/**
- * Compact the stable built-in ids (`gpt-5.6-sol`, `opus-5-1m`) into the labels
- * Conductor shows. Unknown/provider-specific ids stay untouched rather than risk
- * displaying a misleading name.
- */
-function modelPill(session: Session): string {
-	const raw = shortModel(session.model)
-	if (!raw) return 'Model'
-	const pathTail = raw.split('/').pop() ?? raw
-	const id = pathTail.split(':').pop() ?? pathTail
-	const parts = id.split('-')
-	const title = (part: string) => {
-		if (!part) return ''
-		return part.toLowerCase() === '1m' ? '1M' : part[0].toUpperCase() + part.slice(1)
-	}
-	if (parts[0] === 'gpt' && parts[1]) return [parts[1], ...parts.slice(2).map(title)].join(' ')
-	if (/^(opus|sonnet|haiku|fable)$/.test(parts[0] ?? '')) return parts.map(title).join(' ')
-	return id
-}
-
 export function AgentBar({ session, workspaceId }: { session: Session; workspaceId: string }) {
 	const [picking, setPicking] = useState(false)
 	const staged = useApp(s => s.agentDrafts[session.id]) ?? NOTHING
@@ -71,7 +51,10 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	const planOn = staged.plan ?? dbPlan
 	const fastOn = staged.fast ?? dbFast
 	const anyStaged = Object.keys(staged).length > 0
-	const displayedModel = staged.model ?? modelPill(session)
+	// Named off the picker's own labels when they're loaded: the id says `opus-5-1m`
+	// where Conductor's menu says "Opus 5", and a pill that disagrees with the menu
+	// also leaves the open picker with no row checked.
+	const displayedModel = staged.model ?? (modelLabel(session.model, models) || 'Model')
 	const providerModel = staged.model ?? session.model
 
 	return (

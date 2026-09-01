@@ -214,6 +214,78 @@ export function shortModel(model: string | null): string {
 		.replace(/-latest$/, '')
 }
 
+/** Letters and digits alone: the id and the menu label agree on nothing else. */
+const alnum = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+/**
+ * The same name without its context-window suffix. Conductor drops that suffix
+ * once a family has only one variant left — `opus-5-1m` is "Opus 5" on its menu
+ * while `opus-4-8-1m` is still "Opus 4.8 1M" — so this is the one difference
+ * between an id and a label that is allowed to be ignored.
+ */
+const contextless = (name: string) => alnum(name.replace(/[\s\-_]\d+[mk]$/i, ''))
+
+/**
+ * Conductor's own name for the id in `sessions.model`, so the pill and the picker
+ * say the same word. Two things make the id alone the wrong source: the version
+ * arrives as separate segments (`opus-4-8-1m`, which reads as "Opus 4 8 1M"), and
+ * Conductor renames a model without renaming its id. So the live picker labels —
+ * relay-cached, `GET /api/models` — decide whenever one of them resolves the id,
+ * and the derivation below is only what a catalog that has never been read falls
+ * back to.
+ *
+ * A label is accepted on an exact match of its letters and digits, then on a
+ * *unique* match once the context-window suffix is dropped from both sides. That
+ * uniqueness is the whole guard: `opus` matches four Opus labels and gets the
+ * fallback, because a pill naming the wrong model is worse than one naming a real
+ * id awkwardly.
+ */
+export function modelLabel(model: string | null, catalog: string[] = []): string {
+	const raw = shortModel(model)
+	if (!raw) return ''
+	// A provider-qualified id (`opencode:opencode-go/kimi-k3`) carries its routing in
+	// front of the model; only the tail is ever named on a menu.
+	const pathTail = raw.split('/').pop() ?? raw
+	const id = pathTail.split(':').pop() ?? pathTail
+	return catalogLabel(id, catalog) ?? derivedLabel(id)
+}
+
+function catalogLabel(id: string, catalog: string[]): string | undefined {
+	const key = alnum(id)
+	if (!key) return undefined
+	const exact = catalog.find(label => alnum(label) === key)
+	if (exact) return exact
+	const near = catalog.filter(label => contextless(label) === contextless(id))
+	return near.length === 1 ? near[0] : undefined
+}
+
+/**
+ * Compact the stable built-in ids (`gpt-5.6-sol`, `opus-4-8-1m`) into something
+ * close to the labels Conductor shows. Unknown/provider-specific ids stay
+ * untouched rather than risk displaying a misleading name.
+ */
+function derivedLabel(id: string): string {
+	const parts = versionParts(id.split('-'))
+	const title = (part: string) => {
+		if (!part) return ''
+		return part.toLowerCase() === '1m' ? '1M' : part[0].toUpperCase() + part.slice(1)
+	}
+	if (parts[0] === 'gpt' && parts[1]) return [parts[1], ...parts.slice(2).map(title)].join(' ')
+	if (/^(opus|sonnet|haiku|fable)$/.test(parts[0] ?? '')) return parts.map(title).join(' ')
+	return id
+}
+
+/** `opus-4-8-1m` is one version, not two numbers: put the dot back. */
+function versionParts(parts: string[]): string[] {
+	const out: string[] = []
+	for (const part of parts) {
+		const prev = out[out.length - 1]
+		if (prev !== undefined && /^\d+$/.test(part) && /^\d[\d.]*$/.test(prev)) out[out.length - 1] = `${prev}.${part}`
+		else out.push(part)
+	}
+	return out
+}
+
 /**
  * One flat line of a prompt, for the jump sheet's rows (components/MessageNav.tsx).
  * The first line that has anything in it — a prompt often opens with a heading or a
