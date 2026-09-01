@@ -657,6 +657,23 @@ Two asymmetric halves — keep them separate:
     already used, which is also why that tool stopped reading both off `include_tools`.
     Every cut is named in the file's own header and in the elision markers, because a
     transcript that quietly dropped half a chat reads exactly like a complete one.
+  - **The other cut is where it stops.** By default the copy runs to the end, and
+    `throughRowid` (`split_chat`'s `through`, a `read_chat`/`search_chats` cursor) ends it
+    at one message instead, which is how a fork branches from *before* the conversation
+    turned — the nearest this gets to Conductor's own per-message fork, and still a copy
+    rather than a resumed session. It cuts on the **rowid**, because one source row yields
+    several entries (reasoning, prose, the tool calls it made) that belong to one message
+    and have to cross together, and because a rowid is what every pointer into a chat
+    already is. A rowid this chat doesn't hold is a **409, never a silent cut**
+    (`transcriptThrough`): a cursor copied from a different chat would otherwise stop the
+    transcript at whatever row happened to sort below it, and the header would say nothing.
+    That header names this cut too, and `elided.later` carries the count back to the caller.
+    On the phone the cut is *where the button is*: the Fork control is drawn once per turn,
+    under the answer that closed it (`transcript-actions.ts` ▸ `assistantTurnEnds` — an agent
+    speaks several times inside one turn, and the three earlier ones would each cut a copy
+    off mid-answer). The newest turn keeps its control at the foot of the transcript and
+    passes no rowid, because an agent that speaks and then keeps working would otherwise
+    leave those buttons stranded above the steps that came after them.
   - **It stops one step short of sending**, and that is not tidiness. ⌘T and a send are
     two UI turns (28s + 55s of ceiling) which together outlast every caller's budget,
     including the MCP client's 75s. Routing the composed prompt back through the ordinary

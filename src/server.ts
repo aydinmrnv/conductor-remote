@@ -58,7 +58,7 @@ import {
 	stagedAttachments
 } from './staged-attachments.ts'
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
-import { renderTranscript } from './transcript.ts'
+import { renderTranscript, transcriptThrough } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
 import {
 	type AgentOptions,
@@ -1604,7 +1604,7 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, answer.status, answer.body)
 			}
 
-			// POST /api/sessions/:id/split { prompt?, includeThinking?, includeTools? }
+			// POST /api/sessions/:id/split { prompt?, includeThinking?, includeTools?, throughRowid? }
 			//
 			// Conductor's own "Fork to new tab" resumes the agent's real session. This copies
 			// the conversation instead, as a Conductor attachment, which is the cut that
@@ -1627,6 +1627,7 @@ const server = http.createServer(async (req, res) => {
 					workspaceId?: string
 					includeThinking?: boolean
 					includeTools?: boolean
+					throughRowid?: number
 				}
 				// `active_session_id` is how every other route resolves this, and it would only
 				// ever find the tab on screen. Splitting a chat you are not looking at is the
@@ -1640,7 +1641,14 @@ const server = http.createServer(async (req, res) => {
 
 				const format = { thinking: body.includeThinking !== false, tools: body.includeTools === true }
 				const { entries } = reads.getMessages(sessionId)
-				const rendered = renderTranscript(entries, format)
+				const through = body.throughRowid
+				if (through !== undefined && (!Number.isSafeInteger(through) || through < 1)) {
+					return json(req, res, 400, { error: 'throughRowid must be a positive integer' })
+				}
+				const cut = through === undefined ? { entries, later: 0 } : transcriptThrough(entries, through)
+				if (!cut) return json(req, res, 409, { error: 'that message is not in this chat' })
+				const rendered = renderTranscript(cut.entries, format)
+				const elided = { ...rendered.elided, later: cut.later }
 				if (!rendered.kept) return json(req, res, 409, { error: 'that chat has nothing to copy yet' })
 
 				// Conductor's own name for a copied transcript, so the chip reads the same as one
@@ -1649,11 +1657,17 @@ const server = http.createServer(async (req, res) => {
 				const title = source.title?.trim() || 'chat'
 				const carried = [`thinking ${format.thinking ? 'included' : 'omitted'}`]
 				carried.push(`tool calls ${format.tools ? 'included' : 'omitted'}`)
+				const stops = cut.later
+					? [
+							`The copy stops partway through: ${cut.later} later ${cut.later === 1 ? 'entry is' : 'entries are'} not in it.`
+						]
+					: []
 				const header = [
 					`# Transcript of ${title}`,
 					'',
 					`${[ws.repo_name, ws.branch].filter(Boolean).join(' · ')}`,
 					`Copied from the Conductor chat \`${sessionId}\` by conductor-remote. ${carried.join(', ')}.`,
+					...stops,
 					'',
 					''
 				].join('\n')
@@ -1661,7 +1675,7 @@ const server = http.createServer(async (req, res) => {
 
 				const opened = await openChat(ws)
 				if ('error' in opened) {
-					return json(req, res, 502, { ...opened.result, attachment: { ...attachment, ...rendered } })
+					return json(req, res, 502, { ...opened.result, attachment: { ...attachment, ...rendered, elided } })
 				}
 				// The token is what Conductor turns into the attachment chip and supplies to the
 				// receiving agent. Do not repeat `attachment.relPath` in prose: that renders a
@@ -1677,7 +1691,7 @@ const server = http.createServer(async (req, res) => {
 						path: attachment.relPath,
 						bytes: attachment.bytes,
 						kept: rendered.kept,
-						elided: rendered.elided
+						elided
 					}
 				})
 			}

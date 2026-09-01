@@ -134,9 +134,9 @@ export function SessionView() {
 	// The relay writes the transcript and opens the tab. Its returned text contains
 	// Conductor's attachment token, which belongs in the new chat's composer until
 	// the user adds the question that starts the fork.
-	const forkChat = async ({ thinking, tools }: SplitFormat) => {
+	const forkChat = async ({ thinking, tools, through }: SplitFormat) => {
 		if (!sessionId) return
-		const split = await client.splitChat(sessionId, ws.id, thinking, tools)
+		const split = await client.splitChat(sessionId, ws.id, thinking, tools, through)
 		if (!split.ok) throw new Error(split.error ?? 'Could not fork this chat')
 		if (!split.sessionId) throw new Error('The new chat opened, but its id was not available')
 		setDraft(split.sessionId, split.text)

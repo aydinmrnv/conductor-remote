@@ -350,6 +350,28 @@ function plural(n: number, one: string): string {
 }
 
 /**
+ * Cut a transcript at one message, that message included — a fork from an earlier point.
+ *
+ * The cut is made on the rowid rather than on a position, because that is the granularity
+ * every pointer into a chat already has: `read_chat`'s cursor is a rowid, and one source
+ * row yields several entries (the reasoning, the prose, the tool calls it made) that belong
+ * to the same message and have to cross together.
+ *
+ * Null means no message here carries that rowid — a cursor from a different chat, or one
+ * past the end of this one. Copying the whole chat in that case is the silent failure this
+ * exists to prevent: a transcript that stops at the wrong place reads exactly like one that
+ * stops where it was asked to.
+ */
+export function transcriptThrough(
+	entries: TranscriptEntry[],
+	rowid: number
+): { entries: TranscriptEntry[]; later: number } | null {
+	if (!entries.some(entry => entry.rowid === rowid)) return null
+	const kept = entries.filter(entry => entry.rowid <= rowid)
+	return { entries: kept, later: entries.length - kept.length }
+}
+
+/**
  * A chat as markdown, in Conductor's own transcript layout.
  *
  * The layout is copied from the files Conductor writes (`Transcript of <chat>.md`):

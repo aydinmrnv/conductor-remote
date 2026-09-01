@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, Copy, GitFork, Loader2 } from 'lucide-react'
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
@@ -8,7 +8,7 @@ import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
 import { languageForTool } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
-import { latestAssistantForActions } from '../lib/transcript-actions.ts'
+import { assistantTurnEnds, latestAssistantForActions } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { Code } from './Code.tsx'
@@ -21,6 +21,8 @@ import { Empty, Spinner, UnlockLink } from './ui.tsx'
 export interface SplitFormat {
 	thinking: boolean
 	tools: boolean
+	/** Source row to stop the copy at — a fork from an earlier turn. Undefined takes the whole chat. */
+	through?: number
 }
 
 export function Transcript({
@@ -56,10 +58,15 @@ export function Transcript({
 	// lands — so this holds the row list (and each group's slice) at the same identity
 	// across the polls above, which is what lets the memoised rows below bail out.
 	const rows = useMemo(() => groupSteps(entries), [entries])
-	// Copy/Fork act on the turn's response, but they are drawn *after* every row rather
-	// than under that response: an agent that speaks and then keeps working buries the
-	// buttons mid-transcript, where they read as belonging to the step below them.
+	// The newest turn's Copy/Fork is drawn *after* every row rather than under its
+	// response: an agent that speaks and then keeps working buries the buttons
+	// mid-transcript, where they read as belonging to the step below them. Older turns
+	// have nothing growing under them, so theirs sit where the cut they offer is.
 	const actionTarget = useMemo(() => latestAssistantForActions(entries), [entries])
+	const inlineActions = useMemo(() => {
+		const ends = assistantTurnEnds(entries).filter(e => e !== actionTarget)
+		return new Set(ends.map(rowKey))
+	}, [entries, actionTarget])
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
@@ -145,7 +152,12 @@ export function Transcript({
 							row.kind === 'steps' ? (
 								<StepGroup key={row.key} entries={row.entries} />
 							) : (
-								<Entry key={row.key} e={row.e} />
+								<Fragment key={row.key}>
+									<Entry e={row.e} />
+									{inlineActions.has(row.key) ? (
+										<ChatActions text={row.e.text} through={row.e.rowid} onFork={onFork} />
+									) : null}
+								</Fragment>
 							)
 						)}
 						{actionTarget ? <ChatActions text={actionTarget.text} onFork={onFork} /> : null}
@@ -401,10 +413,21 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 })
 
 /**
- * Copy the latest response, or branch the whole chat from a transcript attachment.
- * Rendered as the transcript's last row, not under the response it acts on.
+ * Copy a response, or branch the chat from a transcript attachment cut at it.
+ *
+ * `through` is the source row the copy stops at, so a fork offered beside an older
+ * answer carries the conversation as it stood there. The newest turn passes none and
+ * takes the whole chat, which is the same cut and one the header needn't explain.
  */
-function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFormat) => Promise<void> }) {
+function ChatActions({
+	text,
+	through,
+	onFork
+}: {
+	text: string
+	through?: number
+	onFork?: (format: SplitFormat) => Promise<void>
+}) {
 	const [copied, setCopied] = useState(false)
 	const [menuOpen, setMenuOpen] = useState(false)
 	const [forking, setForking] = useState(false)
@@ -420,13 +443,13 @@ function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFo
 		}
 	}
 
-	const fork = async (format: SplitFormat) => {
+	const fork = async (cut: { thinking: boolean; tools: boolean }) => {
 		if (!onFork || forking) return
 		setForking(true)
 		setForkError(null)
 		setMenuOpen(false)
 		try {
-			await onFork(format)
+			await onFork({ ...cut, through })
 		} catch (err) {
 			setForkError(err instanceof Error ? err.message : 'Could not fork this chat')
 		} finally {
@@ -454,7 +477,7 @@ function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFo
 									type="button"
 									onClick={() => void fork({ thinking: true, tools: false })}
 									disabled={forking}
-									aria-label="Fork chat with reasoning"
+									aria-label={through ? 'Fork chat from this response' : 'Fork chat with reasoning'}
 									className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
 								>
 									{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
