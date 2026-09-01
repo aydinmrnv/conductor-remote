@@ -7,6 +7,7 @@ import { useModelCatalog, useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
+import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { AgentPatch } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls, nextEffort } from './AgentControls.tsx'
@@ -72,6 +73,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	// moment it is closed, and the text has to outlive that (see lib/draft.ts).
 	const prompt = useApp(s => s.drafts[NEW_WORKSPACE_DRAFT] ?? '')
 	const setDraft = useApp(s => s.setDraft)
+	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const [agent, setAgent] = useState<AgentPatch>({})
 	const [pickerOpen, setPickerOpen] = useState(false)
@@ -86,6 +88,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const navigate = useNavigate()
 	const queryClient = useQueryClient()
 	const online = useApp(s => s.online)
+
+	useEffect(
+		() => () => {
+			if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
+			requestPrefsFlush()
+		},
+		[setFocusedDraft]
+	)
 
 	const repos = data?.repos ?? []
 	const selected = repos.find(r => r.name === repo)
@@ -344,6 +354,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					<textarea
 						value={prompt}
 						onChange={e => setPrompt(e.target.value)}
+						onFocus={() => setFocusedDraft(NEW_WORKSPACE_DRAFT)}
+						onBlur={() => {
+							if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
+							requestPrefsFlush()
+						}}
 						placeholder="What should the agent do? (optional)"
 						rows={6}
 						// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this

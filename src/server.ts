@@ -8,6 +8,7 @@ import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { DevServerController } from './dev-server.ts'
 import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
@@ -43,6 +44,7 @@ import {
 } from './notify.ts'
 import { type ParkedAgentPatch, type ParkedPrompt, ParkedPromptQueue } from './parked.ts'
 import { attachPrStatus } from './pr.ts'
+import { readPrefs, writePrefs } from './prefs.ts'
 import { Reads, type SearchWorkspace, type SessionRow, type Workspace } from './reads.ts'
 import { isRoute, routeParam, routes } from './routes.ts'
 import { foldHits, queryTokens, SearchIndex, type SearchResult } from './search.ts'
@@ -70,6 +72,7 @@ import {
 	retryWontHelp,
 	type SendResult,
 	screenLocked,
+	sendNeverStarted,
 	setAgentOptions,
 	setRestartGuard,
 	setWorkspaceStatus,
@@ -88,6 +91,7 @@ const cfg = loadConfig()
 const db = new ConductorDb(cfg.dbPath)
 const reads = new Reads(db, cfg.workspacesRoot)
 const actuator = pickActuator(cfg.writeStrategy)
+const devServers = new DevServerController()
 const STAGED_ATTACHMENTS_DIR = path.join(stateDir(), 'attachment-staging')
 // Picker labels cannot be reconstructed from `sessions.model`, so they belong to
 // relay state alongside the prompt queues. This lets a brand-new workspace choose
@@ -326,7 +330,14 @@ async function deliverPrompt(
 			deadline: deadline - MIN_CONFIRM_MS,
 			queue
 		})
-		if (await confirmDelivery(sessionId, text, beforeRowid, deadline)) {
+		// A run that left the prompt in the composer proved it wrote no row, so the
+		// window would be six seconds of watching for nothing. One check still happens:
+		// an *earlier* attempt's row can be arriving, and typing again over that is the
+		// duplicate this whole path exists to avoid.
+		const landed = sendNeverStarted(last.error)
+			? deliveredSince(sessionId, text, beforeRowid)
+			: await confirmDelivery(sessionId, text, beforeRowid, deadline)
+		if (landed) {
 			if (attempts > 1) console.info(`[relay] send to ${label} landed on attempt ${attempts}`)
 			return { ok: true, strategy: last.strategy, attempts }
 		}
@@ -954,6 +965,23 @@ const server = http.createServer(async (req, res) => {
 				return json(req, res, 200, { settings: writeSettings(patch) })
 			}
 
+			// PWA state remains local-first; this host copy survives origin changes and
+			// reconciles phones. PATCH accepts a full client snapshot and merges per key.
+			if (isRoute(routes.prefs, req.method, pathname)) {
+				return json(req, res, 200, { prefs: readPrefs() })
+			}
+			if (isRoute(routes.updatePrefs, req.method, pathname)) {
+				const raw = JSON.parse((await readBody(req)) || '{}') as unknown
+				if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+					return json(req, res, 400, { error: 'preferences must be an object' })
+				}
+				const body = raw as Record<string, unknown>
+				if (!Object.hasOwn(body, 'readMarks') && !Object.hasOwn(body, 'drafts')) {
+					return json(req, res, 400, { error: 'nothing to sync' })
+				}
+				return json(req, res, 200, { prefs: writePrefs(body) })
+			}
+
 			// GET /api/nosleep — is the Mac being held awake, and can this relay do it at all
 			if (isRoute(routes.nosleep, req.method, pathname)) {
 				return json(req, res, 200, { ...(await nosleepState()), maxSeconds: NOSLEEP_MAX_SECONDS })
@@ -1304,6 +1332,32 @@ const server = http.createServer(async (req, res) => {
 					})
 				}
 				return json(req, res, 200, { ok: true, workspace: reads.getWorkspace(workspaceId) })
+			}
+
+			// The selected Conductor Run task plus a tailnet-only HTTPS forward for
+			// its allocated port. Reads never touch Conductor's UI; start/stop use the
+			// same Accessibility lock and target assertion as every other UI write.
+			const devServerOf = routeParam(routes.devServer, req.method, pathname)
+			if (devServerOf) {
+				const ws = reads.getWorkspace(devServerOf)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				return json(req, res, 200, await devServers.state(ws))
+			}
+
+			const startDevServerIn = routeParam(routes.startDevServer, req.method, pathname)
+			if (startDevServerIn) {
+				const ws = reads.getWorkspace(startDevServerIn)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const result = await devServers.start(ws)
+				return json(req, res, result.ok ? 200 : result.available ? 502 : 409, result)
+			}
+
+			const stopDevServerIn = routeParam(routes.stopDevServer, req.method, pathname)
+			if (stopDevServerIn) {
+				const ws = reads.getWorkspace(stopDevServerIn)
+				if (!ws) return json(req, res, 404, { error: 'workspace not found' })
+				const result = await devServers.stop(ws)
+				return json(req, res, result.ok ? 200 : 502, result)
 			}
 
 			// GET /api/sessions/:id/messages?after=<rowid>
@@ -1661,6 +1715,10 @@ server.listen(cfg.port, cfg.host, () => {
 	firstPrompts.start()
 	// Same for prompts parked behind the lock screen — a lock outlives relay restarts.
 	parkedPrompts.start()
+	// A launchd/self-update restart kills the loopback bridge but not Tailscale's
+	// persisted Serve mapping. Rebuild bridges for dev servers that are still up,
+	// and remove this relay's stale mappings for ones that are not.
+	void devServers.restore()
 	// Keep the managed global daemon current — no-ops for dev checkouts / unmanaged runs (see autoupdate.ts).
 	startAutoUpdate()
 	// Keep the phone's public URL reachable — re-registers Funnel when its ingress goes stale after a

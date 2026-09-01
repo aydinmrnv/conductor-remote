@@ -146,6 +146,15 @@ export interface SendResult {
 	error?: string
 }
 
+export interface RunTaskResult {
+	ok: boolean
+	state?: 'running' | 'stopped'
+	task?: string
+	changed?: boolean
+	ports?: number[]
+	error?: string
+}
+
 /**
  * Where the target chat sits in Conductor's tab strip. `index` is 1-based in
  * `reads.listSessions` order (created_at ASC) — verified to match the strip's
@@ -268,6 +277,21 @@ export function retryWontHelp(error: string | undefined): boolean {
  */
 export function lockBlocked(error: string | undefined): boolean {
 	return (error ?? '').includes('The Mac is locked')
+}
+
+/**
+ * A run that ended with the prompt still sitting in Conductor's composer
+ * (`submitComposer`). The draft was never consumed, so this run wrote no row and
+ * the caller's confirm window has nothing to wait for — six seconds spent watching
+ * for something the run already proved didn't happen. Only the *waiting* is
+ * skipped: an earlier attempt's row can still be arriving, so the caller checks
+ * once before typing again.
+ *
+ * Matched on the phrase the send script writes itself, like `lockBlocked` above,
+ * so macOS wording can't drift under it.
+ */
+export function sendNeverStarted(error: string | undefined): boolean {
+	return (error ?? '').includes('still sitting in its composer')
 }
 
 /**
@@ -507,6 +531,14 @@ export class AppleScriptActuator implements Actuator {
 		// Open the target workspace's own link, confirm its chat tab, fill the composer, send.
 		// Filling is an Accessibility write (no keystrokes, no clipboard); the
 		// clipboard paste is kept only as a fallback, and stashes/restores around it.
+		//
+		// The send is then read back rather than assumed (`submitComposer`): Conductor
+		// consumes the draft when it takes a prompt, so a composer that still holds the
+		// text is an Enter that went nowhere, and pressing again inside this run costs
+		// under a second. Left to `deliverPrompt` the same failure costs the 6s confirm
+		// window plus a whole second run, which is the ~10s of prompt-sitting-on-screen
+		// this Mac's logs recorded. A composer that survives three presses is stuck on
+		// something the script can't see, so it errors and lets that retry take over.
 		const script = `
 ${CONDUCTOR_HANDLERS}
 
@@ -514,19 +546,16 @@ my activateConductor()
 my focusWorkspace()
 my selectChatTab()
 set promptText to my normalizeNewlines(do shell script "cat" & " " & quoted form of (system attribute "RELAY_PROMPT_FILE"))
-if not (my fillComposer(promptText)) then
+set textBox to my composerField()
+if not (my fillComposer(textBox, promptText)) then
 	set savedClipboard to the clipboard
 	my pasteComposer()
 	delay 0.1
 	set the clipboard to savedClipboard
 end if
-tell application "System Events"
-	if (system attribute "RELAY_QUEUE_PROMPT") is "1" then
-		key code 36 using {command down}
-	else
-		key code 36
-	end if
-end tell
+set presses to my submitComposer(textBox, promptText, (system attribute "RELAY_QUEUE_PROMPT") is "1")
+if presses is 0 then error "Conductor ignored Enter - the prompt is still sitting in its composer"
+return "presses:" & presses
 `.trim()
 		// Pass the prompt via a temp file + env to avoid AppleScript string escaping.
 		const os = await import('node:os')
@@ -535,7 +564,7 @@ end tell
 		const tmp = path.join(os.tmpdir(), `relay-prompt-${process.pid}-${Date.now()}.txt`)
 		await fs.writeFile(tmp, text, 'utf8')
 		try {
-			await withTargetEnvironment(target, targetEnvironment =>
+			const { stdout } = await withTargetEnvironment(target, targetEnvironment =>
 				uiTurn(() =>
 					exec('osascript', ['-e', script], {
 						env: {
@@ -548,6 +577,12 @@ end tell
 					})
 				)
 			)
+			// A rescued send is otherwise indistinguishable from one that worked first
+			// time, so the failure would leave the log whether it was fixed or hidden.
+			const presses = Number(stdout.match(/presses:(\d+)/)?.[1] ?? 1)
+			if (presses > 1) {
+				console.warn(`[relay] Conductor ignored Enter — the composer cleared on press ${presses}`)
+			}
 			return { ok: true, strategy: this.name }
 		} catch (err) {
 			return { ok: false, strategy: this.name, error: osaError(err) }
@@ -881,6 +916,48 @@ end tell`.trim()
 		return { ok: true, strategy: 'applescript' }
 	} catch (err) {
 		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
+/**
+ * Start or stop the selected workspace Run task through Conductor's own toolbar.
+ *
+ * The task stays owned by Conductor — it appears in the Run panel, inherits the
+ * repository's run mode and environment, and Conductor performs its normal
+ * process-group shutdown. The relay only presses the same Run/Stop button a
+ * person would, after focusing and asserting the target workspace.
+ */
+export async function setRunTask(workspace: Workspace, running: boolean): Promise<RunTaskResult> {
+	if (!focusQuery(workspace)) return { ok: false, error: 'workspace has no branch to focus' }
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+set wantRunning to (system attribute "RELAY_RUN_WANTED") is "1"
+return my setRunTask(wantRunning)`.trim()
+	try {
+		const { stdout } = await withTargetEnvironment(
+			{ workspace, sessionId: workspace.active_session_id },
+			targetEnvironment =>
+				uiTurn(() =>
+					exec('osascript', ['-e', script], {
+						env: {
+							...process.env,
+							...targetEnvironment,
+							RELAY_RUN_WANTED: running ? '1' : '0'
+						},
+						timeout: SEND_ATTEMPT_MS
+					})
+				)
+		)
+		const [state, task, changed, rawPorts = ''] = stdout.trim().split('\t')
+		if (state !== 'running' && state !== 'stopped') throw new Error(`unexpected Run state: ${state || 'empty'}`)
+		const ports = rawPorts
+			.split(',')
+			.map(Number)
+			.filter(port => Number.isInteger(port) && port > 0 && port <= 65535)
+		return { ok: true, state, task, changed: changed === 'true', ports }
+	} catch (err) {
+		return { ok: false, error: osaError(err, 'Conductor took too long to change the Run task') }
 	}
 }
 

@@ -86,6 +86,9 @@ export const routes = {
 	logs: flat('GET', '/api/logs'),
 	settings: flat('GET', '/api/settings'),
 	updateSettings: flat('PATCH', '/api/settings'),
+	/** Durable, device-independent PWA state. localStorage remains its offline-first mirror. */
+	prefs: flat('GET', '/api/prefs'),
+	updatePrefs: flat('PATCH', '/api/prefs'),
 	nosleep: flat('GET', '/api/nosleep'),
 	armNoSleep: flat('POST', '/api/nosleep'),
 	disarmNoSleep: flat('DELETE', '/api/nosleep'),
@@ -105,6 +108,10 @@ export const routes = {
 	workspaceFiles: param('GET', '/api/workspaces/:workspaceId/files'),
 	merge: param('POST', '/api/workspaces/:workspaceId/merge'),
 	workspaceStatus: param('POST', '/api/workspaces/:workspaceId/status'),
+	/** Read, start/forward, or stop a local workspace's selected Conductor Run task. */
+	devServer: param('GET', '/api/workspaces/:workspaceId/dev-server'),
+	startDevServer: param('POST', '/api/workspaces/:workspaceId/dev-server'),
+	stopDevServer: param('DELETE', '/api/workspaces/:workspaceId/dev-server'),
 	/** Dismiss a first prompt the relay never managed to deliver (src/firstprompt.ts). */
 	dismissFirstPrompt: param('DELETE', '/api/workspaces/:workspaceId/prompt'),
 

@@ -6,6 +6,8 @@ import type {
 	AgentPatch,
 	AgentResult,
 	CreateWorkspaceResult,
+	DevServerResult,
+	DevServerState,
 	FilePreviewResponse,
 	LogsResponse,
 	MergeResult,
@@ -14,6 +16,8 @@ import type {
 	ModelsResult,
 	NewChatResult,
 	NoSleepResult,
+	Prefs,
+	PrefsResponse,
 	PushConfig,
 	PushSubscribeResult,
 	PushTestResult,
@@ -96,6 +100,10 @@ export class ApiError extends Error {
 const POLL_TIMEOUT_MS = 6000
 const ACTION_TIMEOUT_MS = 45000
 const SEND_TIMEOUT_MS = 75000
+// A cold Run action can spend 28s in Accessibility, 15s waiting for the
+// workspace port, then configure Tailscale Serve. Keep the phone alive through
+// the relay's complete answer so it never reports failure for a late success.
+const DEV_SERVER_TIMEOUT_MS = 75000
 
 async function api<T>(path: string, opts: RequestInit = {}, timeoutMs = POLL_TIMEOUT_MS): Promise<T> {
 	const token = getToken()
@@ -358,12 +366,37 @@ export const client = {
 			ACTION_TIMEOUT_MS
 		),
 
+	/** Observe a workspace's selected Run task without touching Conductor's UI. */
+	devServer: (workspaceId: string) => api<DevServerState>(routes.devServer.path(workspaceId)),
+	/** Press Run when needed, wait for CONDUCTOR_PORT, then expose it to this tailnet. */
+	startDevServer: (workspaceId: string) =>
+		api<DevServerResult>(
+			routes.startDevServer.path(workspaceId),
+			{ method: routes.startDevServer.method },
+			DEV_SERVER_TIMEOUT_MS
+		),
+	/** Press Stop and remove only the Tailscale Serve mapping this relay created. */
+	stopDevServer: (workspaceId: string) =>
+		api<DevServerResult>(
+			routes.stopDevServer.path(workspaceId),
+			{ method: routes.stopDevServer.method },
+			DEV_SERVER_TIMEOUT_MS
+		),
+
 	/** Relay preferences, plus the Wi-Fi networks the Mac already knows and the awake state. */
 	settings: () => api<SettingsResponse>(routes.settings.path()),
 	patchSettings: (patch: Partial<RelaySettings>) =>
 		api<{ settings: RelaySettings }>(routes.updateSettings.path(), {
 			method: routes.updateSettings.method,
 			body: JSON.stringify(patch)
+		}),
+	/** The host's durable mirror of read marks and unsent composer intent. */
+	prefs: () => api<PrefsResponse>(routes.prefs.path()),
+	patchPrefs: (prefs: Prefs, keepalive = false) =>
+		api<PrefsResponse>(routes.updatePrefs.path(), {
+			method: routes.updatePrefs.method,
+			body: JSON.stringify(prefs),
+			keepalive
 		}),
 	/**
 	 * Hold the Mac awake with the lid shut for `seconds`. The relay waits for the helper
