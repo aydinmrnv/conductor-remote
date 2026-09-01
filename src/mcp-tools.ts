@@ -32,6 +32,7 @@ import { HIT_CLOSE, HIT_OPEN, isToolResult, workspaceTitle } from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type {
 	AgentResult,
+	ArchiveResult,
 	CreateWorkspaceResult,
 	LogsResponse,
 	MessagesResponse,
@@ -64,7 +65,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, a live list_models call and set_workspace_status drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -705,6 +706,33 @@ export function createTools(call: RelayCall): Tool[] {
 				})
 				if (!data.ok) throw new Error(data.error ?? 'the status change did not land')
 				return `status set to ${status}`
+			}
+		},
+		{
+			name: 'archive_workspace',
+			description:
+				'Archive a workspace — Conductor’s own ⌘⇧A, which deletes its worktree and takes any agent still working in it down with it. The chat survives archiving and stays readable through search_chats and read_chat. Drives the real UI: it focuses the workspace on the Mac first, so confirm with the user before archiving one they did not name. A workspace with an agent working is refused unless stop_agents is true.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					workspace_id: { type: 'string' },
+					stop_agents: {
+						type: 'boolean',
+						description: 'Archive even though agents are still working here, ending their turns.'
+					}
+				},
+				required: ['workspace_id']
+			},
+			run: async args => {
+				const id = need(args, 'workspace_id')
+				const data = await call<ArchiveResult>(routes.archiveWorkspace.path(id), {
+					method: routes.archiveWorkspace.method,
+					body: { stopAgents: args.stop_agents === true },
+					timeoutMs: WRITE_TIMEOUT_MS
+				})
+				if (!data.ok) throw new Error(data.error ?? 'the archive did not land')
+				if (data.alreadyArchived) return 'already archived'
+				return `archived ${data.workspace ? workspaceTitle(data.workspace) : id}`
 			}
 		},
 		{

@@ -5,6 +5,7 @@ import { routes } from '../../../src/routes.ts'
 import type {
 	AgentPatch,
 	AgentResult,
+	ArchiveResult,
 	CreateWorkspaceResult,
 	DevServerResult,
 	DevServerState,
@@ -371,6 +372,18 @@ export const client = {
 		api<StatusResult>(
 			routes.workspaceStatus.path(workspaceId),
 			{ method: routes.workspaceStatus.method, body: JSON.stringify({ status }) },
+			ACTION_TIMEOUT_MS
+		),
+
+	/**
+	 * Put the workspace away (Conductor's ⌘⇧A). `stopAgents` is the second half of the
+	 * question its own dialog asks — without it the relay refuses a workspace whose
+	 * agents are still working rather than ending their turns.
+	 */
+	archive: (workspaceId: string, stopAgents = false) =>
+		api<ArchiveResult>(
+			routes.archiveWorkspace.path(workspaceId),
+			{ method: routes.archiveWorkspace.method, body: JSON.stringify({ stopAgents }) },
 			ACTION_TIMEOUT_MS
 		),
 

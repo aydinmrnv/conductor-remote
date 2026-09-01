@@ -291,6 +291,23 @@ export interface StatusResult {
 	error?: string
 }
 
+/**
+ * POST /api/workspaces/:id/archive — the workspace re-read once Conductor recorded it.
+ *
+ * `SearchWorkspace`, like the archived-chat read above and for the same reason: the
+ * workspace this answers about no longer has a worktree, and its own success is what
+ * took it off `/api/state`.
+ */
+export interface ArchiveResult {
+	ok: boolean
+	workspace?: SearchWorkspace
+	/** It was already archived — a repeat of a request whose answer went missing, not a failure. */
+	alreadyArchived?: boolean
+	/** The refusal was "agents are still working here"; repeat with `stopAgents` to go ahead. */
+	agentsRunning?: boolean
+	error?: string
+}
+
 /** GET /api/logs */
 export interface LogsResponse {
 	/** 'live' = this relay process's captured console; otherwise the log file that was tailed. */

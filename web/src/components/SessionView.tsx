@@ -15,10 +15,10 @@ import { Composer } from './Composer.tsx'
 import { DevServerControls } from './DevServerControls.tsx'
 import { DiffView } from './DiffView.tsx'
 import { Header } from './Header.tsx'
-import { StatusPicker } from './StatusPicker.tsx'
 import type { SplitFormat } from './Transcript.tsx'
 import { Transcript } from './Transcript.tsx'
 import { Spinner } from './ui.tsx'
+import { WorkspaceMenu } from './WorkspaceMenu.tsx'
 
 export function SessionView() {
 	const { workspaceId } = useParams<{ workspaceId: string }>()
@@ -156,7 +156,7 @@ export function SessionView() {
 						right={
 							<>
 								<DevServerControls workspaceId={ws.id} />
-								<StatusPicker workspace={ws} />
+								<WorkspaceMenu workspace={ws} agentsRunning={sessions.filter(s => s.status === 'working').length} />
 								<button
 									type="button"
 									onClick={() => setDiffOpen(o => !o)}

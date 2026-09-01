@@ -1241,6 +1241,113 @@ on cancelAgent()
 	delay 0.3
 end cancelAgent
 
+on buttonsUnder(root, maxDepth)
+	-- Every AXButton at or below root, level-order and bounded. Depth is the whole
+	-- cost here: the transcript hangs off the same web area as anything Conductor
+	-- portals into it, so each extra level multiplies the round trips and the sweep
+	-- gets slower the longer the chat is. That is why the callers below pass the
+	-- shallow depth that fits the thing they are looking for rather than one big cap.
+	set acc to {}
+	set level to {root}
+	set depth to 0
+	tell application "System Events" to tell process "Conductor"
+		repeat while (count of level) > 0 and depth < maxDepth
+			set nextLevel to {}
+			repeat with entry in level
+				set node to contents of entry
+				try
+					set acc to acc & (get UI elements of node whose role is "AXButton")
+					set nextLevel to nextLevel & (get UI elements of node)
+				end try
+			end repeat
+			set level to nextLevel
+			set depth to depth + 1
+		end repeat
+	end tell
+	return acc
+end buttonsUnder
+
+on archiveButtons()
+	-- Both places Conductor could be drawing its archive confirmation, each at the
+	-- depth that shape actually sits at. A real sheet hangs off the window a level or
+	-- two down; an in-webview dialog is a portal near the top of the web area, which
+	-- is where the sidebar row's menu turns up at depth 4 (pressStatusMenu). Sweeping
+	-- one deep cap from the window instead would reach neither any better and would
+	-- walk the transcript to get there.
+	my requireWindow()
+	set fromWindow to {}
+	tell application "System Events" to tell process "Conductor"
+		set fromWindow to my buttonsUnder(window 1, 4)
+	end tell
+	return fromWindow & (my buttonsUnder(my webArea(), 4))
+end archiveButtons
+
+on archiveConfirmButton()
+	-- Conductor asks before archiving a workspace whose agents are still running:
+	-- "Archive workspace?" over Cancel and "Stop agents and archive". Identified by
+	-- the *pair* - a button naming the verb, with a Cancel somewhere beside it -
+	-- rather than by the archive one alone, which is the same rule waitForMenuWith
+	-- follows: press nothing that has not proved which thing it belongs to.
+	-- "Unarchive" is excluded by name, since AppleScript's contains ignores case
+	-- and would otherwise read that as a confirmation of this.
+	set found to missing value
+	set sawCancel to false
+	repeat with entry in my archiveButtons()
+		set node to contents of entry
+		set label to my axName(node)
+		if label is "Cancel" then set sawCancel to true
+		if label contains "archive" and label does not contain "unarchive" then set found to node
+	end repeat
+	if sawCancel then return found
+	return missing value
+end archiveConfirmButton
+
+on archiveWorkspace()
+	-- Put this workspace away: Conductor's own "Archive workspace", Command-Shift-A.
+	-- A keystroke on purpose, like cancelAgent - the sidebar row menu carries an
+	-- Archive item, but reaching it costs a sidebar scan plus two menu waits, and
+	-- this chord acts on the workspace the pane is already showing.
+	--
+	-- Which is also the danger: it archives whatever is on screen, so the pane
+	-- assertion is the whole guard. Archiving the wrong workspace deletes a worktree
+	-- and kills a turn that was running fine, so a pane that cannot be checked is
+	-- refused rather than aimed at (writes.ts requires the branch for that reason).
+	--
+	-- Command-L ("Focus chat input") first, exactly as cancelAgent does: the chord
+	-- lands wherever focus is, and a focused terminal panel swallows it.
+	set strips to my tabGroups()
+	if (count of strips) is 0 then error "couldn't find the chat pane to archive from"
+	my assertWorkspace(item 1 of strips)
+	tell application "System Events"
+		keystroke "l" using {command down}
+		delay 0.2
+		keystroke "a" using {command down, shift down}
+	end tell
+	-- A workspace with agents still working draws a confirmation; an idle one is
+	-- archived by the chord alone. Both are live, so this waits a bounded moment for
+	-- the dialog and treats its absence as the second case - the DB is the receipt
+	-- either way (server.ts watches for state 'archived'), so nothing here has to
+	-- decide whether the archive landed.
+	set confirmEl to missing value
+	repeat with attempt from 1 to 5
+		delay 0.3
+		set confirmEl to my archiveConfirmButton()
+		if confirmEl is not missing value then exit repeat
+	end repeat
+	if confirmEl is missing value then return "archived"
+	-- The caller has to have opted into the damage before we press this: stopping
+	-- other people's agents is not something to infer from a tap that said Archive.
+	if (system attribute "RELAY_ARCHIVE_AGENTS") is not "1" then
+		tell application "System Events" to key code 53
+		error "agents are still running in this workspace - archiving would stop them"
+	end if
+	tell application "System Events" to tell process "Conductor"
+		perform action "AXPress" of confirmEl
+	end tell
+	delay 0.5
+	return "archived"
+end archiveWorkspace
+
 on composerControls()
 	set strips to my tabGroups()
 	if (count of strips) is 0 then error "couldn't find the composer"
