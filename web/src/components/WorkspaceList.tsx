@@ -1,9 +1,10 @@
 import { Check, ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
+	isDone,
 	isMerged,
 	RECENT_BUCKETS,
 	recentBucket,
@@ -17,7 +18,7 @@ import {
 	workspaceTitle
 } from '../lib/format.ts'
 import { unreadCount } from '../lib/read.ts'
-import type { Workspace } from '../lib/types.ts'
+import type { RepoIcon, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
@@ -91,16 +92,38 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 
-	const repos = [
+	// ⌘K / Ctrl+K opens search from any screen. This component is always mounted —
+	// drawer on phones, static rail on md+ — so the one listener covers the whole app
+	// without a second copy next to the router. It toggles, palette-style, and the
+	// preventDefault keeps Ctrl+K away from the browser's own address-bar search.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+				e.preventDefault()
+				setSearchOpen(o => !o)
+			}
+		}
+		window.addEventListener('keydown', onKey)
+		return () => window.removeEventListener('keydown', onKey)
+	}, [])
+
+	const repoIcons = new Map(workspaces.map(w => [w.repo_name, w.icon] as const))
+	const repos: RepoChoice[] = [
 		...new Set([...workspaces.map(w => w.repo_name).filter((r): r is string => !!r), ...view.repos])
-	].sort()
+	]
+		.sort()
+		.map(name => ({ name, icon: repoIcons.get(name) ?? null }))
 	const inRepo = view.repos.length
 		? workspaces.filter(w => !!w.repo_name && view.repos.includes(w.repo_name))
 		: workspaces
 	// The workspace you're *in* is never hidden: the list is the way back to the chat on
 	// screen, and a filter that swallows it reads as the app having lost your place.
-	const shown = view.hideMerged ? inRepo.filter(w => !isMerged(w) || w.id === selectedId) : inRepo
-	const hiddenMerged = inRepo.length - shown.length
+	const shown = inRepo.filter(
+		w => w.id === selectedId || !((view.hideMerged && isMerged(w)) || (view.hideDone && isDone(w)))
+	)
+	// One count for both toggles rather than one each: a merged workspace marked Done is
+	// hidden once, so two counts would add up to more rows than the filters took out.
+	const hidden = inRepo.length - shown.length
 	const groups = groupWorkspaces(sortWorkspaces(shown, view.sortBy), view.groupBy)
 
 	// A search result names the chat its excerpt came from, so opening one lands on that
@@ -113,15 +136,15 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 
 	// The dot marks the *setting*; the subtitle only speaks up once a filter actually
 	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
-	const filtered = view.repos.length > 0 || view.hideMerged
-	const narrowed = view.repos.length > 0 || hiddenMerged > 0
+	const filtered = view.repos.length > 0 || view.hideMerged || view.hideDone
+	const narrowed = view.repos.length > 0 || hidden > 0
 	const repoFilterLabel = view.repos.length === 1 ? view.repos[0] : `${view.repos.length} repos`
 	const subtitle = workspaces.length
 		? narrowed
 			? [
 					`${shown.length} of ${workspaces.length}`,
 					view.repos.length ? repoFilterLabel : null,
-					hiddenMerged ? `${hiddenMerged} merged hidden` : null
+					hidden ? `${hidden} hidden` : null
 				]
 					.filter(Boolean)
 					.join(' · ')
@@ -144,6 +167,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 								type="button"
 								onClick={() => setSearchOpen(true)}
 								aria-label="Search workspaces and chats"
+								title="Search (⌘K)"
 								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
 							>
 								<Search size={18} />
@@ -189,7 +213,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				) : shown.length === 0 ? (
 					<Empty>
 						{view.repos.length ? `No workspaces in ${repoFilterLabel}` : 'No workspaces'}
-						{hiddenMerged ? ` — ${hiddenMerged} merged ${hiddenMerged === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
+						{hidden ? ` — ${hidden} ${hidden === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
 					</Empty>
 				) : (
 					groups.map(g => {
@@ -272,8 +296,13 @@ function GroupDot({ status }: { status?: string }) {
 	return <span className="dot size-2" style={{ background: color }} />
 }
 
+interface RepoChoice {
+	name: string
+	icon: RepoIcon | null
+}
+
 /** The desktop sidebar's Group by / Repo / Sort by popover. */
-function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPrefs; onClose: () => void }) {
+function ViewControls({ repos, view, onClose }: { repos: RepoChoice[]; view: ViewPrefs; onClose: () => void }) {
 	const setView = useApp(s => s.setView)
 	return (
 		<>
@@ -305,6 +334,9 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						]}
 					/>
 				</ControlRow>
+				{/* Two toggles, because the two claims disagree in both directions: merged is
+				    read off the PR on GitHub (`isMerged`), Done is the status somebody set
+				    (`isDone`), and either one alone leaves finished work in the list. */}
 				<ControlRow id="view-hide-merged" label="Hide merged">
 					<ViewSwitch
 						id="view-hide-merged"
@@ -313,12 +345,14 @@ function ViewControls({ repos, view, onClose }: { repos: string[]; view: ViewPre
 						onChange={v => setView({ hideMerged: v })}
 					/>
 				</ControlRow>
-				{/* Whose merge, exactly: ours, off `gh`, not Conductor's status — see `isMerged`.
-				    Worth one line here because the two disagree often enough that a workspace
-				    still sitting in "Done" after this is on looks like the toggle misfiring. */}
-				<p className="-mt-1 text-faint text-xs">
-					By the PR on GitHub, which can trail a merge by up to a minute — not by Conductor’s status.
-				</p>
+				<ControlRow id="view-hide-done" label="Hide done">
+					<ViewSwitch
+						id="view-hide-done"
+						checked={view.hideDone}
+						label="Hide workspaces marked Done"
+						onChange={v => setView({ hideDone: v })}
+					/>
+				</ControlRow>
 			</div>
 		</>
 	)
@@ -329,7 +363,7 @@ function RepoFilter({
 	selected,
 	onChange
 }: {
-	repos: string[]
+	repos: RepoChoice[]
 	selected: string[]
 	onChange: (repos: string[]) => void
 }) {
@@ -340,7 +374,7 @@ function RepoFilter({
 		onChange(selected.includes(repo) ? selected.filter(r => r !== repo) : [...selected, repo])
 
 	return (
-		<div className="flex flex-col gap-2">
+		<div className="flex flex-col gap-1.5">
 			<ControlRow id="view-repo" label="Repo">
 				<button
 					id="view-repo"
@@ -357,11 +391,17 @@ function RepoFilter({
 			{open ? (
 				<div
 					id="view-repo-options"
-					className="flex max-h-48 flex-col overflow-y-auto rounded-lg border border-border bg-surface-2 p-1"
+					className="flex max-h-48 flex-col overflow-y-auto rounded-lg border border-border bg-surface-2 py-0.5"
 				>
 					<RepoOption checked={selectedAll} label="All repos" onChange={() => onChange([])} />
 					{repos.map(repo => (
-						<RepoOption key={repo} checked={selected.includes(repo)} label={repo} onChange={() => toggle(repo)} />
+						<RepoOption
+							key={repo.name}
+							checked={selected.includes(repo.name)}
+							label={repo.name}
+							icon={<RepoAvatar icon={repo.icon} name={repo.name} />}
+							onChange={() => toggle(repo.name)}
+						/>
 					))}
 				</div>
 			) : null}
@@ -369,10 +409,22 @@ function RepoFilter({
 	)
 }
 
-function RepoOption({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) {
+function RepoOption({
+	checked,
+	label,
+	icon,
+	onChange
+}: {
+	checked: boolean
+	label: string
+	icon?: ReactNode
+	onChange: () => void
+}) {
 	return (
-		<label className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text active:bg-surface">
+		<label className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-0.5 text-left text-sm text-text active:bg-surface">
 			<input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
+			{icon ?? <span className="size-8 shrink-0" />}
+			<span className="min-w-0 flex-1 truncate">{label}</span>
 			<span
 				className={cn(
 					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent',
@@ -381,7 +433,6 @@ function RepoOption({ checked, label, onChange }: { checked: boolean; label: str
 			>
 				{checked ? <Check size={12} strokeWidth={3} /> : null}
 			</span>
-			<span className="truncate">{label}</span>
 		</label>
 	)
 }

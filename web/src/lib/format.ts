@@ -110,6 +110,17 @@ export function isMerged(w: Workspace): boolean {
 }
 
 /**
+ * Is this workspace marked Done? Read off the same status the sidebar groups by, so
+ * the filter hides exactly the rows sitting under the "Done" header — a workspace
+ * whose PR has landed but whose status was never moved stays put, which is what
+ * `isMerged` is for. The two are separate toggles because they answer different
+ * questions: one is the branch, the other is the label a person put on the work.
+ */
+export function isDone(w: Workspace): boolean {
+	return workspaceStatus(w) === 'done'
+}
+
+/**
  * The workspace lifecycle status the desktop sidebar groups by — a manual
  * override beats the derived one (same precedence as the app).
  */

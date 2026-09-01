@@ -74,6 +74,7 @@ across re-deploys.
                                       ├─ writes: Actuator ⟶ Conductor
                                       │          ├─ applescript (default): osascript ⟶ focused session
                                       │          └─ sidecar (opt-in):      unix socket ⟶ exact session
+                                      ├─ dev:    Run/Stop ⟶ CONDUCTOR_PORT ⟶ tailnet-only HTTPS
                                       └─ push:   turn ended ⟶ Web Push ⟶ your lock screen
 ```
 
@@ -119,7 +120,10 @@ yarn start          # serves dist/ + the API (node bin/cli.js)
 ```
 
 Or in one step: `yarn preview` (build + start). For live development with HMR,
-`yarn dev` runs Vite (`:5173`, proxying `/api`) alongside the relay.
+`yarn dev` runs Vite (`:5173`, proxying `/api`) alongside the relay in a
+[numux](https://github.com/hyldmo/numux) TUI — one tab each, `numux.config.ts`
+picks the ports (needs [Bun](https://bun.sh) on PATH). Open the URL the relay tab
+prints: it points at Vite's origin and carries the token, which Vite can't print.
 
 The relay prints a phone URL with an embedded token:
 
@@ -131,6 +135,11 @@ Open on your phone (same Tailnet):
 Open that on the phone and **Add to Home Screen**. The token is stored in
 `localStorage`; every `/api/*` call carries it, so other devices on the LAN
 can't read your sessions.
+
+Read marks and unsent prompt drafts stay local-first for offline use and are also
+mirrored to `~/Library/Application Support/conductor-remote/prefs.json`. That durable
+copy survives a PWA hostname/origin change and restores the same state on another
+authenticated device. Access tokens and in-flight send state remain device-local.
 
 ### Deploy (run on login as a background service)
 
@@ -217,6 +226,15 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
   incremental polling.
 - ✅ Diff vs the workspace's target branch (file list + colorized patch,
   including untracked files).
+- ✅ **Launch and forward dev servers** — the workspace header's Play button
+  presses Conductor's selected Run task, waits for its allocated
+  `CONDUCTOR_PORT`, and exposes it at a tailnet-only HTTPS URL. Open and Stop
+  controls appear once it is running; Stop uses Conductor's own button and
+  removes only this relay's Serve mapping. Forwarding a server that is already up
+  presses nothing in Conductor, so it takes about a second and opens the tab from
+  that same tap. This requires a Run task configured
+  in Conductor and Tailscale on the viewing device, even when the relay itself
+  uses public Funnel.
 - ✅ **Send prompt** — two strategies:
   - **`applescript`** (default): drives Conductor's real UI send, landing in the
     *focused* session. Uses the session's own model/permission mode (zero risk of
@@ -365,6 +383,7 @@ src/                the Node relay (no build step)
   git.ts            workspace diff vs target branch (incl. untracked)
   sidecar.ts        Conductor sidecar IPC client (precise write path)
   writes.ts         Actuator interface + AppleScript (default) + Sidecar (opt-in)
+  dev-server.ts     Conductor Run task + tailnet-only HTTPS forwarding
   notify.ts         watches session status for ended turns → push; subscription store
   webpush.ts        Web Push (VAPID + aes128gcm) on node:crypto — no dependencies
   logbuf.ts         console capture + log-file tail behind /api/logs (token redacted)
@@ -372,8 +391,8 @@ web/                the React PWA (Vite)
   index.html, src/  app shell, components, hooks, api client
 public/             icon.svg + PWA PNGs (repo-root so Conductor's icon lookup finds them)
   push-sw.js        push / notification-click handlers, imported into the generated SW
+numux.config.ts     `yarn dev`: Vite + relay in one TUI, on per-workspace ports
 scripts/
-  dev.ts            runs Vite + relay together
   gen-icons.ts      rasterizes icon.svg → PWA PNGs (sharp)
   devtools-recon.js invoke-logger — only usable if a future build ships devtools
 dist/               built PWA (gitignored) — what the relay serves

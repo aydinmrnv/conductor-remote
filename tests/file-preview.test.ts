@@ -1,3 +1,5 @@
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { isAllowedPreviewPath, parseFileReference } from '../src/file-preview.ts'
 
@@ -21,8 +23,18 @@ describe('file references', () => {
 		})
 	})
 
+	test('expands the home path an agent writes, which the phone cannot', () => {
+		expect(parseFileReference('~/.gstack/plan.md:12')).toEqual({
+			path: path.join(os.homedir(), '.gstack/plan.md'),
+			line: 12
+		})
+	})
+
 	test.each([
 		'/w/a-workspace',
+		// Another account's home is not this relay's to expand — and unexpanded it is not a path.
+		'~someone/notes.md',
+		'~/notes.md/../../../etc/hosts',
 		'web/src/app.tsx:19',
 		'/Users/hyldmo/project/.env:1',
 		'/Users/hyldmo/file.ts:0',

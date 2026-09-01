@@ -1,5 +1,5 @@
 import { Paperclip, X } from 'lucide-react'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
@@ -7,7 +7,10 @@ import remarkGfm from 'remark-gfm'
 import { attachmentTokens, isPreviewableSource } from '../../../src/shared.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { useFileMention } from '../lib/fileMentions.ts'
+import { highlightLines, languageForFence, languageForPath } from '../lib/highlight.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
+import { Code, Tokens } from './Code.tsx'
 import { Spinner } from './ui.tsx'
 
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
@@ -73,7 +76,11 @@ export function sourceReference(href: string | undefined): string | null {
  */
 export function ChatLink({ href, children, onClick, ...props }: React.ComponentProps<'a'>) {
 	const attachment = attachmentPath(href)
-	const reference = sourceReference(href)
+	// A link whose href is a path relative to the worktree — `[the helper](src/git.ts)` —
+	// resolves the same way an inline mention does, and for the same reason: followed as a
+	// URL it lands on the PWA's own router and shows the home screen.
+	const mention = useFileMention(href ?? null)
+	const reference = sourceReference(href) ?? mention
 	const [previewing, setPreviewing] = useState(false)
 	if (attachment) {
 		return (
@@ -209,13 +216,25 @@ function SourceLines({
 	preview: FilePreviewResponse
 	lineRef: React.RefObject<HTMLDivElement | null>
 }) {
-	const lines = preview.content.split('\n')
+	const language = languageForPath(preview.path)
+	// One tokenise per preview, split to match the rows this draws. The content is a
+	// window into the file (src/server.ts caps it at 500 lines, or 100 either side of
+	// the line the agent named), so a block comment that opened above the window
+	// colours from the top of the window rather than from where it really starts.
+	// A count that doesn't line up drops the colour rather than the gutter: a line
+	// out of step here renumbers every line below it and still looks plausible.
+	const { text, tokens } = useMemo(() => {
+		const text = preview.content.split('\n')
+		const tokens = highlightLines(preview.content, language)
+		return { text, tokens: tokens?.length === text.length ? tokens : null }
+	}, [preview.content, language])
 	return (
 		<>
 			<pre className="min-w-max p-3 font-mono text-[11.5px] leading-[1.5] text-muted">
-				{lines.map((text, index) => {
+				{text.map((line, index) => {
 					const number = preview.lineStart + index
 					const selected = number === preview.line
+					const lineTokens = tokens?.[index]
 					return (
 						<div
 							key={number}
@@ -226,7 +245,7 @@ function SourceLines({
 							)}
 						>
 							<span className="select-none text-right text-faint">{number}</span>
-							<code>{text || ' '}</code>
+							<code>{lineTokens?.length ? <Tokens nodes={lineTokens} /> : line || ' '}</code>
 						</div>
 					)
 				})}
@@ -244,7 +263,70 @@ function PreviewTruncationNotice({ preview }: { preview: FilePreviewResponse }) 
 	) : null
 }
 
-const COMPONENTS = { a: ChatLink, img: ChatImage }
+/**
+ * A fenced block, coloured when its info string names a language we registered.
+ * Inline code reaches this component too and carries no class at all, so it falls
+ * through to the plain `<code>` the chat has always drawn — unless it names a file
+ * in this workspace, which is how "we updated `tests/foo.ts`" becomes a source link
+ * (`web/src/lib/fileMentions.ts`).
+ *
+ * Only a classless span is offered as a mention: a fence is a block of code, and its
+ * one line naming a path does not make the block a link.
+ */
+function ChatCode({ className, children, node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
+	const language = languageForFence(className)
+	const text = fenceText(children)
+	const mention = useFileMention(className ? null : text)
+	if (mention)
+		return (
+			<FileMention reference={mention} {...props}>
+				{children}
+			</FileMention>
+		)
+	return (
+		<code className={className} {...props}>
+			{language && text !== null ? <Code text={text} language={language} /> : children}
+		</code>
+	)
+}
+
+/**
+ * Inline code that names a real file, drawn as code rather than as a link: it is the
+ * path the agent wrote, and colouring it like prose would lose that. A real `button`
+ * because it opens a sheet instead of going anywhere — the keyboard and VoiceOver get
+ * that for free, and an anchor to `/Users/…` would be a lie the router has to catch.
+ */
+function FileMention({
+	reference,
+	children,
+	...props
+}: React.ComponentProps<'code'> & { reference: string; node?: unknown }) {
+	const [previewing, setPreviewing] = useState(false)
+	return (
+		<>
+			<button
+				type="button"
+				title={`Open ${reference}`}
+				onClick={() => setPreviewing(true)}
+				className="max-w-full align-baseline text-left"
+			>
+				<code {...props} className="text-accent underline decoration-dotted underline-offset-2">
+					{children}
+				</code>
+			</button>
+			{previewing ? <FilePreviewSheet reference={reference} onClose={() => setPreviewing(false)} /> : null}
+		</>
+	)
+}
+
+/** react-markdown hands a fence its source as one string, or as a list of them. */
+function fenceText(children: React.ReactNode): string | null {
+	if (typeof children === 'string') return children
+	if (Array.isArray(children) && children.every(child => typeof child === 'string')) return children.join('')
+	return null
+}
+
+const COMPONENTS = { a: ChatLink, code: ChatCode, img: ChatImage }
 
 /**
  * Chat markdown. GFM for tables/strikethrough/task lists, breaks so single

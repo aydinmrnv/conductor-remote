@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { isPreviewableSource } from './shared.ts'
 
 const exec = promisify(execFile)
 
@@ -22,6 +23,7 @@ export interface WorkspaceDiff {
 }
 
 const MAX_PATCH_BYTES = 400_000
+const MAX_LISTED_FILES = 20_000
 
 async function git(cwd: string, args: string[]): Promise<string> {
 	const { stdout } = await exec('git', ['-C', cwd, ...args], {
@@ -138,4 +140,28 @@ async function localState(worktree: string): Promise<{ dirty: boolean; unpushed:
 		unpushed = false
 	}
 	return { dirty, unpushed }
+}
+
+/**
+ * Every file in the worktree the phone may turn a chat mention into a link for.
+ *
+ * Agents name files in prose all day — "updated `tests/foo.ts`" — and the phone
+ * links a mention only when it matches a real file, so this is the list it matches
+ * against. Tracked plus untracked-not-ignored: an agent that just wrote a file
+ * names it in the same message, long before anything commits it.
+ *
+ * Two things keep the payload small. Only previewable extensions ship, because
+ * `/api/files` refuses everything else anyway, and 20,000 paths is the ceiling — a
+ * repo whose build output isn't ignored would otherwise send its whole `node_modules`
+ * to a phone. `-z`, because a path may legally contain a newline.
+ */
+export async function listSourceFiles(worktree: string): Promise<{ files: string[]; truncated: boolean }> {
+	let listing = ''
+	try {
+		listing = await git(worktree, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])
+	} catch {
+		return { files: [], truncated: false }
+	}
+	const files = listing.split('\0').filter(p => p !== '' && isPreviewableSource(p))
+	return { files: files.slice(0, MAX_LISTED_FILES), truncated: files.length > MAX_LISTED_FILES }
 }

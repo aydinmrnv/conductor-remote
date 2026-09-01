@@ -5,10 +5,12 @@ import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
+import { languageForTool } from '../lib/highlight.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { latestAssistantForActions } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
+import { Code } from './Code.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
@@ -53,10 +55,10 @@ export function Transcript({
 	// lands — so this holds the row list (and each group's slice) at the same identity
 	// across the polls above, which is what lets the memoised rows below bail out.
 	const rows = useMemo(() => groupSteps(entries), [entries])
-	const lastAssistantKey = useMemo(() => {
-		const entry = latestAssistantForActions(entries)
-		return entry ? rowKey(entry) : null
-	}, [entries])
+	// Copy/Fork act on the turn's response, but they are drawn *after* every row rather
+	// than under that response: an agent that speaks and then keeps working buries the
+	// buttons mid-transcript, where they read as belonging to the step below them.
+	const actionTarget = useMemo(() => latestAssistantForActions(entries), [entries])
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
@@ -142,14 +144,10 @@ export function Transcript({
 							row.kind === 'steps' ? (
 								<StepGroup key={row.key} entries={row.entries} />
 							) : (
-								<Entry
-									key={row.key}
-									e={row.e}
-									showChatActions={row.key === lastAssistantKey}
-									onFork={row.key === lastAssistantKey ? onFork : undefined}
-								/>
+								<Entry key={row.key} e={row.e} />
 							)
 						)}
+						{actionTarget ? <ChatActions text={actionTarget.text} onFork={onFork} /> : null}
 						{visiblePending.map(p => (
 							<PendingEntry
 								key={p.id}
@@ -373,15 +371,7 @@ function PendingEntry({ p, onRetry, onDismiss }: { p: PendingMessage; onRetry: (
 }
 
 /** One transcript row. Memoised on the entry, which the poll appends to rather than rebuilds. */
-const Entry = memo(function Entry({
-	e,
-	showChatActions = false,
-	onFork
-}: {
-	e: TranscriptEntry
-	showChatActions?: boolean
-	onFork?: (format: SplitFormat) => Promise<void>
-}) {
+const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 	if (e.role === 'user') {
 		// `data-user-msg` is what MessageNav reads: the entry's position is this node's, and
 		// the attributes are the row it draws in the sheet. Every user-side bubble carries
@@ -424,12 +414,14 @@ const Entry = memo(function Entry({
 			<Bubble className="max-w-[92%] px-0.5">
 				<Markdown>{e.text}</Markdown>
 			</Bubble>
-			{showChatActions ? <ChatActions text={e.text} onFork={onFork} /> : null}
 		</div>
 	)
 })
 
-/** Copy the latest response, or branch the whole chat from a transcript attachment. */
+/**
+ * Copy the latest response, or branch the whole chat from a transcript attachment.
+ * Rendered as the transcript's last row, not under the response it acts on.
+ */
 function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFormat) => Promise<void> }) {
 	const [copied, setCopied] = useState(false)
 	const [menuOpen, setMenuOpen] = useState(false)
@@ -461,7 +453,7 @@ function ChatActions({ text, onFork }: { text: string; onFork?: (format: SplitFo
 	}
 
 	return (
-		<div className="mt-1.5 flex max-w-full flex-col items-start gap-1">
+		<div className="flex max-w-full flex-col items-start gap-1">
 			<div className="flex items-center gap-3">
 				<div className="relative">
 					<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
@@ -663,7 +655,7 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 							{e.detail}
 						</ChatLink>
 					) : (
-						<Mono text={e.detail} className="text-muted" />
+						<Mono text={e.detail} className="text-muted" language={languageForTool(e.tool)} />
 					)
 				) : null}
 				{e.output ? (
@@ -694,9 +686,15 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 /** Shared by every mono block in a tool row: the call's input, its output, an error. */
 const MONO = 'whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed [overflow-wrap:anywhere]'
 
-/** Output as it was printed. `text` stays inline, or <pre> would render this file's indentation. */
-function Mono({ text, className }: { text: string; className?: string }) {
-	return <pre className={cn(MONO, className)}>{text}</pre>
+/**
+ * Output as it was printed. `text` stays inline, or <pre> would render this file's indentation.
+ *
+ * `language` colours the block. Only the *open* body passes one: the closed row shows a
+ * single truncated line, so colouring it would buy a comma and cost a tokenise per step
+ * on every chat's first paint — 256 Bash calls in the largest chat on this Mac.
+ */
+function Mono({ text, className, language }: { text: string; className?: string; language?: string | null }) {
+	return <pre className={cn(MONO, className)}>{language ? <Code text={text} language={language} /> : text}</pre>
 }
 
 /** A tool's image, pulled through the relay so the token stays in the header, not the URL. */

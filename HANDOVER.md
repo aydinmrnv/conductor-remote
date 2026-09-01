@@ -61,7 +61,7 @@ A complete, installable **PWA** (React 19 · Vite 7 · Tailwind v4 ·
 yarn install
 yarn build          # → dist/
 yarn start          # relay serves dist/ + /api  (or `yarn preview` = build+start)
-# dev with HMR:  yarn dev   (Vite :5173 proxying /api → relay :8787)
+# dev with HMR:  yarn dev   (numux TUI: Vite :5173 proxying /api → relay :8787; needs bun)
 # deploy:  yarn deploy      (build + install a login LaunchAgent; yarn service {status,restart,uninstall})
 ```
 
@@ -114,7 +114,9 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
-  git.ts          workspace diff vs target branch (incl. untracked via --no-index)
+  git.ts          workspace diff vs target branch (incl. untracked via --no-index), plus the
+                  worktree's file list (GET /api/workspaces/:id/files) that decides which file
+                  an agent named in a message becomes a link
   merge.ts        merge the workspace's open PR via `gh pr merge` (mirrors Conductor's Merge button)
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
@@ -127,6 +129,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   funnel-watchdog.ts  end-to-end probe of the PUBLIC ingress; re-registers a stale funnel, and
                   can move the Mac to a fallback network when it has no route at all
   settings.ts     relay preferences the phone edits (fallback SSIDs, autoRejoin) → stateDir()/settings.json
+  prefs.ts        durable sync peer for PWA read marks + draft/agent intent → stateDir()/prefs.json
   wifi.ts         networksetup reads + the one narrow write (join a network macOS already knows).
                   All async: it is slowest exactly when the link is wedged, and the relay is one thread
   nosleep-helper.ts  the root half in one place: the shared POSIX-sh body, the helper file it is
@@ -141,8 +144,11 @@ web/              React PWA (Vite root)
   src/hooks.ts    useWorkspaces / useDiff / useTranscript (incremental poll) / useModels (model list, SWR)
                   useSendPrompt (applies the staged agent settings, then sends)
   src/lib/        api client, types, format helpers, cn, composer drafts, staged agent settings,
+                  local-first host preference sync (prefs.ts),
                   model-list cache, read marks (unread the phone has seen), push (permission/subscribe/reconcile),
-                  transcript-merge (folds each tool result onto the call it answers, identity intact)
+                  transcript-merge (folds each tool result onto the call it answers, identity intact),
+                  fileMentions (turns `src/git.ts` in a message into a source link, worktree file list
+                  as the existence check; absolute and ~ paths pass through for the relay to allow)
   src/components/ Patch.tsx renders a unified diff (workspace diff + an edit step's result)
   src/store.ts    zustand: token + connection status + drafts + staged agent settings + read marks
                   + this device's push subscription
@@ -153,7 +159,8 @@ web/              React PWA (Vite root)
 public/           icon.svg source + PWA PNGs (repo-root so Conductor's icon lookup finds them; `yarn gen:icons`)
   self-heal.js    HTML-level stale-client watchdog (see PWA-update note below)
   push-sw.js      push / notificationclick handlers, pulled into the generated SW by workbox.importScripts
-scripts/         dev.ts + gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
+numux.config.ts  `yarn dev` — Vite + relay in one numux TUI, on per-workspace ports
+scripts/         gen-icons.ts + service.ts (macOS LaunchAgent install/uninstall/status)
                  + qr.ts (dep-free QR of the phone URL, printed by service.ts)
                  + nosleep.ts (the `nosleep [duration|setup|status]` entrypoint)
                  + nosleep-setup.ts (installs the root helper + the scoped sudoers rule)

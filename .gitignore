@@ -6,6 +6,9 @@ coverage/
 .DS_Store
 .env
 
+# numux debug log / persisted process logs
+.numux/
+
 # browser-test artifacts
 .playwright-mcp/
 

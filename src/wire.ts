@@ -22,12 +22,14 @@
  */
 
 import type { UpdateStatus } from './autoupdate.ts'
+import type { DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
 import type { CachedModelGroup } from './model-cache.ts'
 import type { NoSleepState } from './nosleep.ts'
 import type { DeviceInfo } from './notify.ts'
 import type { ParkedAgentPatch, ParkedPrompt } from './parked.ts'
+import type { Prefs, SyncedDraft } from './prefs.ts'
 import type { RepoRow, SearchWorkspace, SessionRow, Workspace } from './reads.ts'
 import type { IndexStatus, SearchResult as SearchEvidence } from './search.ts'
 import type { Settings } from './settings.ts'
@@ -45,16 +47,20 @@ export type {
 	ActuatorInfo,
 	CachedModelGroup,
 	DeviceInfo as PushDevice,
+	DevServerResult,
+	DevServerState,
 	IndexStatus as SearchIndexStatus,
 	LogEntry,
 	LogFileInfo,
 	NoSleepState,
 	/** What the phone can change about a chat's agent. */
 	ParkedAgentPatch as AgentPatch,
+	Prefs,
 	RepoRow as Repo,
 	SearchWorkspace,
 	SessionRow as Session,
 	Settings as RelaySettings,
+	SyncedDraft,
 	TranscriptEntry,
 	UpdateStatus,
 	Workspace
@@ -114,6 +120,19 @@ export interface FilePreviewResponse {
 	/** Source text for the visible excerpt. */
 	content: string
 	/** The excerpt omits lines before or after it. */
+	truncated: boolean
+}
+
+/**
+ * GET /api/workspaces/:id/files — worktree-relative paths, for linking file mentions.
+ *
+ * The phone turns `` `tests/foo.ts` `` in a message into a source link only when it
+ * names a file that is really there, and this is the list it checks against. Only
+ * previewable extensions are listed; `truncated` says the worktree held more than
+ * the relay will ship (src/git.ts ▸ `listSourceFiles`).
+ */
+export interface WorkspaceFilesResponse {
+	files: string[]
 	truncated: boolean
 }
 
@@ -317,6 +336,11 @@ export interface SettingsResponse {
 		autoJoinHotspot: string | null
 	}
 	nosleep: NoSleepStatus
+}
+
+/** GET/PATCH /api/prefs — the host's durable copy of local-first PWA state. */
+export interface PrefsResponse {
+	prefs: Prefs
 }
 
 /**

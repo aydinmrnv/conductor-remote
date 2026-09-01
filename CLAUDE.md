@@ -5,6 +5,12 @@ serves an installable React PWA, reads agent state, and relays prompts back into
 Conductor. Deep dives live in [HANDOVER.md](./HANDOVER.md) (status, file map) and
 [FINDINGS.md](./FINDINGS.md) (the Conductor reverse-engineering the design rests on).
 
+> [!IMPORTANT]
+> This repository supports **local Conductor workspaces on macOS only**. Do not add
+> compatibility branches, setup paths, or fallbacks for Conductor Cloud workspaces.
+> The relay intentionally depends on the local Conductor database, macOS
+> Accessibility, local worktrees, and local `CONDUCTOR_PORT` allocations.
+
 ## The load-bearing mental model
 
 Two asymmetric halves — keep them separate:
@@ -25,7 +31,11 @@ Two asymmetric halves — keep them separate:
     and this relay is read-only, so a chat read on the phone would shout forever:
     the PWA keeps its own marks (`web/src/lib/read.ts`) — the session's own
     `updated_at` at the moment it was on screen, never our clock, because it is
-    only ever compared against that same column. The session view marks *only*
+    only ever compared against that same column. localStorage remains the
+    synchronous, offline-first copy, but `src/prefs.ts` now mirrors marks through
+    `GET/PATCH /api/prefs` into `stateDir()/prefs.json`, merging each one by max.
+    That survives a PWA origin change and syncs another authenticated device without
+    ever writing Conductor's database. The session view marks *only*
     the chat on screen (a sibling tab's badge isn't ours to clear) and only while
     the page is visible.
   - **"How long has this answer been running" is not `last_user_message_at`.**
@@ -297,6 +307,44 @@ Two asymmetric halves — keep them separate:
        verify, then Enter. No clipboard hijack, no Cmd+L/Cmd+V. Clipboard paste
        survives only as a fallback — and `fillComposer` **clears whatever it wrote
        before falling back**, or the paste appends and sends a garbled prompt.
+    5. **Read the composer back after Enter** (`submitComposer`) — Conductor
+       consumes the draft when it takes a prompt, so a box still holding the text
+       is a keystroke that went nowhere, and that is the only receipt a run can
+       collect about its own send. It is worth collecting because the other
+       receipt, the transcript row, costs `CONFIRM_WINDOW_MS` (6s) and then a
+       whole second run through activate/focus/tab/fill: measured from this Mac's
+       relay logs, a send whose single fault was a first Enter Conductor ignored
+       took **~10s** from the prompt appearing in the composer to it being sent,
+       with the text on screen the whole way and exactly one user row written, so
+       the keystroke was lost rather than late. Pressing again is safe *because*
+       of the read — the prompt is still there, so nothing was consumed, so there
+       is nothing to duplicate — and a Conductor too busy to have handled the
+       first Enter is also too busy to answer an AX read, which blocks rather than
+       returning stale text. The box is resolved once (`composerField`) and passed
+       to both halves: finding it is a ~0.5s walk of the pane, while reading it
+       back off the reference is ~10ms, so the whole confirm adds ~0.2s to a send
+       that works.
+       - **What the read buys is the *diagnosis*, not the second press.** The
+         first occurrence in the wild (2026-09-01 16:59:57, `hyldmo/lamp-pairing-question`)
+         had the box survive all three presses, and no send has ever been logged
+         as rescued by a later one — so pressing is bounded at **two** and every
+         press past the first is delay added to a send already failing. The value
+         is that the caller now *knows*: `sendNeverStarted` (`writes.ts`) reads
+         that sentence back and `deliverPrompt` checks the transcript **once**
+         instead of watching it for the full 6s, because a run that never
+         consumed the draft cannot have written a row. The one check stays — an
+         *earlier* attempt's row may still be arriving, and typing over that is
+         the duplicate the window exists to prevent. `tests/send-guards.test.ts`
+         pins all three retry predicates, since each is a substring match on a
+         sentence this repo writes and each fails silently.
+       - **Why Enter gets ignored is still open.** The evidence says the box holds
+         the text while Conductor acts as though it is empty, which is what a
+         React-controlled composer looks like when the value was written past its
+         change tracker — and the AX write is exactly that write. If that is it,
+         the fix is to re-enter the text the way a person does (the existing
+         `pasteComposer` fallback makes real key events) rather than to press
+         Enter again. Not yet tried: the failure is intermittent, so it needs a
+         reproduction before a fix can be believed.
 
     Landing in the wrong agent is worse than not sending, so every step errors out
     rather than guessing. No private protocol, nothing to rebreak on a Conductor
@@ -390,6 +438,17 @@ Two asymmetric halves — keep them separate:
     stale-while-revalidate (`web/src/lib/models.ts` ▸ `useModels`): the picker
     paints from the last list and refreshes behind it, and a refresh that fails
     keeps that list on screen and says so rather than emptying it.
+
+    **Drafts and staged settings also have a host-side durable copy.**
+    `web/src/lib/prefs.ts` keeps the legacy localStorage keys as the live/offline
+    representation (including for an older cached PWA), and stores revision metadata
+    beside them. A 700ms idle debounce, textarea blur, backgrounding, and reconnect
+    flush snapshots to `stateDir()/prefs.json`; a 15s poll pulls another device's edits.
+    Text and its staged agent patch share one revision. Clearing both writes a tombstone,
+    so an offline stale browser cannot resurrect a prompt already sent elsewhere; a
+    focused composer is protected from remote replacement, and the logical clock advances
+    beyond every remote timestamp it observes. The token, optimistic pending sends, and
+    the new-workspace "Send immediately" habit remain device-local on purpose.
 
     **Workspace status** (`setWorkspaceStatus`, `POST /api/workspaces/:id/status`)
     is the one write that touches no pane at all — it right-clicks the workspace's
@@ -522,7 +581,13 @@ Two asymmetric halves — keep them separate:
   `-`, `*`, `:`, `AND`, `NEAR` as syntax, so an unquoted apostrophe is a *parse
   error* rather than a poor result — `matchQuery` quotes every token and ORs them,
   leaving BM25 to rank, because someone reaching for a workspace is recalling it and
-  not filtering it. And chunk hits are folded up into **workspaces** by summing only
+  not filtering it. **OR alone loses the query made of common words** (measured
+  2026-09-01: "may i run the", a sentence one chat verifiably held, ranked nowhere in
+  the top 300 chunks — OR rewards word density and nothing rewarded adjacency), so
+  each unquoted run also enters as one OR'd FTS5 phrase term, whose rarity is its
+  weight, and a `"quoted phrase"` — curly `“”` included, which is what iOS sends —
+  is *required*: a typed quote is the one signal the user is filtering after all.
+  And chunk hits are folded up into **workspaces** by summing only
   the best 3, which was measured rather than chosen: searching "removing adding lamp
   manual" for a chat that says "Add by name is gone. Removed the form", summing every
   hit put the right answer **9th** (a 32-message conversation about lamps won on
@@ -860,7 +925,7 @@ Two asymmetric halves — keep them separate:
 ## Commands
 
 ```bash
-yarn verify   # typecheck + lint + Vitest + repository checks — before every commit
+yarn verify   # typecheck + lint + repository checks + Vitest (slowest last) — before every commit
 yarn test     # run the Vitest suite once
 yarn test:watch # rerun affected Vitest tests while editing
 yarn test:coverage # run Vitest with V8 text + HTML coverage reports
@@ -869,7 +934,7 @@ yarn fix      # Biome autofix (format + safe lints)
 yarn build    # Vite → dist/ (the PWA the relay serves)
 yarn build:node # tsc -p tsconfig.build.json → dist-node/, then copy src/*.applescript beside it
 yarn start    # run the relay (node bin/cli.js)
-yarn dev      # Vite :5173 (HMR) proxying /api → relay :8787
+yarn dev      # numux TUI (numux.config.ts): Vite :5173 (HMR) proxying /api → relay :8787
 yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
@@ -934,6 +999,12 @@ handler scan, and the relay/web import boundary.
   build's rows. localStorage is stubbed, so no browser. Portable, so the ubuntu job
   runs it.
 
+- `tests/prefs.test.ts` + `tests/local-prefs.test.ts` — the two halves of durable
+  PWA state. The host tests pin monotone read marks, last-write-wins drafts, deletion
+  tie-breaking, sanitization and 0600 persistence. The browser tests pin legacy-key
+  migration, origin recovery, focused-composer protection, clock skew, atomic
+  text/agent intent and tombstone behavior. Both are stdlib/Map-backed and portable.
+
 - `tests/notify.test.ts` — the notifier's state machine (`src/notify.ts` ▸
   `TurnWatcher`). Every rule in it is a rule about *not* buzzing a phone, which is why
   it is worth pinning: too eager is a nuisance you notice, too quiet is a notifier that
@@ -961,6 +1032,16 @@ handler scan, and the relay/web import boundary.
   title** — free text a model wrote — and is then joined onto a path, so the test that
   matters is the one where a title engineered to climb out still lands inside the
   worktree. Portable, so the ubuntu job runs it.
+
+- `tests/file-mentions.test.ts` / `tests/mention-render.test.tsx` — which words in a chat
+  become source links (`web/src/lib/fileMentions.ts`). Both ways of getting it wrong are
+  quiet: too eager and the transcript underlines ordinary prose, each tap opening a sheet
+  that says the file is not there, which reads as a broken relay rather than a bad guess;
+  too shy and the feature simply is not there, which nobody reports. The matcher is pure,
+  so the first needs no relay and no browser. The second renders the chat to static markup
+  for one fact that belongs to `react-markdown` rather than to us — inline code arrives with
+  **no class**, which is how a mention is told apart from a fence — and it caught the fence
+  with no info string coming through as a link. Portable, so the ubuntu job runs both.
 
 - `scripts/check-imports.ts` — the relay/web boundary (see "One set of types" above).
   `web/src/**` may reach into `src/` only with a **statement-level** `import type`,
@@ -1025,6 +1106,32 @@ bind trap below), not by unit test.
   tailnet (Admin console nodeAttr) or it falls back to tailnet-only and says so.
   `curl 127.0.0.1:8787` works for local checks; `yarn service status` prints the URL
   and whether it's public or tailnet-only.
+- **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
+  `src/dev-server.ts` presses Conductor's selected Run/Stop task through the same
+  fail-closed Accessibility path as other writes; Conductor still owns the process
+  and its cleanup. The relay discovers that process's allocated `CONDUCTOR_PORT`
+  from `ps eww` only after Run (never log the snapshot — it contains environments
+  and secrets), then gives it a separate root-mounted `tailscale serve` HTTPS port.
+  **A start whose port already listens presses nothing** — forwarding is relay-only
+  work, measured at **0.4s** against the Accessibility path's tens of seconds, and it
+  steals no focus. That is what lets the phone open the tab from the same tap:
+  WebKit drops a tap's activation after a few seconds, so `window.open` lands for
+  this path and is refused for a cold start, which is why the Open control stays on
+  screen and a refused window changes nothing.
+  A discovered allocation is cached per workspace, and a **stopped** one has no
+  allocation to cache, so the reads also share a single 5s `ps` snapshot: the phone
+  polls this state every 2.5s per open chat and each snapshot costs ~650 kB and
+  ~40ms here. Only a start reads fresh, because the task it just pressed is younger
+  than any cached snapshot.
+  A loopback bridge rewrites the public Host/Origin to localhost and tunnels raw
+  WebSocket upgrades, which keeps strict Vite-style host checks and HMR working.
+  `dev-forwards.json` is the ownership receipt: remove or replace only the exact
+  Serve target it records, because every other mapping belongs to the user. It also
+  records the bridge process and a private loopback challenge: `yarn dev` runs a
+  second relay beside the LaunchAgent, and a node-watch restart must not steal the
+  installed relay's live forward. On an owning relay restart, rebuild the ephemeral
+  bridge only when that exact old mapping and the target process still exist;
+  otherwise retain enough evidence for safe cleanup.
 - **The LaunchAgent plist *is* the daemon's environment, and `process.env` in a shell is
   not.** `service install` bakes every runtime knob into the plist (`buildPlist`), so the
   daemon reads its port, its DB path and its Funnel posture from there and from nothing
@@ -1084,6 +1191,22 @@ bind trap below), not by unit test.
   the tell and reach in via one-line helpers (`tabLabel`, `paneLabels`), or name
   variables `strip`/`pane`/`parentEl`. Nothing else in the toolchain reads this
   language, so run `yarn verify` after every edit.
+  - **A `whose` clause is a *reference*, not a list, and reading elements out of
+    one re-runs the filter per element.** So `repeat with l in (UI elements of b
+    whose role is "AXLink")` is quadratic in the number of hits, and it looks
+    exactly like the linear version. Measured on a 45-row sidebar: **10.8s** for
+    the reference walk against **0.9s** for `get UI elements of b whose role is
+    "AXLink"`, which forces the query once — ~220ms per element, all of it the
+    filter being re-evaluated. `findSidebarRow` was **11.8s** and is now 1.8s, and
+    that handler is the whole fallback focus path plus the only route to
+    `setWorkspaceStatus`, which has no other lever. Anything reading *names*
+    should also ask for them in bulk (`name of (UI elements of pane whose role is
+    …)` is one round trip for all of them) rather than a `name of` per element,
+    which is another ~18ms each — that is why `findSidebarRow` snapshots every row
+    name once ahead of its four title candidates instead of re-reading per
+    candidate. `get` on a query that yields one or two elements buys nothing
+    measurable (`tabGroups` is unchanged at ~450ms); it is there so a workspace
+    with twenty chat tabs doesn't discover the trap on its own.
   - **It is a real file, and that is load-bearing in two directions.** `writes.ts`
     reads it as a sibling of its own module (`import.meta.dirname`, the one place
     that may — see the `packageRoot()` rule below), so `yarn build:node` has to
@@ -1211,6 +1334,71 @@ bind trap below), not by unit test.
     only for a step someone opened. That numbering is why `parseMessage` and `toolImageAt`
     live in one file: they must walk a row's image blocks in the same order, or the
     reference finds the wrong picture.
+  - **Syntax colour costs bundle bytes, not frames** (`web/src/lib/highlight.ts`).
+    Measured against 800 real Bash commands out of `session_messages` (median 195
+    chars) and this repo's own files: highlight.js tokenises the median command in
+    **0.011ms** and a 500-line file in **2.4ms**, so the runtime side never reaches
+    the poll loop above. The bytes are the whole decision, because the service worker
+    precaches the bundle and the phone re-downloads it on every release. Gzipped,
+    against the app's own 254 kB: **eleven languages cost 22.8 kB**, highlight.js's
+    full set costs 313 kB, Shiki's smallest useful build costs 113 kB and tokenises
+    20× slower (0.24ms per command, 47ms per file, plus 36ms compiling grammars
+    before the first line is coloured). So the languages are registered one at a time
+    and anything unregistered renders plain, exactly as it did before.
+    Three places show it and each gets it differently. A **Bash step** colours only in
+    the *open* body — the closed row is one truncated line, and colouring it would
+    tokenise every step on a chat's first paint (256 Bash calls in the largest chat
+    here). A **fenced block** in a message rides `Markdown`'s existing memo, so it
+    tokenises once per message ever shown. The **source preview** is the one that
+    needs `lowlight` rather than bare highlight.js: it draws its own element per line
+    for the gutter, and a token routinely covers several lines (a block comment, a
+    template literal), so highlight.js's HTML string cannot be split at `\n` without
+    cutting through the tag. `splitLines` cuts the *tree* and re-opens the enclosing
+    spans on the next line; `tests/highlight.test.ts` pins that the lines put the
+    input back together and that blank ones survive, because a line lost there
+    renumbers every line below it and still looks like an ordinary file. Token colours
+    come from the app's own palette in `index.css`, not from a shipped theme.
+    The **workspace diff stays plain**: per-line highlighting of a 400 kB patch
+    (`MAX_PATCH_BYTES`) measured 77ms and ~20,000 extra spans, and every line would be
+    highlighted alone, so a block comment loses its colour after the first line anyway.
+  - **A file an agent names in prose is a link too, and only when the file is really
+    there** (`web/src/lib/fileMentions.ts`). Agents write paths in backticks all day —
+    "updated `tests/foo.ts`", "plan written to `~/.gstack/plan.md`" — and every one of
+    them was dead text, while the same path written as a Markdown link has opened the
+    source sheet for a while (`Markdown.tsx` ▸ `sourceReference`). The rule that keeps
+    this from underlining half the transcript is **existence, not shape**: inline code
+    holds far more than paths (`yarn build`, `sessions.status`, `Array.map`), so a
+    worktree-relative mention is matched against the worktree's own file list
+    (`GET /api/workspaces/:id/files`, `git.ts` ▸ `listSourceFiles`: tracked *plus*
+    untracked-not-ignored, since an agent names a file in the same message that created
+    it) and an ambiguous one links nowhere — `types.ts` naming two files is not a fact
+    about either. Measured over the real chats here, that leaves 45 links in 575 code
+    spans on one workspace and 11 in 88 on another, every one of them a file that
+    exists; the misses are `scripts/dev.ts` in a worktree where it was deleted and
+    `dev-forwards.json`, which lives in the relay's state dir. The list costs one
+    request per workspace (143–746 paths here, 3–27 kB before gzip, previewable
+    extensions only) and is deliberately not polled.
+    An **absolute** path is the exception and links on shape alone: `/Users/…` may
+    point at another workspace and `~/…` at a plan file, so there is no list to check
+    it against — **the relay decides whether it may be opened**, exactly as it does for
+    a Markdown link, and `~` is expanded in `file-preview.ts` because the phone has no
+    idea which account the relay runs as. That half needs no workspace, so it is the
+    fallback when there is no resolver in context — an archived chat's `~/plan.md` is as
+    readable as ever, only its worktree is gone, and the same sentence must not link in
+    one chat and not in the one beside it. Which is why that route now **says a refusal
+    is a refusal**: a home path is out of bounds on a public funnel, and answering
+    "source file not found" for a file sitting right there sends people hunting. It
+    discloses nothing, because the 403 is computed from the path and the posture and is
+    the same answer whether or not the file exists.
+    Two traps. A **fenced block with no info string reaches `ChatCode` with no class
+    either**, exactly like an inline span, so the mention text is *not* trimmed — its
+    trailing newline is the whole of what tells a code block from `` `src/git.ts` ``.
+    And the resolver arrives by **context**, not by prop: `ChatCode` is one entry in a
+    static component map nothing threads props through, and a context read is the one
+    thing that updates past `Markdown`'s `memo` when the file list lands after the
+    first paint. `tests/mention-render.test.tsx` renders the chat to static markup for
+    the fence trap alone — it caught it — because everything else about it typechecks
+    and the failure is silent in both directions.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."

@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, LoaderCircle, Paperclip, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
+import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { AgentPatch } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls, nextEffort } from './AgentControls.tsx'
@@ -36,6 +37,10 @@ function saveSendNow(on: boolean): void {
 	try {
 		localStorage.setItem(SEND_NOW_KEY, on ? 'on' : 'off')
 	} catch {}
+}
+
+function discardAttachment(stageId: string | undefined): void {
+	if (stageId) void client.discardStagedAttachment(stageId).catch(() => undefined)
 }
 
 /**
@@ -68,6 +73,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	// moment it is closed, and the text has to outlive that (see lib/draft.ts).
 	const prompt = useApp(s => s.drafts[NEW_WORKSPACE_DRAFT] ?? '')
 	const setDraft = useApp(s => s.setDraft)
+	const setFocusedDraft = useApp(s => s.setFocusedDraft)
 	const setPrompt = (text: string) => setDraft(NEW_WORKSPACE_DRAFT, text)
 	const [agent, setAgent] = useState<AgentPatch>({})
 	const [pickerOpen, setPickerOpen] = useState(false)
@@ -82,6 +88,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const navigate = useNavigate()
 	const queryClient = useQueryClient()
 	const online = useApp(s => s.online)
+
+	useEffect(
+		() => () => {
+			if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
+			requestPrefsFlush()
+		},
+		[setFocusedDraft]
+	)
 
 	const repos = data?.repos ?? []
 	const selected = repos.find(r => r.name === repo)
@@ -103,10 +117,6 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 			const next = { ...current, ...patch }
 			return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)) as AgentPatch
 		})
-
-	const discardAttachment = (stageId: string | undefined) => {
-		if (stageId) void client.discardStagedAttachment(stageId).catch(() => undefined)
-	}
 
 	const removeAttachment = (id: string) => {
 		const attachment = attachments.find(current => current.id === id)
@@ -190,13 +200,13 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	// The typed prompt survives this (it is a draft), the staged files do not: a file
 	// left staged is a copy sitting on the relay for a sheet nobody may reopen, and
 	// re-picking one is a tap. Text is the part that cannot be re-made.
-	const close = () => {
+	const close = useCallback(() => {
 		for (const attachment of attachments) {
 			cancelledUploads.current.add(attachment.id)
 			discardAttachment(attachment.stageId)
 		}
 		onClose()
-	}
+	}, [attachments, onClose])
 
 	const create = async () => {
 		const text = prompt.trim()
@@ -229,6 +239,19 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 			setBusy(false)
 		}
 	}
+
+	// Escape is the desktop way out, and the repo picker eats it first: one press
+	// should never both close the picker and throw away the typed prompt. Bound to the
+	// window rather than to the sheet, since focus can sit on a button or on nothing.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== 'Escape') return
+			if (pickerOpen) setPickerOpen(false)
+			else close()
+		}
+		window.addEventListener('keydown', onKey)
+		return () => window.removeEventListener('keydown', onKey)
+	}, [close, pickerOpen])
 
 	// Portalled to <body> for the same reason as ConnectSheet/LogsSheet: the drawer <aside> it's
 	// opened from has a `transform`, which would make `fixed inset-0` mean "the drawer", not "the screen".
@@ -331,6 +354,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					<textarea
 						value={prompt}
 						onChange={e => setPrompt(e.target.value)}
+						onFocus={() => setFocusedDraft(NEW_WORKSPACE_DRAFT)}
+						onBlur={() => {
+							if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
+							requestPrefsFlush()
+						}}
 						placeholder="What should the agent do? (optional)"
 						rows={6}
 						// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
@@ -342,6 +370,14 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							if (!files.length) return
 							event.preventDefault()
 							chooseFiles(files)
+						}}
+						// The chord the chat composer already uses. isComposing keeps an IME's
+						// own Enter (picking a candidate) from creating the workspace.
+						onKeyDown={e => {
+							if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+								e.preventDefault()
+								void create()
+							}
 						}}
 					/>
 					<div className="mt-1 flex items-start gap-1 px-1">

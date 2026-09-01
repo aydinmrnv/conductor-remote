@@ -1,13 +1,20 @@
 import { create } from 'zustand'
-import { loadAgentDrafts, writeAgentDraft } from './lib/agentDraft.ts'
 import { bootstrapToken, clearToken, setStoredToken } from './lib/api.ts'
-import { loadDrafts, writeDraft } from './lib/draft.ts'
 import { offlineDelay } from './lib/online.ts'
 import { loadPending, type PendingMessage, writePending } from './lib/pending.ts'
-import { loadReadMarks, type ReadMarks, writeReadMarks } from './lib/read.ts'
+import {
+	type LocalPrefsProjection,
+	loadLocalPrefs,
+	moveLocalDraft,
+	setLocalAgent,
+	setLocalDraft,
+	setLocalReadMark
+} from './lib/prefs.ts'
+import type { ReadMarks } from './lib/read.ts'
 import type { AgentPatch, UpdateStatus } from './lib/types.ts'
 
 let offlineTimer: ReturnType<typeof setTimeout> | null = null
+const initialPrefs = loadLocalPrefs()
 
 /**
  * Sidebar view preferences — mirrors the desktop app's Group by / Repo / Sort by
@@ -26,13 +33,26 @@ export interface ViewPrefs {
 	 * filter that hides rows has to be asked for, never inherited.
 	 */
 	hideMerged: boolean
+	/**
+	 * Drop workspaces marked Done (see `isDone`). Separate from `hideMerged`: a
+	 * branch that landed and a status somebody set are different claims, and the
+	 * two disagree in both directions. Off by default, for the same reason.
+	 */
+	hideDone: boolean
 	/** Collapsed group keys (e.g. 'status:done', 'repo:auk-store'). */
 	collapsed: string[]
 }
 
 const VIEW_KEY = 'conductor-remote-view'
 const LAST_NEW_WORKSPACE_REPO_KEY = 'conductor-remote-last-new-workspace-repo'
-const defaultView: ViewPrefs = { groupBy: 'status', repos: [], sortBy: 'updated', hideMerged: false, collapsed: [] }
+const defaultView: ViewPrefs = {
+	groupBy: 'status',
+	repos: [],
+	sortBy: 'updated',
+	hideMerged: false,
+	hideDone: false,
+	collapsed: []
+}
 
 /** Drop keys with no staged value, so "nothing staged" is `{}` and never `{ plan: undefined }`. */
 function prunePatch(patch: AgentPatch): AgentPatch {
@@ -108,6 +128,8 @@ interface AppState {
 	 * on the phone from staying unread forever.
 	 */
 	readMarks: ReadMarks
+	/** Composer currently protected from a background sync overwrite. */
+	focusedDraft: string | null
 	/**
 	 * This device's push subscription as the *relay* knows it. Reconciled once at the
 	 * app shell (`usePushSync`) rather than by the Connect sheet, because the whole
@@ -145,6 +167,9 @@ interface AppState {
 	clearAgentDraft: (sessionId: string, applied: AgentPatch) => void
 	/** Note a chat as seen up to `at` (its `updated_at`); older marks never overwrite newer ones. */
 	markRead: (sessionId: string, at: string) => void
+	/** Apply a host merge without recording it as a fresh local edit. */
+	applySyncedPrefs: (prefs: LocalPrefsProjection) => void
+	setFocusedDraft: (draftId: string | null) => void
 	setPush: (push: { deviceId: string | null; devices: number }) => void
 	setSidebarOpen: (open: boolean) => void
 	setLastNewWorkspaceRepo: (repo: string) => void
@@ -170,9 +195,10 @@ export const useApp = create<AppState>((set, get) => {
 		update: null,
 		workingHints: {},
 		pending: loadPending(),
-		drafts: loadDrafts(),
-		agentDrafts: loadAgentDrafts(),
-		readMarks: loadReadMarks(),
+		drafts: initialPrefs.drafts,
+		agentDrafts: initialPrefs.agentDrafts,
+		readMarks: initialPrefs.readMarks,
+		focusedDraft: null,
 		push: { deviceId: null, devices: 0 },
 		// Landing without a workspace in the URL → open the drawer so phones see the list first.
 		sidebarOpen: !location.pathname.startsWith('/w/'),
@@ -218,28 +244,26 @@ export const useApp = create<AppState>((set, get) => {
 			savePending(get().pending.map(p => (p.id === id ? { ...p, status: 'error', error } : p))),
 		removePending: id => savePending(get().pending.filter(p => p.id !== id)),
 		setDraft: (chatId, text) => {
-			writeDraft(chatId, text)
-			set({ drafts: { ...get().drafts, [chatId]: text } })
+			const saved = setLocalDraft(chatId, text, get().agentDrafts[chatId] ?? {})
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
 		},
 		moveDraft: (fromId, toId) => {
 			const drafts = get().drafts
 			const text = drafts[fromId]
 			if (!text || fromId === toId || drafts[toId] !== undefined) return
-			writeDraft(fromId, '')
-			writeDraft(toId, text)
-			const { [fromId]: _moved, ...rest } = drafts
-			set({ drafts: { ...rest, [toId]: text } })
+			const saved = moveLocalDraft(fromId, toId)
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
 		},
 		markRead: (sessionId, at) => {
 			// The session poll re-fires this every couple of seconds while a chat is open;
 			// bail unless it actually moves the mark, or every tick re-renders the sidebar.
 			if ((get().readMarks[sessionId] ?? '') >= at) return
-			set({ readMarks: writeReadMarks({ ...get().readMarks, [sessionId]: at }) })
+			set({ readMarks: setLocalReadMark(sessionId, at).readMarks })
 		},
 		stageAgent: (sessionId, patch) => {
 			const next = prunePatch({ ...get().agentDrafts[sessionId], ...patch })
-			writeAgentDraft(sessionId, next)
-			set({ agentDrafts: { ...get().agentDrafts, [sessionId]: next } })
+			const saved = setLocalAgent(sessionId, next, get().drafts[sessionId] ?? '')
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
 		},
 		// Key by key rather than wholesale: a setting changed *while* the send was in
 		// flight is staged for the next one, and clearing the whole entry would eat it.
@@ -252,9 +276,12 @@ export const useApp = create<AppState>((set, get) => {
 				plan: current.plan === applied.plan ? undefined : current.plan,
 				fast: current.fast === applied.fast ? undefined : current.fast
 			})
-			writeAgentDraft(sessionId, next)
-			set({ agentDrafts: { ...get().agentDrafts, [sessionId]: next } })
+			const saved = setLocalAgent(sessionId, next, get().drafts[sessionId] ?? '')
+			set({ drafts: saved.drafts, agentDrafts: saved.agentDrafts })
 		},
+		applySyncedPrefs: prefs =>
+			set({ drafts: prefs.drafts, agentDrafts: prefs.agentDrafts, readMarks: prefs.readMarks }),
+		setFocusedDraft: focusedDraft => set({ focusedDraft }),
 		setPush: push => set({ push }),
 		setSidebarOpen: sidebarOpen => set({ sidebarOpen }),
 		setLastNewWorkspaceRepo: repo => {

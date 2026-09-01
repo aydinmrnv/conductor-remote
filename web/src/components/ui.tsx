@@ -194,12 +194,16 @@ export function RepoAvatar({ icon, name }: { icon: RepoIcon | null; name: string
 	return <RepoFileIcon repoName={name} fallback={monogram} />
 }
 
-/** A raster avatar tile that falls back to the monogram if the image fails to load. */
+/**
+ * A raster avatar tile that falls back to the monogram if the image fails to load.
+ * The image is inset to the 18px the emoji and lucide glyphs are drawn at, or it fills
+ * the tile edge to edge and reads at nearly twice their size in the same list.
+ */
 function ImgTile({ src, fit, fallback }: { src: string; fit: 'cover' | 'contain'; fallback: ReactNode }) {
 	const [failed, setFailed] = useState(false)
 	if (failed) return <>{fallback}</>
 	return (
-		<div className={AVATAR_TILE}>
+		<div className={cn(AVATAR_TILE, 'p-1.5')}>
 			<img
 				src={src}
 				alt=""

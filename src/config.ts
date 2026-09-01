@@ -25,6 +25,12 @@ export interface Config {
 	preventScreenLock: boolean
 	/** Directory of built PWA assets to serve. */
 	publicDir: string
+	/**
+	 * `yarn dev` only: the Vite dev server's port. Set, it means Vite serves the PWA and
+	 * proxies /api here, so this process's own origin serves no app — the startup banner
+	 * points at Vite's instead of at a URL that would 404.
+	 */
+	devWebPort?: number
 }
 
 /** The CLI and daemon share one on/off setting. Only `off` opts out. */
@@ -102,10 +108,15 @@ function resolveToken(): string {
 	return token
 }
 
-/** The relay serves the Vite build. Warn early if it hasn't been built yet. */
-function resolvePublicDir(): string {
+/**
+ * The relay serves the Vite build. Warn early if it hasn't been built yet — except under
+ * `yarn dev`, where Vite serves the PWA from source on its own port and this process only
+ * answers the /api calls proxied to it. `dist/` is untouched there, so the warning names a
+ * build nobody needs and it fired on every dev start.
+ */
+function resolvePublicDir(devMode: boolean): string {
 	const dist = path.join(packageRoot(import.meta.dirname), 'dist')
-	if (!fs.existsSync(path.join(dist, 'index.html'))) {
+	if (!devMode && !fs.existsSync(path.join(dist, 'index.html'))) {
 		console.warn(
 			'⚠ dist/ not built — run `yarn build` (or `yarn preview`). The API works; the PWA will 404 until then.'
 		)
@@ -116,6 +127,9 @@ function resolvePublicDir(): string {
 export function loadConfig(): Config {
 	// Bind loopback; `tailscale serve` (wired by `yarn deploy`) fronts it with a stable HTTPS tailnet URL.
 	const host = process.env.RELAY_HOST ?? '127.0.0.1'
+	// Both set by `numux.config.ts` — the dev orchestrator is the only thing that knows Vite's port.
+	const devMode = Boolean(process.env.RELAY_DEV)
+	const devWebPort = devMode ? Number(process.env.WEB_PORT) || undefined : undefined
 	const writeStrategy: WriteStrategy = process.env.WRITE_STRATEGY === 'sidecar' ? 'sidecar' : 'applescript'
 	return {
 		dbPath:
@@ -127,6 +141,7 @@ export function loadConfig(): Config {
 		token: resolveToken(),
 		writeStrategy,
 		preventScreenLock: preventScreenLockEnabled(),
-		publicDir: resolvePublicDir()
+		publicDir: resolvePublicDir(devMode),
+		devWebPort
 	}
 }

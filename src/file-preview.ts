@@ -1,3 +1,4 @@
+import os from 'node:os'
 import path from 'node:path'
 import { isPreviewableSource } from './shared.ts'
 
@@ -40,15 +41,21 @@ export function isAllowedPreviewPath(
  * Parse a source link without treating ordinary PWA routes as file references.
  * The extension allowlist keeps links such as `/w/a-workspace` in the browser,
  * while also preventing this endpoint from becoming a generic file reader.
+ *
+ * `~/notes.md` is expanded here because that is how agents write a home path —
+ * "plan written to `~/.gstack/plan.md`" — and the phone cannot expand it, having no
+ * idea which account the relay runs as. Expanding it grants nothing: the result goes
+ * through `isAllowedPreviewPath` like any other path, so a public relay still refuses
+ * everything outside the workspaces root. Only `~/` counts, never `~someone/`.
  */
 export function parseFileReference(reference: string): FileReference | null {
-	if (!reference.startsWith('/')) return null
-
 	const location = reference.match(/:([1-9]\d*)(?::\d+)?$/)
 	const line = location ? Number(location[1]) : null
 	if (line !== null && !Number.isSafeInteger(line)) return null
 
-	const filePath = location ? reference.slice(0, -location[0].length) : reference
+	const written = location ? reference.slice(0, -location[0].length) : reference
+	const filePath = written.startsWith('~/') ? path.join(os.homedir(), written.slice(2)) : written
+	if (!filePath.startsWith('/')) return null
 	if (!isPreviewableSource(filePath)) return null
 	return { path: filePath, line }
 }
