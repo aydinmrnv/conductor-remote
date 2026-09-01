@@ -163,7 +163,11 @@ export function createTools(call: RelayCall): Tool[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					query: { type: 'string', description: 'Plain words. Punctuation and operators are ignored, not parsed.' },
+					query: {
+						type: 'string',
+						description:
+							'Plain words, ranked by relevance; wrap a "phrase in quotes" to require it word for word. Other punctuation and operators are ignored, not parsed.'
+					},
 					limit: { type: 'number', description: 'Max workspaces to return (default 12, max 50).' }
 				},
 				required: ['query']

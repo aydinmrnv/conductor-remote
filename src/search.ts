@@ -122,17 +122,54 @@ export interface IndexStatus {
  * the one matching one, and requiring all four would return nothing whenever a
  * single word is misremembered.
  *
+ * OR alone loses the query made of common words, and nothing about sentence
+ * boundaries is why — a chunk is a whole prose block. Measured 2026-09-01 against
+ * this Mac's 225k-chunk index: "may i run the", a sentence one chat verifiably
+ * contains, ranked nowhere in the top 300 chunks, because OR rewards density
+ * ("Running the headless artifact render… first run may…") and nothing rewards
+ * adjacency. So each run of unquoted words also enters as one FTS5 phrase term
+ * OR'd beside its tokens: the phrase is rare where the words are common, its BM25
+ * weight is correspondingly large, and the same query then puts the exact sentence
+ * first (95ms against 206ms for bare OR, both inside the 250ms debounce). A phrase
+ * the index doesn't contain matches nothing and costs nothing.
+ *
+ * Quotes filter. `"exactly this"` becomes a *required* phrase (AND), because a
+ * typed quote is the one signal that the user is filtering rather than recalling;
+ * words outside the quotes stay OR'd. Curly `“”` count as quotes — iOS smart
+ * punctuation substitutes them for the straight one the user pressed, so the phone
+ * mostly never sends `"`. Stemming still applies inside quotes (`"running"` finds
+ * "runs"): quoting changes which chunks qualify, not how they were tokenized.
+ *
  * The last token gets a prefix `*` so search-as-you-type matches mid-word, but only
  * from three characters: `"a"*` matches a large fraction of the index and would
- * spend the whole query budget on a keystroke that means nothing yet.
+ * spend the whole query budget on a keystroke that means nothing yet. Inside an
+ * unclosed quote the star rides on the phrase itself (`"may i ru"*` — valid FTS5,
+ * the last token matches as a prefix), so a phrase still being typed already
+ * matches what it is about to say.
  */
 export function matchQuery(raw: string): string | null {
-	const tokens = raw.toLowerCase().match(/[\p{L}\p{N}_]+/gu)
-	if (!tokens?.length) return null
-	const terms = tokens.map(t => `"${t}"`)
-	const last = tokens[tokens.length - 1]
-	if (!/\s$/.test(raw) && last.length >= 3) terms[terms.length - 1] = `"${last}"*`
-	return terms.join(' OR ')
+	// Split on quote characters: segments alternate unquoted/quoted, and a trailing
+	// unclosed quote leaves the last segment quoted — the phrase still being typed.
+	const segments = raw.toLowerCase().split(/["“”]/)
+	const typing = !/[\s"“”]$/.test(raw)
+	const required: string[] = []
+	const loose: string[] = []
+	for (let i = 0; i < segments.length; i++) {
+		const tokens = segments[i].match(/[\p{L}\p{N}_]+/gu)
+		if (!tokens?.length) continue
+		const star = i === segments.length - 1 && typing && tokens[tokens.length - 1].length >= 3 ? '*' : ''
+		const phrase = `"${tokens.join(' ')}"${star}`
+		if (i % 2) {
+			required.push(phrase)
+		} else {
+			if (tokens.length > 1) loose.push(phrase)
+			loose.push(...tokens.slice(0, -1).map(t => `"${t}"`), `"${tokens[tokens.length - 1]}"${star}`)
+		}
+	}
+	if (!loose.length) return required.length ? required.join(' AND ') : null
+	// The OR group is parenthesised because FTS5 binds AND tighter than OR.
+	const looseExpr = loose.length > 1 ? `(${loose.join(' OR ')})` : loose[0]
+	return required.length ? `${required.join(' AND ')} AND ${looseExpr}` : looseExpr
 }
 
 /** The tokens `matchQuery` will search for — what a caller matches names against. */
