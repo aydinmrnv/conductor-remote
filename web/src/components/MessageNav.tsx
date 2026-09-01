@@ -3,6 +3,7 @@ import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn.ts'
 import { relativeTime } from '../lib/format.ts'
+import { hasSelection } from '../lib/selection.ts'
 
 /**
  * Jump back to your own prompts.
@@ -19,12 +20,16 @@ import { relativeTime } from '../lib/format.ts'
  *
  * Two behaviours carry the rest:
  *
- * 1. **It wakes on a gesture, not on scroll.** Waking on the `scroll` event would
- *    light it every time the agent streams a line, because the transcript auto-pins
- *    to the bottom — a control that blinks through a whole turn is worse than none.
- *    So `touchmove`/`wheel` (a *person* moving the view) is what reveals it, and once
- *    lit its own scrolling keeps it lit, which covers iOS momentum running long after
- *    the finger left. At rest it's gone: no ink over the chat, nothing to mis-tap.
+ * 1. **It wakes on a gesture that actually moves the view.** Waking on the `scroll`
+ *    event alone would light it every time the agent streams a line, because the
+ *    transcript auto-pins to the bottom — a control that blinks through a whole turn
+ *    is worse than none. But waking on `touchmove`/`wheel` alone was wrong the other
+ *    way: a long press to select text jitters enough to fire `touchmove` without
+ *    moving anything, so the pill appeared under the very words being selected, over
+ *    the callout bar, every time. So a gesture only arms the wake and the scroll it
+ *    causes spends it, selected text blocks it outright, and once lit any scrolling
+ *    keeps it lit — which covers iOS momentum running long after the finger left.
+ *    At rest it's gone: no ink over the chat, nothing to mis-tap.
  * 2. **Positions are measured from the DOM, not from the entry list.** A step group
  *    opening, an image loading, a markdown table reflowing all move a message without
  *    changing the list, and the transcript is the one place where "how tall is it
@@ -33,7 +38,9 @@ import { relativeTime } from '../lib/format.ts'
  */
 
 /** How long the pill stays up after the last scroll — long enough to reach for it. */
-const IDLE_MS = 2500
+const IDLE_MS = 1500
+/** How long after a touch or wheel a scroll still counts as that person's doing. */
+const GESTURE_MS = 400
 /** Breathing room above the message we land on, so it isn't flush against the tab strip. */
 const HEADROOM = 12
 /** Below this there's nothing to navigate — one prompt is already on screen. */
@@ -157,20 +164,24 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 	const awakeRef = useRef(false)
 	const openRef = useRef(false)
 	const sleepTimer = useRef(0)
+	const gestureAt = useRef(0)
 	const frame = useRef(0)
 	const cancelGlide = useRef<() => void>(() => {})
+
+	const sleep = useCallback(() => {
+		// The sheet outlives every reason to sleep; closing it re-arms them.
+		if (openRef.current) return
+		clearTimeout(sleepTimer.current)
+		awakeRef.current = false
+		setAwake(false)
+	}, [])
 
 	const wake = useCallback(() => {
 		awakeRef.current = true
 		setAwake(true)
 		clearTimeout(sleepTimer.current)
-		sleepTimer.current = window.setTimeout(() => {
-			// The sheet outlives the timer; closing it re-arms this.
-			if (openRef.current) return
-			awakeRef.current = false
-			setAwake(false)
-		}, IDLE_MS)
-	}, [])
+		sleepTimer.current = window.setTimeout(sleep, IDLE_MS)
+	}, [sleep])
 
 	const measure = useCallback(() => {
 		const el = scroller.current
@@ -200,21 +211,27 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 	useEffect(() => {
 		const el = scroller.current
 		if (!el) return
-		// A person moving the view is what reveals the pill — never the transcript
-		// scrolling itself, or it would blink through every streamed message.
+		// A finger on the glass is not yet a scroll, so a gesture only arms the wake.
 		const onGesture = () => {
+			gestureAt.current = performance.now()
+		}
+		// A person moving the view is what reveals the pill — never the transcript
+		// scrolling itself, or it would blink through every streamed message. Once up,
+		// any scrolling keeps it up: momentum, and the jump we just made.
+		const onScroll = () => {
+			if (!awakeRef.current && performance.now() - gestureAt.current > GESTURE_MS) return
+			if (hasSelection()) return
 			wake()
 			schedule()
 		}
-		// Once up, any scrolling keeps it up: momentum, and the jump we just made.
-		const onScroll = () => {
-			if (!awakeRef.current) return
-			wake()
-			schedule()
+		// Selecting text is the phone's gesture, not ours: get out from under it.
+		const onSelectionChange = () => {
+			if (hasSelection()) sleep()
 		}
 		el.addEventListener('touchmove', onGesture, { passive: true })
 		el.addEventListener('wheel', onGesture, { passive: true })
 		el.addEventListener('scroll', onScroll, { passive: true })
+		document.addEventListener('selectionchange', onSelectionChange)
 		// Both observers only cost anything while the pill is on screen. The mutation one
 		// is what catches a step group being opened under it.
 		const whileAwake = () => {
@@ -228,13 +245,14 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 			el.removeEventListener('touchmove', onGesture)
 			el.removeEventListener('wheel', onGesture)
 			el.removeEventListener('scroll', onScroll)
+			document.removeEventListener('selectionchange', onSelectionChange)
 			ro.disconnect()
 			mo.disconnect()
 			cancelGlide.current()
 			if (frame.current) cancelAnimationFrame(frame.current)
 			clearTimeout(sleepTimer.current)
 		}
-	}, [scroller, wake, schedule])
+	}, [scroller, wake, sleep, schedule])
 
 	const jumpTo = (i: number) => {
 		const el = scroller.current
