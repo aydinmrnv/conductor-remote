@@ -4204,6 +4204,7 @@ __metadata:
     clsx: "npm:^2.1.1"
     husky: "npm:^9.1.7"
     jsqr: "npm:^1.4.0"
+    lowlight: "npm:^3.3.0"
     lucide-react: "npm:^0.563.0"
     react: "npm:^19.2.4"
     react-dom: "npm:^19.2.4"
@@ -5518,6 +5519,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"highlight.js@npm:~11.11.0":
+  version: 11.11.2
+  resolution: "highlight.js@npm:11.11.2"
+  checksum: 10c0/654275dc4b112a96737bda822d8461a291aac4b9a299deb54beb05b995c6c138335d2a23fb56bce92acfafb4030afdbb83a9ecffae87d8a6ee5732e815b72113
+  languageName: node
+  linkType: hard
+
 "hook-std@npm:^4.0.0":
   version: 4.0.0
   resolution: "hook-std@npm:4.0.0"
@@ -6808,6 +6816,17 @@ __metadata:
   version: 3.1.0
   resolution: "longest-streak@npm:3.1.0"
   checksum: 10c0/7c2f02d0454b52834d1bcedef79c557bd295ee71fdabb02d041ff3aa9da48a90b5df7c0409156dedbc4df9b65da18742652aaea4759d6ece01f08971af6a7eaa
+  languageName: node
+  linkType: hard
+
+"lowlight@npm:^3.3.0":
+  version: 3.3.0
+  resolution: "lowlight@npm:3.3.0"
+  dependencies:
+    "@types/hast": "npm:^3.0.0"
+    devlop: "npm:^1.0.0"
+    highlight.js: "npm:~11.11.0"
+  checksum: 10c0/9b796fa8443b0334ebf18bc57387c9ee31432d8c263cf2089d23e1087c653d708447284e0647bf993cb2cdc810e0b268a28f51ea27b4a624893b97bdd3f025f4
   languageName: node
   linkType: hard
 

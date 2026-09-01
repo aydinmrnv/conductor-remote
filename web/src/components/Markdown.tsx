@@ -1,5 +1,5 @@
 import { Paperclip, X } from 'lucide-react'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
@@ -7,7 +7,9 @@ import remarkGfm from 'remark-gfm'
 import { attachmentTokens, isPreviewableSource } from '../../../src/shared.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { highlightLines, languageForFence, languageForPath } from '../lib/highlight.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
+import { Code, Tokens } from './Code.tsx'
 import { Spinner } from './ui.tsx'
 
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
@@ -209,13 +211,25 @@ function SourceLines({
 	preview: FilePreviewResponse
 	lineRef: React.RefObject<HTMLDivElement | null>
 }) {
-	const lines = preview.content.split('\n')
+	const language = languageForPath(preview.path)
+	// One tokenise per preview, split to match the rows this draws. The content is a
+	// window into the file (src/server.ts caps it at 500 lines, or 100 either side of
+	// the line the agent named), so a block comment that opened above the window
+	// colours from the top of the window rather than from where it really starts.
+	// A count that doesn't line up drops the colour rather than the gutter: a line
+	// out of step here renumbers every line below it and still looks plausible.
+	const { text, tokens } = useMemo(() => {
+		const text = preview.content.split('\n')
+		const tokens = highlightLines(preview.content, language)
+		return { text, tokens: tokens?.length === text.length ? tokens : null }
+	}, [preview.content, language])
 	return (
 		<>
 			<pre className="min-w-max p-3 font-mono text-[11.5px] leading-[1.5] text-muted">
-				{lines.map((text, index) => {
+				{text.map((line, index) => {
 					const number = preview.lineStart + index
 					const selected = number === preview.line
+					const lineTokens = tokens?.[index]
 					return (
 						<div
 							key={number}
@@ -226,7 +240,7 @@ function SourceLines({
 							)}
 						>
 							<span className="select-none text-right text-faint">{number}</span>
-							<code>{text || ' '}</code>
+							<code>{lineTokens?.length ? <Tokens nodes={lineTokens} /> : line || ' '}</code>
 						</div>
 					)
 				})}
@@ -244,7 +258,29 @@ function PreviewTruncationNotice({ preview }: { preview: FilePreviewResponse }) 
 	) : null
 }
 
-const COMPONENTS = { a: ChatLink, img: ChatImage }
+/**
+ * A fenced block, coloured when its info string names a language we registered.
+ * Inline code reaches this component too and carries no class at all, so it falls
+ * through to the plain `<code>` the chat has always drawn.
+ */
+function ChatCode({ className, children, node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
+	const language = languageForFence(className)
+	const text = fenceText(children)
+	return (
+		<code className={className} {...props}>
+			{language && text !== null ? <Code text={text} language={language} /> : children}
+		</code>
+	)
+}
+
+/** react-markdown hands a fence its source as one string, or as a list of them. */
+function fenceText(children: React.ReactNode): string | null {
+	if (typeof children === 'string') return children
+	if (Array.isArray(children) && children.every(child => typeof child === 'string')) return children.join('')
+	return null
+}
+
+const COMPONENTS = { a: ChatLink, code: ChatCode, img: ChatImage }
 
 /**
  * Chat markdown. GFM for tables/strikethrough/task lists, breaks so single

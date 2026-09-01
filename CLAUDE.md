@@ -1180,6 +1180,33 @@ bind trap below), not by unit test.
     only for a step someone opened. That numbering is why `parseMessage` and `toolImageAt`
     live in one file: they must walk a row's image blocks in the same order, or the
     reference finds the wrong picture.
+  - **Syntax colour costs bundle bytes, not frames** (`web/src/lib/highlight.ts`).
+    Measured against 800 real Bash commands out of `session_messages` (median 195
+    chars) and this repo's own files: highlight.js tokenises the median command in
+    **0.011ms** and a 500-line file in **2.4ms**, so the runtime side never reaches
+    the poll loop above. The bytes are the whole decision, because the service worker
+    precaches the bundle and the phone re-downloads it on every release. Gzipped,
+    against the app's own 254 kB: **eleven languages cost 22.8 kB**, highlight.js's
+    full set costs 313 kB, Shiki's smallest useful build costs 113 kB and tokenises
+    20× slower (0.24ms per command, 47ms per file, plus 36ms compiling grammars
+    before the first line is coloured). So the languages are registered one at a time
+    and anything unregistered renders plain, exactly as it did before.
+    Three places show it and each gets it differently. A **Bash step** colours only in
+    the *open* body — the closed row is one truncated line, and colouring it would
+    tokenise every step on a chat's first paint (256 Bash calls in the largest chat
+    here). A **fenced block** in a message rides `Markdown`'s existing memo, so it
+    tokenises once per message ever shown. The **source preview** is the one that
+    needs `lowlight` rather than bare highlight.js: it draws its own element per line
+    for the gutter, and a token routinely covers several lines (a block comment, a
+    template literal), so highlight.js's HTML string cannot be split at `\n` without
+    cutting through the tag. `splitLines` cuts the *tree* and re-opens the enclosing
+    spans on the next line; `tests/highlight.test.ts` pins that the lines put the
+    input back together and that blank ones survive, because a line lost there
+    renumbers every line below it and still looks like an ordinary file. Token colours
+    come from the app's own palette in `index.css`, not from a shipped theme.
+    The **workspace diff stays plain**: per-line highlighting of a 400 kB patch
+    (`MAX_PATCH_BYTES`) measured 77ms and ~20,000 extra spans, and every line would be
+    highlighted alone, so a block comment loses its colour after the first line anyway.
 - **If a Conductor update breaks a read**, re-derive from the DB schema; if it
   breaks the sidecar write, re-derive from `conductor-runtime`. Both procedures
   are in HANDOVER ▸ "Re-deriving Conductor internals."
