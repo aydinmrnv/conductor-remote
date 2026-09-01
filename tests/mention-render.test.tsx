@@ -55,3 +55,19 @@ describe('a file mention in a message', () => {
 		expect(render('plan written to `~/plan.md`', false)).toContain('title="Open ~/plan.md"')
 	})
 })
+
+describe('a link the URL sanitiser emptied', () => {
+	// gstack appends `<gstack-qid:{id}>` to a review question believing the angle brackets
+	// hide it. CommonMark reads `<scheme:rest>` as an autolink, react-markdown blanks the
+	// href because the scheme is unknown, and `href=""` follows to the current page. Both
+	// halves of that are facts about other people's code, so this pins the visible result.
+	it('is text rather than a tap that reloads the app', () => {
+		const html = render('D4 — a question <gstack-qid:plan-eng-review-voice-endpoint>')
+		expect(html).toContain('gstack-qid:plan-eng-review-voice-endpoint')
+		expect(html).not.toContain('<a')
+	})
+
+	it('still draws a link that goes somewhere', () => {
+		expect(render('see [the docs](https://conductor.build/docs)')).toContain('href="https://conductor.build/docs"')
+	})
+})
