@@ -31,7 +31,11 @@ Two asymmetric halves — keep them separate:
     and this relay is read-only, so a chat read on the phone would shout forever:
     the PWA keeps its own marks (`web/src/lib/read.ts`) — the session's own
     `updated_at` at the moment it was on screen, never our clock, because it is
-    only ever compared against that same column. The session view marks *only*
+    only ever compared against that same column. localStorage remains the
+    synchronous, offline-first copy, but `src/prefs.ts` now mirrors marks through
+    `GET/PATCH /api/prefs` into `stateDir()/prefs.json`, merging each one by max.
+    That survives a PWA origin change and syncs another authenticated device without
+    ever writing Conductor's database. The session view marks *only*
     the chat on screen (a sibling tab's badge isn't ours to clear) and only while
     the page is visible.
   - **"How long has this answer been running" is not `last_user_message_at`.**
@@ -414,6 +418,17 @@ Two asymmetric halves — keep them separate:
     stale-while-revalidate (`web/src/lib/models.ts` ▸ `useModels`): the picker
     paints from the last list and refreshes behind it, and a refresh that fails
     keeps that list on screen and says so rather than emptying it.
+
+    **Drafts and staged settings also have a host-side durable copy.**
+    `web/src/lib/prefs.ts` keeps the legacy localStorage keys as the live/offline
+    representation (including for an older cached PWA), and stores revision metadata
+    beside them. A 700ms idle debounce, textarea blur, backgrounding, and reconnect
+    flush snapshots to `stateDir()/prefs.json`; a 15s poll pulls another device's edits.
+    Text and its staged agent patch share one revision. Clearing both writes a tombstone,
+    so an offline stale browser cannot resurrect a prompt already sent elsewhere; a
+    focused composer is protected from remote replacement, and the logical clock advances
+    beyond every remote timestamp it observes. The token, optimistic pending sends, and
+    the new-workspace "Send immediately" habit remain device-local on purpose.
 
     **Workspace status** (`setWorkspaceStatus`, `POST /api/workspaces/:id/status`)
     is the one write that touches no pane at all — it right-clicks the workspace's
@@ -932,6 +947,12 @@ handler scan, and the relay/web import boundary.
   Also pins what must *not* be restored — a prompt older than a day, and another
   build's rows. localStorage is stubbed, so no browser. Portable, so the ubuntu job
   runs it.
+
+- `tests/prefs.test.ts` + `tests/local-prefs.test.ts` — the two halves of durable
+  PWA state. The host tests pin monotone read marks, last-write-wins drafts, deletion
+  tie-breaking, sanitization and 0600 persistence. The browser tests pin legacy-key
+  migration, origin recovery, focused-composer protection, clock skew, atomic
+  text/agent intent and tombstone behavior. Both are stdlib/Map-backed and portable.
 
 - `tests/notify.test.ts` — the notifier's state machine (`src/notify.ts` ▸
   `TurnWatcher`). Every rule in it is a rule about *not* buzzing a phone, which is why
