@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'vitest'
-import { assistantTurnEnds, latestAssistantForActions } from '../web/src/lib/transcript-actions.ts'
+import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../web/src/lib/transcript-actions.ts'
 import type { TranscriptEntry } from '../web/src/lib/types.ts'
 
-function entry(role: TranscriptEntry['role'], id: string, rowid: number): TranscriptEntry {
-	return { id, rowid, role, text: id, ts: '2026-08-31T00:00:00.000Z', queued: false }
+function entry(
+	role: TranscriptEntry['role'],
+	id: string,
+	rowid: number,
+	ts = '2026-08-31T00:00:00.000Z'
+): TranscriptEntry {
+	return { id, rowid, role, text: id, ts, queued: false }
 }
 
 describe('latest assistant action target', () => {
@@ -71,5 +76,38 @@ describe('per-turn action targets', () => {
 
 	test('has no target in a chat the agent has not answered', () => {
 		expect(assistantTurnEnds([entry('user', 'ask', 1), entry('tool', 'bash', 2)])).toEqual([])
+	})
+})
+
+/**
+ * What the finished turn's duration is measured from. Conductor stopped writing the
+ * `queue_order` behind `turn_started_at` on 2026-08-31, so the fallback is not a rare
+ * path — it is the only one a live chat takes today, and a duration measured from the
+ * wrong end is a plausible-looking number rather than a visible failure.
+ */
+describe('turn origin', () => {
+	const asked = entry('user', 'question', 1, '2026-09-01T12:00:00.000Z')
+	const answer = entry('assistant', 'answer', 2, '2026-09-01T12:02:00.000Z')
+
+	test('prefers the dispatch that precedes the response', () => {
+		expect(turnOrigin([asked, answer], answer, '2026-09-01T12:00:30.000Z')).toBe('2026-09-01T12:00:30.000Z')
+	})
+
+	test('falls back to the user row when no turn was dispatched', () => {
+		expect(turnOrigin([asked, answer], answer, null)).toBe(asked.ts)
+	})
+
+	test('ignores a dispatch belonging to a newer turn', () => {
+		expect(turnOrigin([asked, answer], answer, '2026-09-01T12:05:00.000Z')).toBe(asked.ts)
+	})
+
+	test('skips the rows after the response to find its own question', () => {
+		const older = entry('user', 'older', 0, '2026-09-01T11:00:00.000Z')
+		const trailing = entry('user', 'next', 3, '2026-09-01T12:09:00.000Z')
+		expect(turnOrigin([older, asked, answer, trailing], answer, null)).toBe(asked.ts)
+	})
+
+	test('has nothing to measure from in a chat that opens with a response', () => {
+		expect(turnOrigin([answer], answer, null)).toBeNull()
 	})
 })

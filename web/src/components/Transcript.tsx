@@ -4,11 +4,11 @@ import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { elapsed, messagePreview, messageTime } from '../lib/format.ts'
+import { elapsed, messagePreview, messageTime, timeAgo } from '../lib/format.ts'
 import { languageForTool } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
-import { assistantTurnEnds, latestAssistantForActions } from '../lib/transcript-actions.ts'
+import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../lib/transcript-actions.ts'
 import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { Code } from './Code.tsx'
@@ -30,6 +30,7 @@ export function Transcript({
 	workspaceId,
 	working,
 	workingSince,
+	turnStartedAt,
 	queued,
 	poll,
 	onFork
@@ -39,6 +40,13 @@ export function Transcript({
 	working?: boolean
 	/** Epoch ms the current answer started (see SessionView) — the elapsed timer's origin. */
 	workingSince?: number | null
+	/**
+	 * `sessions.turn_started_at`: when the last turn was dispatched. The running clock
+	 * uses `workingSince`, which folds in our own send's hint; this is the DB column
+	 * alone, because a finished turn's duration has to be measured against a real
+	 * dispatch and not against a hint left over from a send.
+	 */
+	turnStartedAt?: string | null
 	/** The relay's undelivered first prompt for this workspace (src/firstprompt.ts). */
 	queued?: PendingPrompt | null
 	/** `false` for an archived chat: it is fetched once, because it has no next message. */
@@ -67,6 +75,13 @@ export function Transcript({
 		const ends = assistantTurnEnds(entries).filter(e => e !== actionTarget)
 		return new Set(ends.map(rowKey))
 	}, [entries, actionTarget])
+	// Each turn's duration is measured from its own start, so the origins are resolved
+	// once per transcript change rather than per render — every row here redraws on a
+	// 1s poll, and a scan back through the chat per turn would ride along with it.
+	const turnStarts = useMemo(
+		() => new Map(assistantTurnEnds(entries).map(e => [e, turnOrigin(entries, e, turnStartedAt)])),
+		[entries, turnStartedAt]
+	)
 
 	// The relay owns the entry, so dropping it is a request, not a local edit. A
 	// parked prompt (lock screen) belongs to its chat, a first prompt to its workspace.
@@ -155,12 +170,26 @@ export function Transcript({
 								<Fragment key={row.key}>
 									<Entry e={row.e} />
 									{inlineActions.has(row.key) ? (
-										<ChatActions text={row.e.text} through={row.e.rowid} onFork={onFork} />
+										<ChatActions
+											text={row.e.text}
+											at={row.e.ts}
+											startedAt={turnStarts.get(row.e)}
+											through={row.e.rowid}
+											onFork={onFork}
+										/>
 									) : null}
 								</Fragment>
 							)
 						)}
-						{actionTarget ? <ChatActions text={actionTarget.text} onFork={onFork} /> : null}
+						{actionTarget ? (
+							<ChatActions
+								text={actionTarget.text}
+								at={actionTarget.ts}
+								startedAt={turnStarts.get(actionTarget)}
+								working={working}
+								onFork={onFork}
+							/>
+						) : null}
 						{visiblePending.map(p => (
 							<PendingEntry
 								key={p.id}
@@ -413,7 +442,7 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 })
 
 /**
- * Copy a response, or branch the chat from a transcript attachment cut at it.
+ * What a finished turn cost and when it landed, then Copy, then Fork.
  *
  * `through` is the source row the copy stops at, so a fork offered beside an older
  * answer carries the conversation as it stood there. The newest turn passes none and
@@ -421,10 +450,19 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
  */
 function ChatActions({
 	text,
+	at,
+	startedAt,
+	working,
 	through,
 	onFork
 }: {
 	text: string
+	/** When the response landed — the second half of the meta line. */
+	at: string
+	/** When its turn started, against which that response is how long the answer took. */
+	startedAt?: string | null
+	/** A turn still running has its clock in `WorkingIndicator`, so the meta stays off. */
+	working?: boolean
 	through?: number
 	onFork?: (format: SplitFormat) => Promise<void>
 }) {
@@ -432,6 +470,15 @@ function ChatActions({
 	const [menuOpen, setMenuOpen] = useState(false)
 	const [forking, setForking] = useState(false)
 	const [forkError, setForkError] = useState<string | null>(null)
+
+	// An age in words goes stale where the elapsed timer above cannot: the transcript
+	// redraws when a row lands, and a finished turn has none coming. A minute is the
+	// smallest unit this label prints, so that is how often it needs redrawing.
+	const [now, setNow] = useState(() => Date.now())
+	useEffect(() => {
+		const timer = setInterval(() => setNow(Date.now()), 60_000)
+		return () => clearInterval(timer)
+	}, [])
 
 	const copy = async () => {
 		try {
@@ -442,6 +489,9 @@ function ChatActions({
 			setCopied(false)
 		}
 	}
+
+	const took = startedAt ? Date.parse(at) - Date.parse(startedAt) : Number.NaN
+	const meta = [took > 0 ? elapsed(took) : null, timeAgo(at, now)].filter(Boolean).join(' · ')
 
 	const fork = async (cut: { thinking: boolean; tools: boolean }) => {
 		if (!onFork || forking) return
@@ -459,71 +509,69 @@ function ChatActions({
 
 	return (
 		<div className="flex max-w-full flex-col items-start gap-1">
-			<div className="flex items-center gap-3">
-				<div className="relative">
-					<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
-						<button
-							type="button"
-							onClick={() => void copy()}
-							aria-label={copied ? 'Copied response' : 'Copy response'}
-							className="flex size-7 items-center justify-center transition active:bg-surface-2"
-						>
-							{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
-						</button>
-						{onFork ? (
+			<div className="flex items-center gap-2">
+				{!working && meta ? <span className="text-[11px] tabular-nums text-faint">{meta}</span> : null}
+				<button
+					type="button"
+					onClick={() => void copy()}
+					aria-label={copied ? 'Copied response' : 'Copy response'}
+					className="flex size-7 items-center justify-center rounded-lg border border-border-soft bg-surface/70 text-muted transition active:bg-surface-2"
+				>
+					{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
+				</button>
+				{onFork ? (
+					<div className="relative">
+						<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
+							<button
+								type="button"
+								onClick={() => void fork({ thinking: true, tools: false })}
+								disabled={forking}
+								aria-label={through ? 'Fork chat from this response' : 'Fork chat with reasoning'}
+								className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+							>
+								{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
+								Fork
+							</button>
+							<button
+								type="button"
+								onClick={() => setMenuOpen(open => !open)}
+								disabled={forking}
+								aria-label="Choose fork transcript type"
+								aria-haspopup="menu"
+								aria-expanded={menuOpen}
+								className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
+							>
+								<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
+							</button>
+						</div>
+						{menuOpen ? (
 							<>
-								<span className="h-4 w-px bg-border-soft" aria-hidden />
-								<button
-									type="button"
-									onClick={() => void fork({ thinking: true, tools: false })}
-									disabled={forking}
-									aria-label={through ? 'Fork chat from this response' : 'Fork chat with reasoning'}
-									className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+								<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
+								<div
+									role="menu"
+									aria-label="Fork transcript type"
+									className="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
 								>
-									{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
-									Fork
-								</button>
-								<button
-									type="button"
-									onClick={() => setMenuOpen(open => !open)}
-									disabled={forking}
-									aria-label="Choose fork transcript type"
-									aria-haspopup="menu"
-									aria-expanded={menuOpen}
-									className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
-								>
-									<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
-								</button>
+									<ForkOption
+										label="Concise"
+										detail="Messages only"
+										onClick={() => void fork({ thinking: false, tools: false })}
+									/>
+									<ForkOption
+										label="With reasoning"
+										detail="Messages and reasoning"
+										onClick={() => void fork({ thinking: true, tools: false })}
+									/>
+									<ForkOption
+										label="Full transcript"
+										detail="Messages, reasoning, and tools"
+										onClick={() => void fork({ thinking: true, tools: true })}
+									/>
+								</div>
 							</>
 						) : null}
 					</div>
-					{menuOpen ? (
-						<>
-							<div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} aria-hidden />
-							<div
-								role="menu"
-								aria-label="Fork transcript type"
-								className="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-							>
-								<ForkOption
-									label="Concise"
-									detail="Messages only"
-									onClick={() => void fork({ thinking: false, tools: false })}
-								/>
-								<ForkOption
-									label="With reasoning"
-									detail="Messages and reasoning"
-									onClick={() => void fork({ thinking: true, tools: false })}
-								/>
-								<ForkOption
-									label="Full transcript"
-									detail="Messages, reasoning, and tools"
-									onClick={() => void fork({ thinking: true, tools: true })}
-								/>
-							</div>
-						</>
-					) : null}
-				</div>
+				) : null}
 			</div>
 			{forkError ? (
 				<span className="max-w-[85vw] text-[11px] text-del">
