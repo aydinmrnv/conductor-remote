@@ -896,6 +896,22 @@ Two asymmetric halves — keep them separate:
   tap that already landed. The chat on screen lives in that same `?session=`
   parameter rather than in state, so a repeat notification for a chat you tabbed
   away from still wins: the two writers share one source of truth.
+  - **And the tap owes the app a window, because nothing here happens by default.**
+    A notification click fires the worker's handler and the app comes forward only
+    because that handler asks it to, so any path out of it that asks for nothing is a
+    tap the phone ignores outright — no window, no error, and a notification that reads
+    like a dead area of the screen. Which is what shipped: the handler focused the first
+    same-origin client and returned, and iOS hands back a *backgrounded* home-screen web
+    app as a live window client whose `focus()` settles without foregrounding it, so
+    `openWindow` below was reachable only when nothing was open at all. `focusClient`
+    now answers whether the app really came up — a refusal, a resolve with nothing, and
+    a client reporting itself unfocused all count as no — and `openWindow` is the
+    fallback rather than the branch for a cold start. Getting that answer wrong the
+    cheap way costs one extra `openWindow` on a platform that had already handled the
+    tap; wrong the other way costs every tap. On an installed iOS web app `openWindow`
+    resumes the one instance instead of adding a second, and the path it drops is
+    exactly what the parked route above carries. `tests/push-click.test.ts` pins all of
+    it, since a dead tap typechecks, lints, and reports nothing anywhere.
 
 - **Keeping the Mac awake is the one write that needs *root*** — a fourth shape,
   touching neither the DB nor Conductor's UI. `pmset disablesleep` is the only lever
@@ -1085,6 +1101,18 @@ handler scan, and the relay/web import boundary.
   sides — the lap you asked for still fires, the laps the agent gave itself do not, and
   a chat with no turn head keeps the old behaviour. Rows are injected, so no push store
   and no network. Portable, so the ubuntu job runs it.
+
+- `tests/push-click.test.ts` — what a tapped notification does
+  (`public/push-sw.js` ▸ `notificationclick`). Nothing about a click happens by default,
+  so every way of leaving that handler without asking for a window is a tap the phone
+  ignores: no window, no error, nothing logged on either side. That is how the shipped
+  version of it survived a release — a focus that never foregrounded counted as success,
+  and `openWindow` was unreachable while any client existed. So the cases are the four
+  endings of a focus (landed, resolved unfocused, refused, resolved with nothing) plus
+  no page at all, a foreign page, and a client whose URL won't parse, since a throw
+  inside the scan is the same dead tap by another route. The worker source is loaded
+  against a stubbed `self`, the way the browser loads it, so there is no browser and no
+  service worker. Portable, so the ubuntu job runs it.
 
 - `tests/routes.test.ts` — the `/api` route table (`src/routes.ts`). Every route
   matches the path it builds, the parameter survives encoding verbatim, no route answers
