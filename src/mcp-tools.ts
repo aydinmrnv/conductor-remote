@@ -169,22 +169,31 @@ export function createTools(call: RelayCall): Tool[] {
 						description:
 							'Plain words, ranked by relevance; wrap a "phrase in quotes" to require it word for word. Other punctuation and operators are ignored, not parsed.'
 					},
-					limit: { type: 'number', description: 'Max workspaces to return (default 12, max 50).' }
+					limit: { type: 'number', description: 'Max workspaces to return (default 12, max 50).' },
+					repo: {
+						type: 'string',
+						description:
+							'Only workspaces in this repo, by the exact name list_repos prints. Ranking happens inside the repo, so a rare mention there is not buried by busier repos.'
+					}
 				},
 				required: ['query']
 			},
 			run: async args => {
 				const query = need(args, 'query')
 				const limit = num(args.limit)
-				const data = await call<SearchResponse>(
-					`${routes.search.path()}?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`
-				)
+				const repo = typeof args.repo === 'string' && args.repo.trim() ? args.repo.trim() : null
+				const params = new URLSearchParams({ q: query })
+				if (limit) params.set('limit', String(limit))
+				if (repo) params.set('repo', repo)
+				const data = await call<SearchResponse>(`${routes.search.path()}?${params}`)
 
 				const lines: string[] = []
 				if (data.index.error) lines.push(`! chat index unavailable (${data.index.error}) — names matched only`)
 				else if (!data.index.ready)
 					lines.push(`! still indexing (${Math.round(data.index.progress * 100)}%) — older chats not searchable yet`)
-				if (!data.results.length) return [...lines, `no workspace or chat matches ${JSON.stringify(query)}`].join('\n')
+				const scope = repo ? ` in ${repo}` : ''
+				if (!data.results.length)
+					return [...lines, `no workspace or chat matches ${JSON.stringify(query)}${scope}`].join('\n')
 
 				for (const r of data.results) {
 					const w = r.workspace

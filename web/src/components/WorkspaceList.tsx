@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useModelCatalog, useWorkspaces } from '../hooks.ts'
@@ -18,13 +18,14 @@ import {
 	workspaceTitle
 } from '../lib/format.ts'
 import { unreadCount } from '../lib/read.ts'
-import type { CachedModelGroup, RepoIcon, Workspace } from '../lib/types.ts'
+import type { CachedModelGroup, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ProviderMark } from './AgentIcons.tsx'
 import { ConnectSheet } from './ConnectSheet.tsx'
 import { Header } from './Header.tsx'
 import { LogsSheet } from './LogsSheet.tsx'
 import { NewWorkspaceSheet } from './NewWorkspaceSheet.tsx'
+import { type RepoChoice, RepoOptions, repoFilterLabel } from './RepoFilter.tsx'
 import { SearchSheet } from './SearchSheet.tsx'
 import { Badge, Empty, RelayUnreachable, RepoAvatar, Spinner, StatusDot } from './ui.tsx'
 
@@ -144,12 +145,12 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	// took something out, or "Hide merged" with nothing merged would read as "40 of 40".
 	const filtered = view.repos.length > 0 || view.hideMerged || view.hideDone
 	const narrowed = view.repos.length > 0 || hidden > 0
-	const repoFilterLabel = view.repos.length === 1 ? view.repos[0] : `${view.repos.length} repos`
+	const repoLabel = repoFilterLabel(view.repos)
 	const subtitle = workspaces.length
 		? narrowed
 			? [
 					`${shown.length} of ${workspaces.length}`,
-					view.repos.length ? repoFilterLabel : null,
+					view.repos.length ? repoLabel : null,
 					hidden ? `${hidden} hidden` : null
 				]
 					.filter(Boolean)
@@ -218,7 +219,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 					<Empty>No active workspaces. Start one in Conductor and it’ll appear here.</Empty>
 				) : shown.length === 0 ? (
 					<Empty>
-						{view.repos.length ? `No workspaces in ${repoFilterLabel}` : 'No workspaces'}
+						{view.repos.length ? `No workspaces in ${repoLabel}` : 'No workspaces'}
 						{hidden ? ` — ${hidden} ${hidden === 1 ? 'one is' : 'ones are'} hidden.` : '.'}
 					</Empty>
 				) : (
@@ -311,11 +312,6 @@ function GroupDot({ status }: { status?: string }) {
 	return <span className="dot size-2" style={{ background: color }} />
 }
 
-interface RepoChoice {
-	name: string
-	icon: RepoIcon | null
-}
-
 /** The desktop sidebar's Group by / Repo / Sort by popover. */
 function ViewControls({ repos, view, onClose }: { repos: RepoChoice[]; view: ViewPrefs; onClose: () => void }) {
 	const setView = useApp(s => s.setView)
@@ -383,10 +379,6 @@ function RepoFilter({
 	onChange: (repos: string[]) => void
 }) {
 	const [open, setOpen] = useState(false)
-	const selectedAll = selected.length === 0
-	const label = selectedAll ? 'All repos' : selected.length === 1 ? selected[0] : `${selected.length} repos`
-	const toggle = (repo: string) =>
-		onChange(selected.includes(repo) ? selected.filter(r => r !== repo) : [...selected, repo])
 
 	return (
 		<div className="flex flex-col gap-1.5">
@@ -399,7 +391,7 @@ function RepoFilter({
 					aria-controls="view-repo-options"
 					className="flex max-w-36 items-center gap-1 rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
 				>
-					<span className="truncate">{label}</span>
+					<span className="truncate">{repoFilterLabel(selected)}</span>
 					<ChevronDown size={14} className={cn('shrink-0 text-faint transition-transform', open && 'rotate-180')} />
 				</button>
 			</ControlRow>
@@ -408,47 +400,10 @@ function RepoFilter({
 					id="view-repo-options"
 					className="flex max-h-48 flex-col overflow-y-auto rounded-lg border border-border bg-surface-2 py-0.5"
 				>
-					<RepoOption checked={selectedAll} label="All repos" onChange={() => onChange([])} />
-					{repos.map(repo => (
-						<RepoOption
-							key={repo.name}
-							checked={selected.includes(repo.name)}
-							label={repo.name}
-							icon={<RepoAvatar icon={repo.icon} name={repo.name} artwork="inset" />}
-							onChange={() => toggle(repo.name)}
-						/>
-					))}
+					<RepoOptions repos={repos} selected={selected} onChange={onChange} />
 				</div>
 			) : null}
 		</div>
-	)
-}
-
-function RepoOption({
-	checked,
-	label,
-	icon,
-	onChange
-}: {
-	checked: boolean
-	label: string
-	icon?: ReactNode
-	onChange: () => void
-}) {
-	return (
-		<label className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-0.5 text-left text-sm text-text active:bg-surface">
-			<input type="checkbox" checked={checked} onChange={onChange} className="peer sr-only" />
-			{icon ?? <span className="size-8 shrink-0" />}
-			<span className="min-w-0 flex-1 truncate">{label}</span>
-			<span
-				className={cn(
-					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent',
-					checked ? 'border-accent bg-accent text-white' : 'border-faint bg-surface'
-				)}
-			>
-				{checked ? <Check size={12} strokeWidth={3} /> : null}
-			</span>
-		</label>
 	)
 }
 

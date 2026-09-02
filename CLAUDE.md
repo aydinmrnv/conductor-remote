@@ -651,6 +651,18 @@ Two asymmetric halves — keep them separate:
   word "manual", so no amount of BM25 tuning ranks it first, and reranking can't
   help either since the document is never retrieved. That, not cost, is the case for
   embeddings if search ever needs them.
+  - **A repo filter has to narrow the ranking, not the tail.** `repo=` on `/api/search`
+    (repeatable), the funnel beside the search box and `search_chats`'s `repo` all scope
+    both halves: `findWorkspacesByName` takes the names, and the index takes the chats
+    those repos own (`reads.sessionIdsInRepos`) as one `json_each` parameter *inside* the
+    FTS query. Post-filtering the 300 chunks it returns looks the same and is wrong: a
+    common word fills every slot from the busiest repo and a smaller one folds up to
+    nothing — `tests/search.test.ts` pins it at a limit of one, where the two answers
+    differ. Measured 2026-09-02 against the largest repo here (1,005 chats, 39 kB of ids):
+    +0.3ms on a rare word, +60ms on the worst common-word query (165ms → 220ms), still
+    inside the debounce, with no schema bump and so no rebuild. The sheet's filter is its
+    own and starts at every repo each time it opens; the sidebar's View-options filter
+    still does not reach into search.
 
 - **An attachment is a file plus a token, and nothing else** (`src/attachments.ts`) —
   which is the only reason the relay can make one. Conductor's composer stores an

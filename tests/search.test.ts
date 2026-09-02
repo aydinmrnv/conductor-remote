@@ -1,6 +1,10 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { describe, expect, test } from 'vitest'
-import { matchQuery } from '../src/search.ts'
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import type { ConductorDb } from '../src/db.ts'
+import { matchQuery, SearchIndex } from '../src/search.ts'
 
 /**
  * The match grammar (src/search.ts ▸ matchQuery), which decides whether a search
@@ -101,5 +105,81 @@ describe('matchQuery against real FTS5', () => {
 
 	test('stemming still applies inside quotes', () => {
 		expect(search('"running the headless" ')).toHaveLength(1)
+	})
+})
+
+describe('SearchIndex.search scoped to a chat list', () => {
+	/**
+	 * The repo filter reaches the index as a list of chat ids, and it has to narrow the
+	 * *ranking*, not the rows handed back: the chunk limit is spent before any
+	 * post-filter runs, so a dense chat outside the scope would take the slot and the
+	 * in-scope hit would fold up to nothing. Pinned with a limit of one, where the two
+	 * behaviours give different answers.
+	 */
+	const row = (rowid: number, session_id: string, content: string) => ({
+		rowid,
+		id: `m${rowid}`,
+		session_id,
+		role: 'user',
+		content,
+		full_message: null,
+		created_at: `2026-09-02 10:00:0${rowid}`,
+		sent_at: `2026-09-02 10:00:0${rowid}`,
+		queue_order: null
+	})
+	const rows = [
+		row(1, 'busy', 'lamp lamp lamp lamp lamp'),
+		row(2, 'quiet', 'the lamp is on the desk'),
+		row(3, 'other', 'nothing about lights here')
+	]
+	// Only the three source queries `SearchIndex` makes, told apart by shape.
+	const source = {
+		query<T>(sql: string, params: unknown[] = []): T[] {
+			if (sql.includes('MAX(rowid)')) return [{ m: rows.length }] as T[]
+			if (sql.startsWith('SELECT rowid FROM session_messages')) {
+				const [after, limit] = params as [number, number]
+				return rows
+					.filter(r => r.rowid > after)
+					.slice(0, limit)
+					.map(r => ({ rowid: r.rowid })) as T[]
+			}
+			const [after, end] = params as [number, number]
+			return rows.filter(r => r.rowid > after && r.rowid <= end) as T[]
+		}
+	}
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conductor-remote-search-'))
+	const index = new SearchIndex(source as unknown as ConductorDb, path.join(dir, 'search.db'))
+
+	beforeAll(async () => {
+		index.start()
+		const deadline = Date.now() + 5000
+		while (!index.status().ready) {
+			if (Date.now() > deadline) throw new Error('index never caught up')
+			await new Promise(r => setTimeout(r, 10))
+		}
+	})
+	afterAll(() => {
+		index.stop()
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+
+	const sessions = (raw: string, opts?: { limit?: number; sessionIds?: string[] }) =>
+		index.search(raw, opts).map(h => h.sessionId)
+
+	test('unscoped, the dense chat wins the only slot', () => {
+		expect(sessions('lamp', { limit: 1 })).toEqual(['busy'])
+	})
+
+	test('scoped, the slot goes to the chat in scope rather than to nothing', () => {
+		expect(sessions('lamp', { limit: 1, sessionIds: ['quiet'] })).toEqual(['quiet'])
+		expect(sessions('lamp', { sessionIds: ['quiet', 'other'] })).toEqual(['quiet'])
+	})
+
+	test('an empty list matches nothing, never everything', () => {
+		expect(sessions('lamp', { sessionIds: [] })).toEqual([])
+	})
+
+	test('no list at all is the old unscoped search', () => {
+		expect(sessions('lamp')).toEqual(['busy', 'quiet'])
 	})
 })
