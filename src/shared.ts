@@ -64,6 +64,20 @@ export function queryTokens(raw: string): string[] {
 }
 
 /**
+ * Parse one of Conductor's timestamps as an epoch.
+ *
+ * Its SQLite defaults/triggers use `datetime('now')`, which is UTC but serializes as
+ * `YYYY-MM-DD HH:MM:SS` with no zone. Other writers use ISO strings ending in `Z`.
+ * Browsers interpret the bare SQLite form as local time, making a fresh chat look two
+ * hours old in Oslo during summer. Add the zone only to that exact database shape;
+ * explicitly zoned ISO values and local wall-clock strings keep their native meaning.
+ */
+export function timestampMs(value: string): number {
+	const sqliteUtc = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+	return Date.parse(sqliteUtc ? `${value.replace(' ', 'T')}Z` : value)
+}
+
+/**
  * A temporary `NEW` marker in Conductor's picker is a badge, not part of the
  * model name. The relay and phone use this value for the visible label and for
  * a later selection, so both sides must remove it in the same way.

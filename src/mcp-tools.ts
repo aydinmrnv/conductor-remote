@@ -28,7 +28,7 @@
 
 import { chatCursor, parseChatCursor } from './chat-cursor.ts'
 import { routes } from './routes.ts'
-import { HIT_CLOSE, HIT_OPEN, isToolResult, workspaceTitle } from './shared.ts'
+import { HIT_CLOSE, HIT_OPEN, isToolResult, timestampMs, workspaceTitle } from './shared.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type {
 	AgentResult,
@@ -379,7 +379,7 @@ export function createTools(call: RelayCall): Tool[] {
 						// second prompt into the wait.
 						const waiting = (s.background_tasks ?? []).map(
 							t =>
-								`\n    waiting for task: ${t.description} (${Math.max(0, Math.round((Date.now() - Date.parse(t.since)) / 60_000))}m so far)`
+								`\n    waiting for task: ${t.description} (${Math.max(0, Math.round((Date.now() - timestampMs(t.since)) / 60_000))}m so far)`
 						)
 						const glyph = s.status === 'working' ? '▶' : waiting.length ? '⧗' : '·'
 						return `${glyph} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}${ctx}\n    session_id: ${s.id}${waiting.join('')}`
