@@ -455,11 +455,11 @@ export function useDebounced<T>(value: T, ms: number): T {
  * Two characters is the floor. One letter matches thousands of chunks, so it costs
  * a real query to return a list nobody wants.
  */
-export function useSearch(query: string) {
+export function useSearch(query: string, repos: string[] = []) {
 	const trimmed = query.trim()
 	return useQuery({
-		queryKey: ['search', trimmed],
-		queryFn: () => client.search(trimmed),
+		queryKey: ['search', trimmed, repos],
+		queryFn: () => client.search(trimmed, repos),
 		enabled: trimmed.length >= 2,
 		staleTime: 30_000,
 		placeholderData: keepPreviousData

@@ -356,21 +356,43 @@ export class SearchIndex {
 		return { chunks, ready: false, progress }
 	}
 
-	/** Top matching chunks, best first. Empty when the query has no searchable tokens. */
-	search(raw: string, limit = CHUNK_LIMIT): SearchHit[] {
+	/**
+	 * Top matching chunks, best first. Empty when the query has no searchable tokens.
+	 *
+	 * `sessionIds` scopes the ranking, not just the result: it is the repo filter,
+	 * resolved to chat ids by the caller because this index knows nothing about
+	 * workspaces. It has to sit inside the query rather than be applied to the
+	 * chunks it returns, because the `limit` is spent before any post-filter runs
+	 * — a common word fills all 300 slots from the busiest repo and a smaller one
+	 * folds up to nothing. Measured on this Mac's 205k chunks with the largest repo's
+	 * 1,005 chats as the list: +0.3ms on a rare word, +60ms on the worst common-word
+	 * query (165ms → 220ms), still under the phone's 250ms debounce. The list rides
+	 * in as one JSON parameter through `json_each`, so its length never meets
+	 * SQLite's bound-variable limit. An empty list matches nothing, which is the
+	 * right answer for a repo with no chats and never "everything".
+	 */
+	search(
+		raw: string,
+		{ limit = CHUNK_LIMIT, sessionIds }: { limit?: number; sessionIds?: string[] } = {}
+	): SearchHit[] {
 		const db = this.db
 		if (!db) return []
 		const match = matchQuery(raw)
 		if (!match) return []
+		if (sessionIds && !sessionIds.length) return []
+		const scope = sessionIds ? 'AND session_id IN (SELECT value FROM json_each(?))' : ''
+		const params = sessionIds
+			? [HIT_OPEN, HIT_CLOSE, match, JSON.stringify(sessionIds), limit]
+			: [HIT_OPEN, HIT_CLOSE, match, limit]
 		let rows: ChunkRow[]
 		try {
 			rows = db
 				.prepare(
 					`SELECT session_id, src_rowid, role, at, -bm25(chunks) AS score,
 					        snippet(chunks, 0, ?, ?, '…', 24) AS snippet
-					 FROM chunks WHERE chunks MATCH ? ORDER BY bm25(chunks) LIMIT ?`
+					 FROM chunks WHERE chunks MATCH ? ${scope} ORDER BY bm25(chunks) LIMIT ?`
 				)
-				.all(HIT_OPEN, HIT_CLOSE, match, limit) as unknown as ChunkRow[]
+				.all(...(params as never[])) as unknown as ChunkRow[]
 		} catch (err) {
 			// A MATCH that still fails to parse is a bug in matchQuery, not user error —
 			// report it rather than showing an empty result that looks like "no matches".

@@ -3,6 +3,7 @@ import { useDebounced, useSearch } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import { queryTokens, relativeTime, splitSnippet, workspaceTitle } from '../lib/format.ts'
 import type { SearchRole, SearchSnippet, Workspace } from '../lib/types.ts'
+import { repoFilterLabel } from './RepoFilter.tsx'
 import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
 
 /**
@@ -18,28 +19,33 @@ import { Chip, Empty, RepoAvatar, Spinner } from './ui.tsx'
  * A workspace found both ways stays where the local pass put it and keeps its
  * excerpt: the snippet is what separates three workspaces with similar names.
  *
- * The repo filter in View options deliberately does *not* apply here. It scopes the
- * sidebar to what you are working on now; a search is for finding what you are not.
+ * `repos` is the sheet's own filter, never the sidebar's View-options one: that scopes
+ * the list to what you are working on now, and a search is for finding what you are
+ * not. It applies to both sources — locally to the live pass, and on the relay to the
+ * index, where it has to sit inside the ranking (src/search.ts ▸ search).
  */
 export function SearchPane({
 	query,
+	repos,
 	live,
 	selectedId,
 	onOpen
 }: {
 	query: string
+	repos: string[]
 	live: Workspace[]
 	selectedId?: string
 	onOpen: (workspaceId: string, sessionId: string | null) => void
 }) {
 	const settled = useDebounced(query.trim(), 250)
-	const { data, isError, error, isFetching } = useSearch(settled)
+	const { data, isError, error, isFetching } = useSearch(settled, repos)
 	const tokens = useMemo(() => queryTokens(query), [query])
 
 	const rows = useMemo(() => {
 		const byId = new Map<string, Row>()
 		if (tokens.length)
 			for (const w of live) {
+				if (repos.length && !(w.repo_name && repos.includes(w.repo_name))) continue
 				const hay = [workspaceTitle(w), w.branch, w.repo_name, w.directory_name, w.session_title]
 					.filter(Boolean)
 					.join(' ')
@@ -67,7 +73,7 @@ export function SearchPane({
 			})
 		}
 		return [...byId.values()]
-	}, [live, data, tokens])
+	}, [live, data, tokens, repos])
 
 	const index = data?.index
 	return (
@@ -92,7 +98,9 @@ export function SearchPane({
 				isFetching || settled !== query.trim() ? (
 					<Spinner />
 				) : isError ? null : (
-					<Empty>Nothing matches “{query.trim()}”.</Empty>
+					<Empty>
+						Nothing matches “{query.trim()}”{repos.length ? ` in ${repoFilterLabel(repos)}` : ''}.
+					</Empty>
 				)
 			) : (
 				<ul className="flex flex-col gap-2 pb-2">

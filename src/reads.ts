@@ -398,20 +398,43 @@ export class Reads {
 	}
 
 	/**
+	 * Every chat in the named repos, archived workspaces included — the repo filter
+	 * as the search index needs it, since its chunks carry a chat id and nothing else.
+	 * Names, not ids, because names are what the phone's picker and `list_repos` hold.
+	 */
+	sessionIdsInRepos(names: string[]): string[] {
+		if (!names.length) return []
+		const holes = names.map(() => '?').join(',')
+		return this.db
+			.query<{ id: string }>(
+				`SELECT s.id FROM sessions s
+				 JOIN workspaces w ON w.id = s.workspace_id
+				 JOIN repos r ON r.id = w.repository_id
+				 WHERE r.name IN (${holes})`,
+				names
+			)
+			.map(r => r.id)
+	}
+
+	/**
 	 * Workspaces whose own identity matches every token — name, PR title, branch,
 	 * worktree codename or repo. Archived included, same reason as `searchTargets`.
+	 * `repos` narrows to those repos by name; an empty list matches nothing.
 	 *
 	 * This is the half of search the transcript index cannot do. A workspace named for
 	 * the thing you are looking for may never have said those words in its chat, and
 	 * one whose chat is empty has no chunks at all.
 	 */
-	findWorkspacesByName(tokens: string[], limit = 20): SearchWorkspace[] {
+	findWorkspacesByName(tokens: string[], limit = 20, repos?: string[]): SearchWorkspace[] {
 		if (!tokens.length) return []
+		if (repos && !repos.length) return []
 		const fields = ['w.workspace_name', 'w.pr_title', 'w.branch', 'w.directory_name', 'r.name']
 		// AND across tokens, OR across fields: "auk lamp" should find the lamp workspace in
 		// the auk repo, where no single column holds both words.
-		const where = tokens.map(() => `(${fields.map(f => `${f} LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ')
-		const params = tokens.flatMap(t => fields.map(() => `%${escapeLike(t)}%`))
+		const byToken = tokens.map(() => `(${fields.map(f => `${f} LIKE ? ESCAPE '\\'`).join(' OR ')})`)
+		const scope = repos ? [`r.name IN (${repos.map(() => '?').join(',')})`] : []
+		const where = [...byToken, ...scope].join(' AND ')
+		const params = [...tokens.flatMap(t => fields.map(() => `%${escapeLike(t)}%`)), ...(repos ?? [])]
 		const rows = this.db.query<{
 			id: string
 			workspace_name: string | null

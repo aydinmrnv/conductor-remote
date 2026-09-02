@@ -94,9 +94,11 @@ export interface SearchResult extends SearchEvidence<SearchWorkspace> {
 	sessionTitle: string | null
 }
 
-/** GET /api/search?q= — name matches and transcript matches, merged and ranked. */
+/** GET /api/search?q=&repo= — name matches and transcript matches, merged and ranked. */
 export interface SearchResponse {
 	query: string
+	/** Repo names the search was scoped to; empty means every repo. */
+	repos: string[]
 	index: IndexStatus
 	results: SearchResult[]
 }

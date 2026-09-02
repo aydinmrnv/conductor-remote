@@ -302,7 +302,11 @@ export const client = {
 	 * The relay answers from a local index, so this is a poll-budget call even though
 	 * it searches every conversation on the Mac.
 	 */
-	search: (q: string) => api<SearchResponse>(`${routes.search.path()}?q=${encodeURIComponent(q)}`),
+	search: (q: string, repos: string[] = []) => {
+		const params = new URLSearchParams({ q })
+		for (const repo of repos) params.append('repo', repo)
+		return api<SearchResponse>(`${routes.search.path()}?${params}`)
+	},
 	/** Drop a first prompt the relay couldn't deliver, once the user has dealt with it. */
 	dismissPrompt: (workspaceId: string) =>
 		api<{ ok: boolean }>(routes.dismissFirstPrompt.path(workspaceId), { method: routes.dismissFirstPrompt.method }),
