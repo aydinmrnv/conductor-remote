@@ -13,6 +13,7 @@ import {
 	relativeAge,
 	STATUS_COLORS,
 	STATUS_ORDER,
+	timestampMs,
 	workspaceStatus,
 	workspaceStatusLabel,
 	workspaceTitle
@@ -35,8 +36,12 @@ function sortWorkspaces(list: Workspace[], sortBy: SortBy): Workspace[] {
 		const pin = Number(!!b.pinned_at) - Number(!!a.pinned_at)
 		if (pin) return pin
 		if (sortBy === 'name') return workspaceTitle(a).localeCompare(workspaceTitle(b))
-		// SQLite datetime strings compare lexically; newest first.
-		return sortBy === 'created' ? b.created_at.localeCompare(a.created_at) : b.updated_at.localeCompare(a.updated_at)
+		// Conductor mixes bare SQLite UTC and ISO-Z strings. Parse both before sorting:
+		// lexically, every `T` sorts after every space even when its row is older.
+		const aTime = sortBy === 'created' ? a.created_at : a.updated_at
+		const bTime = sortBy === 'created' ? b.created_at : b.updated_at
+		const byTime = timestampMs(bTime) - timestampMs(aTime)
+		return Number.isFinite(byTime) ? byTime : bTime.localeCompare(aTime)
 	})
 }
 

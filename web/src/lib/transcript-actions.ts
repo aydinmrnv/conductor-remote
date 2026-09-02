@@ -1,3 +1,4 @@
+import { timestampMs } from './format.ts'
 import type { TranscriptEntry } from './types.ts'
 
 /**
@@ -55,8 +56,8 @@ export function turnOrigin(
 	target: TranscriptEntry,
 	dispatched?: string | null
 ): string | null {
-	const end = Date.parse(target.ts)
-	if (dispatched && Date.parse(dispatched) < end) return dispatched
+	const end = timestampMs(target.ts)
+	if (dispatched && timestampMs(dispatched) < end) return dispatched
 	const from = entries.lastIndexOf(target)
 	for (let i = (from < 0 ? entries.length : from) - 1; i >= 0; i--) {
 		if (entries[i].role === 'user') return entries[i].ts

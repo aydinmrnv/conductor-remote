@@ -3,10 +3,10 @@
 // import a *value* from (it is stdlib-free on purpose; everything else is `import type`
 // only, enforced by scripts/check-imports.ts). Two implementations of `workspaceTitle`
 // meant the sidebar and a push notification could name the same workspace differently.
-import { HIT_CLOSE, HIT_OPEN, queryTokens, type Titled, workspaceTitle } from '../../../src/shared.ts'
+import { HIT_CLOSE, HIT_OPEN, queryTokens, type Titled, timestampMs, workspaceTitle } from '../../../src/shared.ts'
 import type { Workspace } from './types.ts'
 
-export { queryTokens, type Titled, workspaceTitle }
+export { queryTokens, type Titled, timestampMs, workspaceTitle }
 
 /**
  * Split a relay snippet into plain and highlighted runs. The markers are control
@@ -188,7 +188,7 @@ function startOfDay(at: Date): number {
  * not agree) lands in `today` rather than somewhere past it.
  */
 export function recentBucket(iso: string, now: Date = new Date()): RecentBucket {
-	const at = new Date(iso)
+	const at = new Date(timestampMs(iso))
 	if (!Number.isFinite(at.getTime())) return 'older'
 	const days = Math.round((startOfDay(now) - startOfDay(at)) / 86_400_000)
 	if (days <= 0) return 'today'
@@ -349,7 +349,7 @@ function dateStamp(at: Date, now: Date): string {
  * otherwise show two "09:14"s a day apart.
  */
 export function messageTime(iso: string): string {
-	const at = new Date(iso)
+	const at = new Date(timestampMs(iso))
 	if (!Number.isFinite(at.getTime())) return ''
 	const now = new Date()
 	return at.toDateString() === now.toDateString() ? clockTime(at) : dateStamp(at, now)
@@ -365,7 +365,7 @@ export function messageTime(iso: string): string {
  * year buckets.
  */
 export function timeAgo(iso: string, now: number = Date.now()): string {
-	const at = new Date(iso)
+	const at = new Date(timestampMs(iso))
 	const age = now - at.getTime()
 	if (!Number.isFinite(age)) return ''
 	if (age >= AGE_LIMIT) return dateStamp(at, new Date(now))
@@ -373,7 +373,7 @@ export function timeAgo(iso: string, now: number = Date.now()): string {
 }
 
 export function relativeTime(iso: string): string {
-	const then = new Date(iso).getTime()
+	const then = timestampMs(iso)
 	if (!Number.isFinite(then)) return ''
 	const secs = Math.round((Date.now() - then) / 1000)
 	if (secs < 45) return 'now'
@@ -399,7 +399,7 @@ let relativeWords: Intl.RelativeTimeFormat | undefined
  * because Intl has no word for the age a row spends most of its life at.
  */
 export function relativeAge(iso: string, now: number = Date.now()): string {
-	const then = new Date(iso).getTime()
+	const then = timestampMs(iso)
 	if (!Number.isFinite(then)) return ''
 	const secs = Math.round((now - then) / 1000)
 	if (secs < 45) return 'now'

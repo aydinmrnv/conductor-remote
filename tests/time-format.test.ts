@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { timeAgo } from '../web/src/lib/format.ts'
+import { relativeAge, timeAgo, timestampMs } from '../web/src/lib/format.ts'
 
 /**
  * The label under a finished turn. Its one rule is the cut-off: under a week it is the
@@ -43,5 +43,18 @@ describe('timeAgo', () => {
 
 	test('says nothing for an unparseable stamp', () => {
 		expect(timeAgo('not a date', now)).toBe('')
+	})
+})
+
+describe('Conductor timestamps', () => {
+	test('treats SQLite datetime values as UTC', () => {
+		const sqlite = '2026-09-02 19:43:53'
+		const utc = '2026-09-02T19:43:53.000Z'
+		expect(timestampMs(sqlite)).toBe(Date.parse(utc))
+		expect(relativeAge(sqlite, Date.parse(utc))).toBe('now')
+	})
+
+	test('preserves explicitly zoned timestamps', () => {
+		expect(timestampMs('2026-09-02T21:43:53+02:00')).toBe(Date.parse('2026-09-02T19:43:53Z'))
 	})
 })

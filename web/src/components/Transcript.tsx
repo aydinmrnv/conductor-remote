@@ -4,7 +4,7 @@ import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
-import { elapsed, messagePreview, messageTime, timeAgo } from '../lib/format.ts'
+import { elapsed, messagePreview, messageTime, timeAgo, timestampMs } from '../lib/format.ts'
 import { languageForTool, languageForToolOutput } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
@@ -490,7 +490,7 @@ function ChatActions({
 		return () => clearInterval(timer)
 	}, [])
 
-	const took = startedAt ? Date.parse(at) - Date.parse(startedAt) : Number.NaN
+	const took = startedAt ? timestampMs(at) - timestampMs(startedAt) : Number.NaN
 	const meta = [took > 0 ? elapsed(took) : null, timeAgo(at, now)].filter(Boolean).join(' · ')
 
 	const fork = async (cut: { thinking: boolean; tools: boolean }) => {
@@ -627,7 +627,7 @@ function WorkingIndicator({ since }: { since?: number | null }) {
  * coming back on its own — with the task's own description and how long it has waited.
  */
 function WaitingIndicator({ task }: { task: BackgroundTask }) {
-	const since = Date.parse(task.since)
+	const since = timestampMs(task.since)
 	const [now, setNow] = useState(() => Date.now())
 	useEffect(() => {
 		setNow(Date.now())

@@ -27,6 +27,7 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { timestampMs } from './shared.ts'
 
 const exec = promisify(execFile)
 
@@ -83,7 +84,7 @@ export function openBackgroundTasks(rows: readonly TaskFrameRow[], processStarte
 		if (frame.subtype === 'task_notification') {
 			open.delete(taskId)
 		} else if (frame.subtype === 'task_started') {
-			if (Date.parse(row.created_at) < processStartedAt) continue
+			if (timestampMs(row.created_at) < processStartedAt) continue
 			const taskType = str(frame.task_type) ?? 'task'
 			open.set(taskId, {
 				taskId,
