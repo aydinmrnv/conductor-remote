@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileDiff, Plus, X } from 'lucide-react'
+import { FileDiff, Hourglass, Plus, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 import { useAnyWorkspace, useClearChatNotification, useSessions, useWorkspaceFiles, useWorkspaces } from '../hooks.ts'
@@ -195,6 +195,7 @@ export function SessionView() {
 						working={working}
 						workingSince={workingSince}
 						turnStartedAt={activeSession?.turn_started_at}
+						waiting={activeSession?.background_tasks}
 						queued={ws.parked_prompts?.find(p => p.sessionId === sessionId) ?? ws.pending_prompt}
 						onFork={forkChat}
 					/>
@@ -255,7 +256,11 @@ function SessionTabs({
 						onClick={() => onSelect(s.id)}
 						className={cn('pill flex shrink-0 items-center gap-1.5', s.id === activeId && 'pill-active')}
 					>
-						{s.status === 'working' ? <span className="dot-spinner size-3" /> : null}
+						{s.status === 'working' ? (
+							<span className="dot-spinner size-3" />
+						) : s.background_tasks?.length ? (
+							<Hourglass size={11} className="shrink-0 text-faint" aria-label="Waiting for a background task" />
+						) : null}
 						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
 						<ContextPercent used={s.context_used_percent} />
 						{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}

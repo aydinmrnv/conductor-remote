@@ -36,6 +36,7 @@ import type { Settings } from './settings.ts'
 import type { TranscriptEntry } from './transcript.ts'
 import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes.ts'
 
+export type { BackgroundTask } from './background-tasks.ts'
 export type { DiffFile, WorkspaceDiff } from './git.ts'
 export type { RepoIcon } from './icons.ts'
 export type { LogLevel } from './logbuf.ts'

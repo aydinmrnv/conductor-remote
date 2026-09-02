@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { agentProcessStarts, type BackgroundTask, openBackgroundTasks, TASK_FRAME_FILTER } from './background-tasks.ts'
 import type { ConductorDb } from './db.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import { describeRepoIcon, type RepoIcon, type ResolvedIcon, resolveRepoIcon } from './icons.ts'
@@ -108,19 +109,27 @@ export interface SessionRow {
 	last_user_message_at: string | null
 	/** When the turn now in flight was dispatched — see `listSessions`. Null before Conductor's first queued turn. */
 	turn_started_at: string | null
+	/**
+	 * Background tasks this chat is still waiting on — the desktop's "Waiting for task"
+	 * rows. `status` reads `idle` the whole time (src/background-tasks.ts), so without
+	 * this a chat that will resume itself in ten minutes looks exactly like one that is
+	 * done.
+	 */
+	background_tasks: BackgroundTask[]
 }
 
 /** The raw provider-specific fields selected from Conductor's sessions table. */
-interface SessionDbRow extends SessionRow {
+interface SessionDbRow extends Omit<SessionRow, 'background_tasks'> {
 	codex_thinking_level: string | null
 }
 
 /** Keep the stable wire field in sync with whichever provider owns the chat. */
-function toSessionRow(row: SessionDbRow): SessionRow {
+function toSessionRow(row: SessionDbRow, background_tasks: BackgroundTask[]): SessionRow {
 	const { codex_thinking_level, ...session } = row
 	return {
 		...session,
-		claude_effort_level: row.agent_type === 'codex' ? codex_thinking_level : row.claude_effort_level
+		claude_effort_level: row.agent_type === 'codex' ? codex_thinking_level : row.claude_effort_level,
+		background_tasks
 	}
 }
 
@@ -259,10 +268,13 @@ function resolveWorktree(
 export class Reads {
 	private readonly db: ConductorDb
 	private readonly workspacesRoot: string
+	/** Chats with a live agent process, and its start — the gate on `background_tasks`. */
+	private readonly liveAgents: () => Map<string, number>
 
-	constructor(db: ConductorDb, workspacesRoot: string) {
+	constructor(db: ConductorDb, workspacesRoot: string, liveAgents: () => Map<string, number> = agentProcessStarts) {
 		this.db = db
 		this.workspacesRoot = workspacesRoot
+		this.liveAgents = liveAgents
 	}
 
 	/**
@@ -532,7 +544,28 @@ export class Reads {
 			 ORDER BY s.created_at ASC`,
 			[workspaceId]
 		)
-		return rows.map(toSessionRow)
+		const live = this.liveAgents()
+		return rows.map(row => {
+			const started = live.get(row.id)
+			return toSessionRow(row, started === undefined ? [] : this.openBackgroundTasks(row.id, started))
+		})
+	}
+
+	/**
+	 * The background tasks a chat is still waiting on (src/background-tasks.ts).
+	 *
+	 * Only asked for a chat with a live agent process, which bounds the cost twice over:
+	 * a handful of chats at a time, and a prefix scan measured at 4–8ms on the largest
+	 * chats here (1,000–1,700 rows, 30–58 MB) — under the 2s sessions poll it rides on.
+	 */
+	private openBackgroundTasks(sessionId: string, processStartedAt: number): BackgroundTask[] {
+		const rows = this.db.query<{ created_at: string; content: string }>(
+			`SELECT created_at, content FROM session_messages
+			 WHERE session_id = ? AND ${TASK_FRAME_FILTER}
+			 ORDER BY rowid ASC`,
+			[sessionId]
+		)
+		return openBackgroundTasks(rows, processStartedAt)
 	}
 
 	/**

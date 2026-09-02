@@ -374,7 +374,15 @@ export function createTools(call: RelayCall): Tool[] {
 							typeof s.context_used_percent === 'number' && s.context_used_percent > 0
 								? ` · ${Math.round(s.context_used_percent)}% context`
 								: ''
-						return `${s.status === 'working' ? '▶' : '·'} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}${ctx}\n    session_id: ${s.id}`
+						// A chat waiting on a background task reads `idle` in `status` and will resume
+						// itself; an agent that reads only the status would call it done and send a
+						// second prompt into the wait.
+						const waiting = (s.background_tasks ?? []).map(
+							t =>
+								`\n    waiting for task: ${t.description} (${Math.max(0, Math.round((Date.now() - Date.parse(t.since)) / 60_000))}m so far)`
+						)
+						const glyph = s.status === 'working' ? '▶' : waiting.length ? '⧗' : '·'
+						return `${glyph} ${s.title ?? '(untitled)'} — ${s.status ?? '?'} · ${s.model ?? '?'}${ctx}\n    session_id: ${s.id}${waiting.join('')}`
 					})
 					.join('\n')
 			}
