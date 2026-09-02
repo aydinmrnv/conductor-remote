@@ -1,8 +1,9 @@
-import { CloudOff, RefreshCw, WifiOff } from 'lucide-react'
+import { Check, CloudOff, Copy, RefreshCw, WifiOff } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { useRepoIcon } from '../hooks.ts'
 import { ApiError } from '../lib/api.ts'
+import { copyText } from '../lib/clipboard.ts'
 import { cn } from '../lib/cn.ts'
 import { statusDot } from '../lib/format.ts'
 import { unlockUrl } from '../lib/lock.ts'
@@ -78,6 +79,39 @@ export function UnlockLink({ className }: { className?: string }) {
 		<a href={href} className={cn('font-semibold text-accent underline underline-offset-2', className)}>
 			Unlock the Mac
 		</a>
+	)
+}
+
+export function CopyButton({
+	text,
+	label,
+	className,
+	size = 14
+}: {
+	text: string
+	label: string
+	className?: string
+	size?: number
+}) {
+	const [copied, setCopied] = useState(false)
+	const copy = async () => {
+		try {
+			await copyText(text)
+			setCopied(true)
+			window.setTimeout(() => setCopied(false), 1800)
+		} catch {
+			setCopied(false)
+		}
+	}
+	return (
+		<button
+			type="button"
+			onClick={() => void copy()}
+			aria-label={copied ? `Copied ${label}` : `Copy ${label}`}
+			className={cn('flex items-center justify-center text-muted transition active:bg-surface-2', className)}
+		>
+			{copied ? <Check size={size} className="text-accent" /> : <Copy size={size} />}
+		</button>
 	)
 }
 
