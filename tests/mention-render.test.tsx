@@ -45,13 +45,13 @@ describe('a file mention in a message', () => {
 	it('leaves a fenced block alone, even one whose only line is a path', () => {
 		// A fence with no info string carries no class either, so its trailing newline is
 		// the whole of what tells the two apart.
-		expect(render('```\nsrc/git.ts\n```')).not.toContain('<button')
-		expect(render('```ts\nsrc/git.ts\n```')).not.toContain('<button')
+		expect(render('```\nsrc/git.ts\n```')).not.toContain('title="Open')
+		expect(render('```ts\nsrc/git.ts\n```')).not.toContain('title="Open')
 	})
 
 	it('resolves only absolute paths where no workspace is on screen', () => {
 		// An archived chat, whose worktree is deleted: `~/plan.md` is as readable as ever.
-		expect(render('we updated `src/git.ts` today', false)).not.toContain('<button')
+		expect(render('we updated `src/git.ts` today', false)).not.toContain('title="Open')
 		expect(render('plan written to `~/plan.md`', false)).toContain('title="Open ~/plan.md"')
 	})
 })

@@ -1,7 +1,8 @@
+import type { Element, ElementContent } from 'hast'
 import { Paperclip, X } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type ExtraProps } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { attachmentTokens, isPreviewableSource } from '../../../src/shared.ts'
@@ -11,7 +12,7 @@ import { useFileMention } from '../lib/fileMentions.ts'
 import { highlightLines, languageForFence, languageForPath } from '../lib/highlight.ts'
 import type { FilePreviewResponse } from '../lib/types.ts'
 import { Code, Tokens } from './Code.tsx'
-import { Spinner } from './ui.tsx'
+import { CopyButton, Spinner } from './ui.tsx'
 
 /** Hoisted so the plugin list is one stable prop rather than a new array on every render. */
 const PLUGINS = [remarkGfm, remarkBreaks]
@@ -332,7 +333,36 @@ function fenceText(children: React.ReactNode): string | null {
 	return null
 }
 
-const COMPONENTS = { a: ChatLink, code: ChatCode, img: ChatImage }
+function ChatPre({ node, children, ...props }: React.ComponentProps<'pre'> & ExtraProps) {
+	const source = node ? fenceSource(node) : ''
+	return (
+		<div className="relative">
+			<pre {...props}>{children}</pre>
+			{source ? (
+				<CopyButton
+					text={source}
+					label="code"
+					size={12}
+					className="absolute right-1.5 top-1.5 size-6 rounded-md border border-border-soft bg-bg/90"
+				/>
+			) : null}
+		</div>
+	)
+}
+
+export function fenceSource(node: Element): string {
+	let text = ''
+	const walk = (nodes: ElementContent[]) => {
+		for (const child of nodes) {
+			if (child.type === 'text') text += child.value
+			else if (child.type === 'element') walk(child.children)
+		}
+	}
+	walk(node.children)
+	return text.replace(/\n$/, '')
+}
+
+const COMPONENTS = { a: ChatLink, code: ChatCode, img: ChatImage, pre: ChatPre }
 
 /**
  * Chat markdown. GFM for tables/strikethrough/task lists, breaks so single
