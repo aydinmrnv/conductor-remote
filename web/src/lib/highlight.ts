@@ -13,8 +13,8 @@ import yaml from 'highlight.js/lib/languages/yaml'
 import { createLowlight } from 'lowlight'
 
 /**
- * Syntax colouring for the three places the phone shows code: a Bash step's command,
- * a source preview, and a fenced block inside a chat message.
+ * Syntax colouring for the places the phone shows code: Bash commands, Read outputs,
+ * source previews, and fenced blocks inside chat messages.
  *
  * The languages are registered one by one rather than taken as a set, because every
  * one of them is bytes the phone re-downloads on each release (the service worker
@@ -97,6 +97,11 @@ export function languageForPath(filePath: string): string | null {
 	const dot = name.lastIndexOf('.')
 	if (dot < 1) return null
 	return EXTENSION_LANGUAGES[name.slice(dot + 1).toLowerCase()] ?? null
+}
+
+/** A Read result is source code in the language named by its path; other outputs stay plain. */
+export function languageForToolOutput(tool: string | undefined, detail: string | undefined): string | null {
+	return tool === 'Read' && detail ? languageForPath(detail) : null
 }
 
 /** react-markdown gives a fence its info string as `language-<name>` on the `code` element. */

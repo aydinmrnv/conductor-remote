@@ -5,7 +5,8 @@ import {
 	highlightLines,
 	languageForFence,
 	languageForPath,
-	languageForTool
+	languageForTool,
+	languageForToolOutput
 } from '../web/src/lib/highlight.ts'
 
 /**
@@ -109,5 +110,13 @@ describe('language resolution', () => {
 		expect(languageForTool('Read')).toBeNull()
 		expect(languageForTool('Grep')).toBeNull()
 		expect(languageForTool(undefined)).toBeNull()
+	})
+
+	test('a Read output gets the language of its file path', () => {
+		expect(languageForToolOutput('Read', 'src/writes.ts')).toBe('typescript')
+		expect(languageForToolOutput('Read', '/Users/me/repo/styles/main.css')).toBe('css')
+		expect(languageForToolOutput('Read', 'Makefile')).toBeNull()
+		expect(languageForToolOutput('Grep', 'src/writes.ts')).toBeNull()
+		expect(languageForToolOutput(undefined, 'src/writes.ts')).toBeNull()
 	})
 })
