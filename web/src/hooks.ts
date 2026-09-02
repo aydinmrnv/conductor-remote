@@ -40,11 +40,16 @@ import { useApp } from './store.ts'
  * the next scroll: `abort` ends an orphaned gesture on the next touch or on the app
  * going away, and the committed state gets the last word (see the effect below).
  */
-export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
+export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>, enabled = true) {
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const open = useApp(s => s.sidebarOpen)
 	const openRef = useRef(open)
 	openRef.current = open
+	// Read at gesture start rather than re-binding the listeners: the flag flips on
+	// every navigation between the list and a chat, and a finger already down when
+	// it does should finish the gesture it started.
+	const enabledRef = useRef(enabled)
+	enabledRef.current = enabled
 
 	// Whatever the app believes is what's on screen: every committed open/close drops
 	// the drag's overrides, so a tap can always undo a gesture that stranded them.
@@ -109,7 +114,7 @@ export function useEdgeSwipeDrawer(drawerRef: RefObject<HTMLElement | null>) {
 
 		const onStart = (e: TouchEvent) => {
 			abort()
-			if (desktop.matches || e.touches.length !== 1) return
+			if (!enabledRef.current || desktop.matches || e.touches.length !== 1) return
 			const t = e.touches[0]
 			if (openRef.current) {
 				const right = drawer()?.getBoundingClientRect().right ?? 0

@@ -236,7 +236,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 									<button
 										type="button"
 										onClick={() => toggleGroup(g.key)}
-										className="flex w-full items-center gap-2 px-1 py-2 text-sm font-semibold"
+										className="flex min-h-11 w-full items-center gap-2 px-1 py-2 text-sm font-semibold"
 									>
 										<GroupDot status={g.status} />
 										<span className="truncate">{g.label}</span>

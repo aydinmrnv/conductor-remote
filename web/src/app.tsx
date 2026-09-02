@@ -32,16 +32,22 @@ export function App() {
 
 /**
  * Two-pane shell. On md+ the workspace list is a persistent left rail. On
- * phones it is a floating drawer over the session — toggled from the header,
- * closed by picking a workspace or tapping the scrim — so switching
- * workspaces never round-trips through a separate screen.
+ * phones it is the whole screen while no workspace is open — the list *is* the
+ * home screen, edge to edge — and a floating drawer over the session once one
+ * is: toggled from the header, closed by picking a workspace or tapping the
+ * scrim, so switching workspaces never round-trips through a separate screen.
  */
 function Shell() {
 	const match = useMatch('/w/:workspaceId')
+	// No workspace in the URL: the list is a page, not a drawer. It fills the phone
+	// (no 85% rail over an empty pane, no scrim, no edge gesture that could slide
+	// it off and strand you on nothing) — the drawer behaviour only applies once
+	// there is a session behind it to reveal.
+	const atHome = !match
 	const sidebarOpen = useApp(s => s.sidebarOpen)
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const drawerRef = useRef<HTMLElement>(null)
-	useEdgeSwipeDrawer(drawerRef)
+	useEdgeSwipeDrawer(drawerRef, !atHome)
 	// A tapped notification arrives as a message from the service worker, on whichever
 	// screen the app happens to be showing — so the listener lives with the router.
 	usePushRouting()
@@ -54,15 +60,20 @@ function Shell() {
 	usePrefsSync()
 	return (
 		<div className="flex h-full overflow-hidden">
-			{sidebarOpen ? (
+			{sidebarOpen && !atHome ? (
 				<div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden />
 			) : null}
 			<aside
 				ref={drawerRef}
 				className={cn(
-					'fixed inset-y-0 left-0 z-50 flex w-[85%] max-w-80 flex-col border-r border-border-soft bg-bg transition-transform duration-200 ease-out',
-					'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:transition-none lg:w-80',
-					sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+					'fixed inset-y-0 left-0 z-50 flex flex-col bg-bg',
+					'md:static md:z-auto md:w-72 md:max-w-none md:shrink-0 md:translate-x-0 md:border-r md:border-border-soft md:transition-none lg:w-80',
+					atHome
+						? 'w-full max-w-none translate-x-0'
+						: cn(
+								'w-[85%] max-w-80 border-r border-border-soft transition-transform duration-200 ease-out',
+								sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+							)
 				)}
 			>
 				<WorkspaceList selectedId={match?.params.workspaceId} />
@@ -74,15 +85,11 @@ function Shell() {
 	)
 }
 
-/** Shown at `/` until a workspace is picked (the drawer opens itself on phones). */
+/** Shown at `/` until a workspace is picked. On phones the list covers it entirely. */
 function HomePane() {
-	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	return (
-		<div className="grid h-full place-items-center">
-			<button type="button" onClick={() => setSidebarOpen(true)} className="pill pill-active md:hidden">
-				Browse workspaces
-			</button>
-			<span className="hidden text-sm text-muted md:block">Select a workspace</span>
+		<div className="hidden h-full place-items-center md:grid">
+			<span className="text-sm text-muted">Select a workspace</span>
 		</div>
 	)
 }

@@ -273,7 +273,7 @@ function SessionTabs({
 				onClick={onNewChat}
 				disabled={creating}
 				aria-label="New chat, same files"
-				className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40"
+				className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40"
 			>
 				<Plus size={18} />
 			</button>

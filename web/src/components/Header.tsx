@@ -32,7 +32,11 @@ export function Header({
 					<span className="w-1" />
 				)}
 				<div className="min-w-0 flex-1">
-					<div className="truncate text-[15px] font-semibold leading-tight">{title}</div>
+					{/* A phone's header is narrow and its titles are sentences: two lines beats
+					    "Rebuild the Map tip invita…". md+ has the room, so one line there. */}
+					<div className="line-clamp-2 text-[15px] font-semibold leading-tight md:line-clamp-none md:truncate">
+						{title}
+					</div>
 					{subtitle ? <div className="truncate text-xs leading-tight text-muted">{subtitle}</div> : null}
 				</div>
 				{right}

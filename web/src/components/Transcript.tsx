@@ -514,7 +514,7 @@ function ChatActions({
 				<CopyButton
 					text={text}
 					label="response"
-					className="size-7 rounded-lg border border-border-soft bg-surface/70"
+					className="size-8 rounded-lg border border-border-soft bg-surface/70"
 				/>
 				{onFork ? (
 					<div className="relative">
@@ -524,7 +524,7 @@ function ChatActions({
 								onClick={() => void fork({ thinking: true, tools: false })}
 								disabled={forking}
 								aria-label={through ? 'Fork chat from this response' : 'Fork chat with reasoning'}
-								className="flex h-7 items-center gap-1 px-2 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
+								className="flex h-8 items-center gap-1 px-2.5 text-[11px] font-medium transition active:bg-surface-2 disabled:opacity-50"
 							>
 								{forking ? <Loader2 size={13} className="animate-spin" /> : <GitFork size={13} />}
 								Fork
@@ -536,7 +536,7 @@ function ChatActions({
 								aria-label="Choose fork transcript type"
 								aria-haspopup="menu"
 								aria-expanded={menuOpen}
-								className="flex size-7 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
+								className="flex size-8 items-center justify-center border-l border-border-soft transition active:bg-surface-2 disabled:opacity-50"
 							>
 								<ChevronDown size={14} className={cn('transition-transform', menuOpen && 'rotate-180')} />
 							</button>
