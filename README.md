@@ -260,7 +260,7 @@ RELAY_TOKEN=$(openssl rand -hex 16) yarn start
 `conductor-remote mcp` is an MCP server on stdio. It gives a coding agent the same
 control the phone has, over the same relay.
 
-Two transports, same seventeen tools.
+Two transports, same eighteen tools.
 
 | | |
 |---|---|
@@ -269,7 +269,7 @@ Two transports, same seventeen tools.
 | `create_workspace` | start work in a repo, with an optional first prompt and model/effort/plan/fast choices. Creation uses a deep link; selected agent settings apply before the prompt |
 | `send_prompt` · `stop_turn` | talk to a running agent, or cancel its turn |
 | `split_chat` | move a tangent into a fresh tab, carrying the conversation across as a Conductor attachment |
-| `list_models` · `set_agent_options` | cached model labels, model, effort, plan, fast — Conductor keeps these in its UI and nowhere else |
+| `list_models` · `set_agent_options` · `set_default_model` | cached model labels (including the starred default), model, effort, plan, fast; starring a default also selects it for the target chat, matching Conductor |
 | `set_workspace_status` | move a workspace between the sidebar's status groups |
 | `archive_workspace` | put a finished workspace away (Conductor's ⌘⇧A) — deletes the worktree, keeps the chat |
 | `dismiss_prompt` | throw away a prompt the relay is still holding |

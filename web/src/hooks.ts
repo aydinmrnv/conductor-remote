@@ -613,7 +613,7 @@ export function useModels(session: Session | undefined, workspaceId: string, ena
 			const r = await client.models((session as Session).id, workspaceId)
 			if (!r.ok || !r.models?.length) throw new Error(r.error ?? 'could not read the model list')
 			await queryClient.invalidateQueries({ queryKey: ['model-catalog'] })
-			return r.models
+			return r
 		},
 		enabled: enabled && !!session,
 		staleTime: 0,

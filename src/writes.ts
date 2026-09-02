@@ -746,6 +746,44 @@ return "ok"`.trim()
 	}
 }
 
+export interface DefaultModelResult extends SendResult {
+	/** The exact picker label Conductor starred (temporary NEW badge removed). */
+	model?: string
+}
+
+/**
+ * Star one picker row as Conductor's user-wide default model.
+ *
+ * The desktop exposes this as a child button named "Set … as default and select",
+ * so this deliberately has both effects: it changes the global default and selects
+ * that model for `target`. The AppleScript reopens the picker and reads the unique
+ * starred row back before this reports success.
+ */
+export async function setDefaultModel(target: SendTarget, model: string): Promise<DefaultModelResult> {
+	const script = `
+${CONDUCTOR_HANDLERS}
+
+my activateConductor()
+my focusWorkspace()
+my selectChatTab()
+return my setDefaultModel(system attribute "RELAY_DEFAULT_MODEL")`.trim()
+	try {
+		const { stdout } = await withTargetEnvironment(target, targetEnvironment =>
+			uiTurn(() =>
+				exec('osascript', ['-e', script], {
+					env: { ...process.env, ...targetEnvironment, RELAY_DEFAULT_MODEL: model },
+					timeout: SEND_ATTEMPT_MS
+				})
+			)
+		)
+		const selected = modelPickerLabel(stdout.trim())
+		if (!selected) return { ok: false, strategy: 'applescript', error: 'Conductor returned no default model' }
+		return { ok: true, strategy: 'applescript', model: selected }
+	} catch (err) {
+		return { ok: false, strategy: 'applescript', error: osaError(err) }
+	}
+}
+
 /**
  * Put a workspace away — Conductor's own "Archive workspace" (Command-Shift-A),
  * pressed on the workspace this run has just focused and asserted.
@@ -850,8 +888,34 @@ return "ok"`.trim()
 	}
 }
 
-/** The model labels Conductor is currently offering, read off the live picker. */
-export async function listAgentModels(target: SendTarget): Promise<{ ok: boolean; models?: string[]; error?: string }> {
+export interface ModelMenuResult {
+	ok: boolean
+	models?: string[]
+	/** The picker row whose star is selected. */
+	defaultModel?: string
+	error?: string
+}
+
+const DEFAULT_MODEL_LINE = '__CONDUCTOR_DEFAULT_MODEL__\t'
+
+/** Turn listModels' tagged line protocol into the live picker state. Exported for its parser tests. */
+export function parseModelMenuOutput(stdout: string): Pick<ModelMenuResult, 'models' | 'defaultModel'> {
+	let defaultModel: string | undefined
+	const models: string[] = []
+	for (const raw of stdout.split('\n')) {
+		const line = raw.trim()
+		if (!line) continue
+		if (line.startsWith(DEFAULT_MODEL_LINE)) {
+			defaultModel = modelPickerLabel(line.slice(DEFAULT_MODEL_LINE.length).trim()) || undefined
+			continue
+		}
+		models.push(modelPickerLabel(line))
+	}
+	return { models: [...new Set(models.filter(Boolean))], defaultModel }
+}
+
+/** The model labels Conductor is currently offering, plus its starred default. */
+export async function listAgentModels(target: SendTarget): Promise<ModelMenuResult> {
 	const script = `
 ${CONDUCTOR_HANDLERS}
 
@@ -868,12 +932,7 @@ return my listModels()`.trim()
 				})
 			)
 		)
-		const models = stdout
-			.split('\n')
-			.map(s => s.trim())
-			.map(modelPickerLabel)
-			.filter(Boolean)
-		return { ok: true, models: [...new Set(models)] }
+		return { ok: true, ...parseModelMenuOutput(stdout) }
 	} catch (err) {
 		return { ok: false, error: osaError(err) }
 	}

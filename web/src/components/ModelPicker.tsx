@@ -1,4 +1,4 @@
-import { Check, ChevronDown, RefreshCw } from 'lucide-react'
+import { Check, ChevronDown, LoaderCircle, RefreshCw, Star } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { groupModelPickerLabels } from '../../../src/shared.ts'
 import { cn } from '../lib/cn.ts'
@@ -17,6 +17,9 @@ export function ModelPicker({
 	value,
 	models,
 	onSelect,
+	defaultModel,
+	onSetDefault,
+	settingDefault,
 	open,
 	onOpenChange,
 	isFetching = false,
@@ -29,6 +32,12 @@ export function ModelPicker({
 	value?: string
 	models: string[]
 	onSelect: (model: string) => void
+	/** The row whose star Conductor currently has selected. */
+	defaultModel?: string
+	/** Omit on surfaces without a chat to drive (such as New workspace). */
+	onSetDefault?: (model: string) => void
+	/** The row whose global-default write is in flight. */
+	settingDefault?: string
 	open?: boolean
 	onOpenChange?: (open: boolean) => void
 	isFetching?: boolean
@@ -79,20 +88,55 @@ export function ModelPicker({
 							groups.map(group => (
 								<fieldset key={group.label} className="m-0 min-w-0 border-0 p-0">
 									<legend className="px-3 pb-0.5 pt-1.5 text-[11px] font-medium text-faint">{group.label}</legend>
-									{group.models.map(model => (
-										<button
-											type="button"
-											key={model}
-											onClick={() => {
-												setPicking(false)
-												onSelect(model)
-											}}
-											className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm active:bg-surface"
-										>
-											<span className="min-w-0 flex-1 truncate">{model}</span>
-											<Check size={13} className={cn('shrink-0 text-accent', value !== model && 'invisible')} />
-										</button>
-									))}
+									{group.models.map(model => {
+										const isDefault = defaultModel === model
+										return (
+											<div key={model} className="flex items-stretch active:bg-surface">
+												<button
+													type="button"
+													onClick={() => {
+														setPicking(false)
+														onSelect(model)
+													}}
+													className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-3 pr-1 text-left text-sm"
+												>
+													<span className="min-w-0 flex-1 truncate">{model}</span>
+													<Check size={13} className={cn('shrink-0 text-accent', value !== model && 'invisible')} />
+												</button>
+												{onSetDefault ? (
+													<button
+														type="button"
+														disabled={isDefault || settingDefault !== undefined}
+														onClick={() => {
+															setPicking(false)
+															onSetDefault(model)
+														}}
+														aria-label={
+															isDefault ? `${model} is the default model` : `Set ${model} as default and select`
+														}
+														aria-pressed={isDefault}
+														className={cn(
+															'flex w-9 shrink-0 items-center justify-center text-faint disabled:opacity-60',
+															isDefault && 'text-accent'
+														)}
+													>
+														{settingDefault === model ? (
+															<LoaderCircle size={14} className="animate-spin" />
+														) : (
+															<Star size={14} fill={isDefault ? 'currentColor' : 'none'} />
+														)}
+													</button>
+												) : isDefault ? (
+													<Star
+														size={14}
+														fill="currentColor"
+														aria-label={`${model} is the default model`}
+														className="mx-3 self-center text-accent"
+													/>
+												) : null}
+											</div>
+										)
+									})}
 								</fieldset>
 							))
 						) : (

@@ -1,9 +1,13 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useModelCatalog, useModels } from '../hooks.ts'
+import { client } from '../lib/api.ts'
 import { modelLabel } from '../lib/format.ts'
+import { isLockedError } from '../lib/lock.ts'
 import type { AgentPatch, Session } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { AgentControls, nextEffort } from './AgentControls.tsx'
+import { UnlockLink } from './ui.tsx'
 
 /**
  * Conductor's own composer controls, mirrored for the phone — and rendered
@@ -30,17 +34,23 @@ function change<T>(next: T, current: T): T | undefined {
 
 export function AgentBar({ session, workspaceId }: { session: Session; workspaceId: string }) {
 	const [picking, setPicking] = useState(false)
+	const [settingDefault, setSettingDefault] = useState<string>()
+	const [defaultError, setDefaultError] = useState<string>()
 	const staged = useApp(s => s.agentDrafts[session.id]) ?? NOTHING
 	const stageAgent = useApp(s => s.stageAgent)
+	const queryClient = useQueryClient()
 	// A send in flight is what pushes the staged settings. The controls stay live
 	// through it — anything changed mid-send simply stages for the next one, which
 	// the store's key-wise `clearAgentDraft` is what makes safe.
 	const sending = useApp(s => s.pending.some(p => p.sessionId === session.id && p.status === 'sending'))
 	const modelCatalog = useModelCatalog()
 	const cachedGroup = modelCatalog.data?.groups.find(group => group.agentType === (session.agent_type ?? 'unknown'))
-	const cacheFresh = !!cachedGroup && Date.now() - cachedGroup.updatedAt < MODEL_CATALOG_STALE_MS
+	// Caches written before default-model support have labels but no starred row;
+	// refresh those once instead of drawing a picker full of unstarred choices.
+	const cacheFresh = !!cachedGroup?.defaultModel && Date.now() - cachedGroup.updatedAt < MODEL_CATALOG_STALE_MS
 	const liveModels = useModels(session, workspaceId, picking && !cacheFresh)
-	const models = liveModels.data ?? cachedGroup?.models ?? []
+	const models = liveModels.data?.models ?? cachedGroup?.models ?? []
+	const defaultModel = liveModels.data?.defaultModel ?? modelCatalog.data?.defaultModel ?? cachedGroup?.defaultModel
 
 	const stage = (patch: AgentPatch) => stageAgent(session.id, patch)
 
@@ -56,6 +66,27 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 	// also leaves the open picker with no row checked.
 	const displayedModel = staged.model ?? (modelLabel(session.model, models) || 'Model')
 	const providerModel = staged.model ?? session.model
+	const makeDefault = async (model: string) => {
+		if (settingDefault) return
+		setSettingDefault(model)
+		setDefaultError(undefined)
+		try {
+			const result = await client.setDefaultModel(session.id, model, workspaceId)
+			if (!result.ok) throw new Error(result.error ?? 'could not set the default model')
+			// Conductor's star is "set default and select", so it supersedes any model
+			// staged before the star was tapped. Preserve the other staged controls.
+			stageAgent(session.id, { model: undefined })
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ['model-catalog'] }),
+				queryClient.invalidateQueries({ queryKey: ['sessions', workspaceId] }),
+				queryClient.invalidateQueries({ queryKey: ['state'] })
+			])
+		} catch (error) {
+			setDefaultError(error instanceof Error ? error.message : 'could not set the default model')
+		} finally {
+			setSettingDefault(undefined)
+		}
+	}
 
 	return (
 		<AgentControls
@@ -67,6 +98,9 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 			onModelPickerOpenChange={setPicking}
 			modelsFetching={liveModels.isFetching || modelCatalog.isFetching}
 			modelsError={liveModels.isError}
+			defaultModel={defaultModel}
+			onSetDefaultModel={model => void makeDefault(model)}
+			settingDefaultModel={settingDefault}
 			fast={fastOn}
 			effort={effort}
 			plan={planOn}
@@ -78,7 +112,22 @@ export function AgentBar({ session, workspaceId }: { session: Session; workspace
 			onFastChange={() => stage({ fast: change(!fastOn, dbFast) })}
 			onEffortChange={() => stage({ effort: change(nextEffort(effort), dbEffort) })}
 			onPlanChange={() => stage({ plan: change(!planOn, dbPlan) })}
-			status={anyStaged ? (sending ? 'Applying…' : 'Applies when you send') : undefined}
+			status={
+				defaultError ? (
+					<span className="text-del">
+						{defaultError}
+						{isLockedError(defaultError) ? <UnlockLink className="ml-1" /> : null}
+					</span>
+				) : settingDefault ? (
+					'Setting default and selecting…'
+				) : anyStaged ? (
+					sending ? (
+						'Applying…'
+					) : (
+						'Applies when you send'
+					)
+				) : undefined
+			}
 		/>
 	)
 }

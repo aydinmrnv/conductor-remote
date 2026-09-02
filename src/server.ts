@@ -77,6 +77,7 @@ import {
 	screenLocked,
 	sendNeverStarted,
 	setAgentOptions,
+	setDefaultModel,
 	setRestartGuard,
 	setWorkspaceStatus,
 	stopTurn,
@@ -957,7 +958,7 @@ const server = http.createServer(async (req, res) => {
 			// GET /api/models — prior live picker reads, without activating Conductor. A
 			// new workspace has no chat yet, so this is its only safe source of choices.
 			if (isRoute(routes.modelCatalog, req.method, pathname)) {
-				return json(req, res, 200, { groups: modelCache.list() })
+				return json(req, res, 200, { groups: modelCache.list(), defaultModel: modelCache.defaultModel() })
 			}
 
 			// GET /api/settings — relay preferences plus what the phone needs to edit them:
@@ -1467,8 +1468,37 @@ const server = http.createServer(async (req, res) => {
 				const located = locateChat(ws, sessionId)
 				if ('error' in located) return json(req, res, 409, { error: located.error })
 				const result = await listAgentModels({ workspace: ws, sessionId, tab: located.tab })
-				if (result.ok && result.models) modelCache.remember(located.session?.agent_type, result.models)
+				if (result.ok && result.models)
+					modelCache.remember(located.session?.agent_type, result.models, result.defaultModel)
 				return json(req, res, result.ok ? 200 : 502, result)
+			}
+
+			// POST /api/sessions/:id/default-model { model, workspaceId? }
+			// The picker star is a combined "set default and select" action, so this
+			// changes both the user-wide default and this chat's model exactly as the
+			// desktop control does.
+			const defaultModelOf = routeParam(routes.defaultModel, req.method, pathname)
+			if (defaultModelOf) {
+				const sessionId = defaultModelOf
+				const body = JSON.parse((await readBody(req)) || '{}') as { model?: unknown; workspaceId?: unknown }
+				if (typeof body.model !== 'string' || !body.model.trim()) {
+					return json(req, res, 400, { error: 'model must be a picker label' })
+				}
+				const ws =
+					typeof body.workspaceId === 'string'
+						? reads.getWorkspace(body.workspaceId)
+						: (reads.listWorkspaces().find(w => w.active_session_id === sessionId) ?? null)
+				if (!ws) return json(req, res, 404, { error: 'workspace for session not found' })
+				const located = locateChat(ws, sessionId)
+				if ('error' in located) return json(req, res, 409, { error: located.error })
+				const result = await setDefaultModel({ workspace: ws, sessionId, tab: located.tab }, body.model.trim())
+				if (!result.ok || !result.model) {
+					return json(req, res, 502, { ok: false, error: result.error ?? 'the default model did not change' })
+				}
+				const session = reads.listSessions(ws.id).find(row => row.id === sessionId)
+				modelCache.rememberModel(session?.agent_type, result.model)
+				modelCache.rememberDefault(result.model)
+				return json(req, res, 200, { ok: true, defaultModel: result.model, session })
 			}
 
 			// POST /api/sessions/:id/agent  { effort?, plan?, fast?, model? }

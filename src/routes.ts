@@ -120,6 +120,8 @@ export const routes = {
 	// ── chats ──
 	messages: param('GET', '/api/sessions/:sessionId/messages'),
 	models: param('GET', '/api/sessions/:sessionId/models'),
+	/** Star a model as the user's default; Conductor also selects it for this chat. */
+	defaultModel: param('POST', '/api/sessions/:sessionId/default-model'),
 	agent: param('POST', '/api/sessions/:sessionId/agent'),
 	stop: param('POST', '/api/sessions/:sessionId/stop'),
 	sendPrompt: param('POST', '/api/sessions/:sessionId/prompt'),

@@ -33,6 +33,9 @@ export function AgentControls({
 	onModelPickerOpenChange,
 	modelsFetching = false,
 	modelsError = false,
+	defaultModel,
+	onSetDefaultModel,
+	settingDefaultModel,
 	fast,
 	effort,
 	plan,
@@ -55,6 +58,9 @@ export function AgentControls({
 	onModelPickerOpenChange?: (open: boolean) => void
 	modelsFetching?: boolean
 	modelsError?: boolean
+	defaultModel?: string
+	onSetDefaultModel?: (model: string) => void
+	settingDefaultModel?: string
 	fast?: boolean
 	effort?: string
 	plan?: boolean
@@ -82,6 +88,9 @@ export function AgentControls({
 						onOpenChange={onModelPickerOpenChange}
 						isFetching={modelsFetching}
 						isError={modelsError}
+						defaultModel={defaultModel}
+						onSetDefault={onSetDefaultModel}
+						settingDefault={settingDefaultModel}
 						onSelect={onModelChange}
 						renderTrigger={({ picking, toggle }) => (
 							<button

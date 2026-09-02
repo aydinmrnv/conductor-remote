@@ -36,7 +36,7 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   relay's matching regex, so the two cannot drift
   shared.ts       what both sides must compute identically (workspaceTitle, query tokens,
                   the locked-Mac phrase) — the one module web/ may import as a *value*
-  mcp-tools.ts    the 17 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
+  mcp-tools.ts    the 18 MCP tools + a transport-agnostic JSON-RPC dispatcher; tools reach
                   the relay through an injected `call`, so both transports share one path
   mcp.ts          the stdio transport (conductor-remote mcp). HTTP lives in server.ts at
                   POST /mcp, which runs in-process and so is inside the UI lock natively
@@ -50,8 +50,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
                   by /api/state; conflicts are computed locally with `git merge-tree`
   sidecar.ts      Conductor sidecar IPC client (JSON-RPC over unix socket)
   writes.ts       Actuator: AppleScript (default) + Sidecar (opt-in); uiTurn() serializes UI ops
-  model-cache.ts  the picker labels Conductor has shown us, keyed by harness, so a workspace
-                  with no chat yet can still offer a model
+  model-cache.ts  the picker labels and starred default Conductor has shown us, keyed by
+                  harness, so a workspace with no chat yet can still show the effective model
   sendonce.ts     the send memo: answers a repeated clientId with the first send's outcome
   firstprompt.ts  persisted queue that delivers a new workspace's first prompt, from setup on
   parked.ts       persisted queue for prompts that hit the lock screen — delivers on unlock, pushes the receipt

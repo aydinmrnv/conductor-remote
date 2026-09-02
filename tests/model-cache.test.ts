@@ -17,13 +17,28 @@ describe('model cache', () => {
 		const file = path.join(directory, 'models.json')
 		const cache = new ModelCache(file)
 
-		cache.remember('claude', ['Opus 5 NEW', 'Sonnet 4.6'])
+		cache.remember('claude', ['Opus 5 NEW', 'Sonnet 4.6'], 'Opus 5 NEW')
 		cache.rememberModel('claude', 'Opus 5')
 		cache.remember('codex', ['GPT-5.4'])
+		cache.rememberDefault('GPT-5.4')
 
 		const groups = cache.list()
 		expect(groups.find(group => group.agentType === 'claude')?.models).toEqual(['Opus 5', 'Sonnet 4.6'])
 		expect(groups.map(group => group.agentType)).toEqual(['claude', 'codex'])
+		expect(cache.defaultModel()).toBe('GPT-5.4')
+		expect(groups.every(group => group.defaultModel === 'GPT-5.4')).toBe(true)
 		expect(new ModelCache(file).list()).toEqual(groups)
+	})
+
+	test('loads a pre-default cache and learns the star on its next live read', () => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-model-cache-'))
+		temporaryDirectories.push(directory)
+		const file = path.join(directory, 'models.json')
+		fs.writeFileSync(file, JSON.stringify([{ agentType: 'codex', models: ['5.6 Sol'], updatedAt: 1 }]))
+
+		const cache = new ModelCache(file)
+		expect(cache.defaultModel()).toBeUndefined()
+		cache.remember('codex', ['5.6 Sol', '5.6 Terra'], '5.6 Sol')
+		expect(cache.defaultModel()).toBe('5.6 Sol')
 	})
 })
