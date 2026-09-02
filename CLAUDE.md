@@ -1086,150 +1086,6 @@ yarn deploy   # build + install/reload the login LaunchAgent, print phone URL
 yarn service  # {status,restart,uninstall} the LaunchAgent
 ```
 
-Automated verification has two layers. Vitest discovers the behavioral and integration
-tests under `tests/`, supports focused/watch runs, reports individual failures, and can
-collect V8 coverage. Two source/toolchain validators remain standalone scripts because
-they inspect the repository rather than one runtime unit: the AppleScript compiler and
-handler scan, and the relay/web import boundary.
-
-- `scripts/check-applescript.ts` — `osacompile` parses `src/conductor.applescript`
-  the way `osascript` will, and every `my handler()` call, in the script *and* in
-  the TypeScript that appends to it, must resolve to an `on handler(`. AppleScript
-  binds handler calls at run time, so those are two different failures and
-  osacompile only sees one. The compile half is macOS-only, so CI runs it on its
-  own lean `macos-latest` job (`check-applescript` — no yarn install, the script is
-  stdlib-only, and it gates the release since the tarball ships the .applescript
-  verbatim); the ubuntu job skips it, and the resolution half runs everywhere,
-  which is what catches a rename in a pull request.
-- `tests/nosleep.test.ts` — runs `NOSLEEP_BODY` against a **stub `pmset`** in a
-  temp directory, pidfile and all, so it needs no root and never touches this
-  machine's power settings. It asserts the property that costs something: the
-  captured values always go back. A window that restores the *wrong* values leaves
-  `disablesleep 1` with nothing armed, which reads as "working" everywhere and has
-  no fix on the phone. Covers the ordinary window, a clean takeover, a takeover the
-  incumbent refuses (must exit 75, must not capture), and a recycled pid (must not
-  be signalled). Portable, so the ubuntu job runs it too.
-
-- `tests/ui-lock.test.ts` — the UI lock's queue (`writes.ts` ▸ `uiTurn`), driven
-  with timers instead of AppleScript, since it is the control flow being tested and
-  not the scripts. It earns its place on cost: a run that fails to release the lock
-  wedges **every** future write with no error and no fix from the phone, and a
-  priority bug puts a human tap behind a minute of agent work. It found both bugs in
-  the queue while that queue was being written. Portable, so the ubuntu job runs it.
-
-- `tests/firstprompt.test.ts` — the first-prompt queue's two budgets
-  (`src/firstprompt.ts` ▸ `step`). Sending before the worktree is ready means most of
-  the failures the queue now sees are ones waiting fixes, so an early send spends
-  `earlyAttempts` and only a post-`ready` one spends the three that give up in public.
-  Get that split backwards and every slow repo greets its owner with a `failed` prompt
-  Conductor would have taken a minute later — which is the regression the change itself
-  could introduce, and it typechecks either way. `DeliveryDeps` is injected, so this
-  needs no Mac, no Conductor and no relay; fake timers drive the queue's own schedule
-  without waiting out production delays. Portable, so the ubuntu job runs it.
-
-- `tests/sendonce.test.ts` — the send memo (`src/sendonce.ts`), which decides whether
-  a prompt is typed into Conductor a second time. Both of its failure modes are pure
-  control flow and both typecheck: remember too little and Retry doubles the prompt,
-  which is the bug it was written for; remember a *failure* and Retry silently does
-  nothing for ten minutes, so the prompt is lost rather than doubled, which is the worse
-  of the two and the easier mistake to make while editing `keep`. Takes a function and a
-  key, so it needs nothing else. Portable, so the ubuntu job runs it.
-
-- `tests/pending.test.ts` — the phone's optimistic prompt store
-  (`web/src/lib/pending.ts`), which since the composer clears its draft at send time
-  holds the only copy of what someone typed until the relay confirms it. Both ways of
-  getting the restore wrong are silent and cost the text: restore too little and a
-  reload throws away the prompt that failed, which is the bug it was written for;
-  restore a `sending` entry as it was stored and the bubble spins against a request
-  that died with the page, so the one bubble carrying a Retry button never offers it.
-  Also pins what must *not* be restored — a prompt older than a day, and another
-  build's rows. localStorage is stubbed, so no browser. Portable, so the ubuntu job
-  runs it.
-
-- `tests/prefs.test.ts` + `tests/local-prefs.test.ts` — the two halves of durable
-  PWA state. The host tests pin monotone read marks, last-write-wins drafts, deletion
-  tie-breaking, sanitization and 0600 persistence. The browser tests pin legacy-key
-  migration, origin recovery, focused-composer protection, clock skew, atomic
-  text/agent intent and tombstone behavior. Both are stdlib/Map-backed and portable.
-
-- `tests/notify.test.ts` — the notifier's state machine (`src/notify.ts` ▸
-  `TurnWatcher`). Every rule in it is a rule about *not* buzzing a phone, which is why
-  it is worth pinning: too eager is a nuisance you notice, too quiet is a notifier that
-  has stopped and looks exactly like a Mac with nothing to report. Covers the baseline,
-  the confirm-on-the-next-tick, a chat archived mid-turn, and the loop rule from both
-  sides — the lap you asked for still fires, the laps the agent gave itself do not, and
-  a chat with no turn head keeps the old behaviour. It also pins the reading claim
-  (`noteViewing`/`isReading`): scoped to one device and one chat, moving with the reader
-  rather than accumulating, and expiring once the poll that refreshes it stops — a window
-  set too wide silently eats the notification for a phone put down mid-turn. Rows are
-  injected and the claim is a plain Map, so no push store and no network. Portable, so
-  the ubuntu job runs it.
-
-- `tests/push-click.test.ts` — what a tapped notification does
-  (`public/push-sw.js` ▸ `notificationclick`). Nothing about a click happens by default,
-  so every way of leaving that handler without asking for a window is a tap the phone
-  ignores: no window, no error, nothing logged on either side. That is how the shipped
-  version of it survived a release — a focus that never foregrounded counted as success,
-  and `openWindow` was unreachable while any client existed. So the cases are the four
-  endings of a focus (landed, resolved unfocused, refused, resolved with nothing) plus
-  no page at all, a foreign page, and a client whose URL won't parse, since a throw
-  inside the scan is the same dead tap by another route. The worker source is loaded
-  against a stubbed `self`, the way the browser loads it, so there is no browser and no
-  service worker. Portable, so the ubuntu job runs it.
-
-- `tests/enter-submits.test.ts` — which Enter sends (`web/src/lib/keys.ts` ▸
-  `enterSubmits`). A phone's keyboard has no Shift+Enter, so its return key is the only
-  way to break a line, and for a while every one of them sent the prompt — half a
-  sentence at a time. So on a touch device (`pointer: coarse`, read at the keypress
-  because an iPad grows a fine pointer when a trackpad connects) Enter inserts the
-  newline and the Send button sends; a hardware keyboard keeps Enter-sends and
-  Shift+Enter; Cmd/Ctrl+Enter sends on both, and on the chat composer still means
-  Conductor's own queue-behind-the-answer. Both ways of getting it wrong are silent —
-  a phone that sends mid-sentence, or a desktop whose Enter stops sending — and the
-  device answer is injected, so it needs no browser. Portable, so the ubuntu job runs it.
-
-- `tests/routes.test.ts` — the `/api` route table (`src/routes.ts`). Every route
-  matches the path it builds, the parameter survives encoding verbatim, no route answers
-  another route's path, and a route answers its own method only. It earns its place on
-  blast radius: the table is the one place a path is written now, read by the relay's
-  matcher, the phone and the MCP tools at once, so a single wrong character takes out all
-  three and `tsc` sees only a string. The collision check is the one ordering hides —
-  whichever `if` is written first in the dispatcher wins, so a real overlap looks fine
-  until someone reorders the file. Portable, so the ubuntu job runs it.
-
-- `tests/attachments.test.ts` — the two halves of a Conductor attachment
-  (`src/attachments.ts`), both of them strings all the way down. The token is *another
-  app's* syntax, so it is asserted against one Conductor itself wrote, byte for byte:
-  the percent-encoded slashes look like a bug and are the format, and `⟦⟧` are not the
-  ASCII brackets they resemble. Tidy either and the prompt still sends, carrying a file
-  nobody is told to read. The other half is that the file name comes from a **chat
-  title** — free text a model wrote — and is then joined onto a path, so the test that
-  matters is the one where a title engineered to climb out still lands inside the
-  worktree. Portable, so the ubuntu job runs it.
-
-- `tests/file-mentions.test.ts` / `tests/mention-render.test.tsx` — which words in a chat
-  become source links (`web/src/lib/fileMentions.ts`). Both ways of getting it wrong are
-  quiet: too eager and the transcript underlines ordinary prose, each tap opening a sheet
-  that says the file is not there, which reads as a broken relay rather than a bad guess;
-  too shy and the feature simply is not there, which nobody reports. The matcher is pure,
-  so the first needs no relay and no browser. The second renders the chat to static markup
-  for one fact that belongs to `react-markdown` rather than to us — inline code arrives with
-  **no class**, which is how a mention is told apart from a fence — and it caught the fence
-  with no info string coming through as a link. Portable, so the ubuntu job runs both.
-
-- `scripts/check-imports.ts` — the relay/web boundary (see "One set of types" above).
-  `web/src/**` may reach into `src/` only with a **statement-level** `import type`,
-  and the trap it exists for is that the inline form looks identical and is not:
-  under `verbatimModuleSyntax`, `import { type Workspace } from '…/reads.ts'` emits
-  `import {} from '…/reads.ts'`, a live import of a module that opens SQLite. It
-  typechecks, it lints, and it reaches the phone as a blank screen. It also asserts
-  that `src/shared.ts` — the one module the web app may import a *value* from — pulls
-  in no `node:` builtin, and that `src/wire.ts` declares types only. Portable, so the
-  ubuntu job runs it.
-
-Nothing else is tested. Verify a runtime change by curling the relay (see the
-bind trap below), not by unit test.
-
 ## Traps (these will bite)
 
 - **Ask before every run that drives this Mac's live UI.** Anything that opens,
@@ -1280,6 +1136,19 @@ bind trap below), not by unit test.
   tailnet (Admin console nodeAttr) or it falls back to tailnet-only and says so.
   `curl 127.0.0.1:8787` works for local checks; `yarn service status` prints the URL
   and whether it's public or tailnet-only.
+  **The relay is not always on :443, and the deploy must never assume it is.** Funnel
+  listens on 443, 8443 and 10000 only, and OpenAI's cloud dials nothing but 443
+  (measured 2026-09-02), so a voice listener that needs a webhook owns `:443` via
+  Funnel and the relay sits tailnet-only on `:8787` — expect that to be the norm.
+  `relayServeState` (`src/tailscale.ts`) reads every `host:port` key in
+  `serve status --json` for the `/` mount that proxies to the relay, so `status`
+  prints `https://<node>:8787/` with its QR. The writes follow one rule: a mapping is
+  kept wherever it lives, a port that carries someone else's mount is never written
+  to (a fresh mount steps to the next free port, a shared port is reported), and
+  `funnel reset` is gone from the deploy — it wiped every mount on the node, and
+  serving a port again without `funnel` drops that port's Funnel flag on its own.
+  The watchdog refuses its heal on the same evidence, because `funnel --bg 8787`
+  mounts on :443 whatever is there.
 - **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
   `src/dev-server.ts` presses Conductor's selected Run/Stop task through the same
   fail-closed Accessibility path as other writes; Conductor still owns the process

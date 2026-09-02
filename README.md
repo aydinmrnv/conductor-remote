@@ -64,6 +64,12 @@ tailnet-only instead (devices logged into your tailnet, via `tailscale serve`),
 install with `--expose tailnet` (or `EXPOSE=tailnet`). The choice is remembered
 across re-deploys.
 
+The relay sits on `:443` by default. When another service already holds that
+port (Funnel is per port, and some webhooks only ever dial 443), the deploy leaves
+it alone and mounts the relay on the next free port instead, so the phone URL can
+read `https://<node>:8787/`. `service status` and `config` report whichever
+port is live; a mapping already in place is kept wherever it is.
+
 ## Architecture
 
 ```

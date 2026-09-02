@@ -14,13 +14,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { installedServiceEnvironment, serviceEnvironmentWithSetting } from '../src/config.ts'
 import { packageRoot } from '../src/pkg-root.ts'
-import type { ExposeMode } from '../src/tailscale.ts'
+import type { ExposeMode, RelayServeState } from '../src/tailscale.ts'
 import {
 	driftWarningLines,
 	exposeStorePath,
+	FUNNEL_PORTS,
+	freeServePort,
 	magicDnsName,
 	normalizeExposeMode,
+	parseServeStatus,
 	relayPort,
+	relayServeState,
+	serveUrl,
 	tailscaleBin,
 	writeUrlHost
 } from '../src/tailscale.ts'
@@ -267,35 +272,102 @@ function resolveExposeMode(): ExposeMode {
 	return 'public'
 }
 
-/** Live serve/funnel state for this node: is the loopback proxy wired, and is Funnel (public) on? */
-function tailscaleState(bin: string, dns: string | null): { proxyOk: boolean; funnelOn: boolean } {
-	if (!dns) return { proxyOk: false, funnelOn: false }
+/**
+ * Live serve/funnel state for this node as it concerns the relay: the HTTPS port fronting it (any port, not
+ * only :443), whether that port is public, and which ports carry mounts that are not the relay's. A status
+ * that cannot be read counts as nothing fronting — the same answer the old reader gave, and one that only
+ * ever leads to a mount on a port nobody holds.
+ */
+function tailscaleState(bin: string, port: string = RELAY_PORT): RelayServeState {
 	try {
 		const out = execFileSync(bin, ['serve', 'status', '--json'], { encoding: 'utf8', stdio: 'pipe' })
-		const cfg = JSON.parse(out)
-		const key = `${dns}:443`
-		const proxyOk = cfg?.Web?.[key]?.Handlers?.['/']?.Proxy === `http://127.0.0.1:${RELAY_PORT}`
-		return { proxyOk, funnelOn: Boolean(cfg?.AllowFunnel?.[key]) }
+		return relayServeState(parseServeStatus(out), port)
 	} catch {
-		return { proxyOk: false, funnelOn: false }
+		return relayServeState({}, port)
 	}
 }
 
-/** Assert the tailnet-only `serve` proxy — used for tailnet mode and as the Funnel fallback. */
-function ensureServeOnly(bin: string, url: string, state: { proxyOk: boolean; funnelOn: boolean }): void {
-	if (state.proxyOk && !state.funnelOn) {
-		console.info(`✓ tailscale serve fronts ${url} → 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
+/**
+ * The one Tailscale write here: `tailscale <serve|funnel> --bg --https=<port> <relay port>`. Always scoped
+ * to a port the relay owns outright or nobody holds — the callers check, this does not. Serving a port
+ * Funnel currently exposes drops that port's Funnel flag and touches no other port, which is what made
+ * the old `funnel reset` (every mount on the node, gone) unnecessary. Returns the CLI's error, or null.
+ */
+function mountRelay(bin: string, kind: 'serve' | 'funnel', port: number): string | null {
+	try {
+		execFileSync(bin, [kind, '--bg', '--yes', `--https=${port}`, RELAY_PORT], { stdio: 'pipe' })
+		return null
+	} catch (err) {
+		return err instanceof Error ? err.message.trim() : String(err)
+	}
+}
+
+function byHand(kind: 'serve' | 'funnel', port: number | string): string {
+	return `tailscale ${kind} --bg --yes --https=${port} ${RELAY_PORT}`
+}
+
+function describeTaken(state: RelayServeState, port: number): string {
+	return (state.taken.get(port) ?? []).join(', ')
+}
+
+/** A port the relay shares is left exactly as found: Funnel is per port, so a change would drag the rest along. */
+function leaveShared(url: string, state: RelayServeState, want: 'public' | 'tailnet-only'): void {
+	console.info(`\n  ⚠ ${url} fronts the relay, but :${state.port} also carries ${state.shared.join(', ')}.`)
+	console.info(`    Funnel is per port, so making the relay ${want} would take those mounts along. Left as is.`)
+	console.info(
+		`    To change it, move the relay to a port of its own:  ${byHand(want === 'public' ? 'funnel' : 'serve', '<port>')}`
+	)
+}
+
+function refuseNoPort(state: RelayServeState, candidates: number[]): void {
+	const held = candidates.map(p => `:${p} → ${describeTaken(state, p)}`).join('; ')
+	console.info(`\n  ⚠ every port the relay could take already carries another service (${held}). Not touching them.`)
+	console.info(`    Free one, then run \`yarn deploy\` again — or mount by hand:  ${byHand('serve', '<port>')}`)
+}
+
+/**
+ * Assert a tailnet-only `serve` proxy in front of the relay — tailnet mode, and the fallback when Funnel is
+ * refused. Non-destructive by construction: a mapping is kept wherever it already lives (:443 or not), a
+ * shared port is reported rather than rewritten, and a fresh mount steps around any port someone else holds.
+ * The order of candidates is 443 (the default, unchanged), then the relay's own port number — the memorable
+ * choice, and it leaves 8443/10000 for services that need Funnel — then the remaining Funnel ports.
+ */
+function ensureServeOnly(bin: string, dns: string | null, state: RelayServeState): void {
+	const host = dns ?? '<node>'
+	if (state.port !== null) {
+		const url = serveUrl(host, state.port)
+		if (!state.funnelOn) {
+			console.info(`✓ tailscale serve fronts ${url} → 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
+			return
+		}
+		if (state.shared.length) {
+			leaveShared(url, state, 'tailnet-only')
+			return
+		}
+		const failed = mountRelay(bin, 'serve', state.port)
+		if (failed) {
+			console.info(
+				`\n  ⚠ could not take Funnel off ${url} (${failed}). Run by hand:\n      ${byHand('serve', state.port)}`
+			)
+			return
+		}
+		console.info(`✓ tailscale serve → ${url} is tailnet-only again → 127.0.0.1:${RELAY_PORT}`)
 		return
 	}
-	try {
-		execFileSync(bin, ['serve', '--bg', RELAY_PORT], { stdio: 'pipe' })
-		console.info(`✓ tailscale serve → ${url} proxies 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
-	} catch (err) {
-		console.info(
-			`\n  ⚠ could not configure tailscale serve (${err instanceof Error ? err.message : err}). Run by hand:`
-		)
-		console.info(`      tailscale serve --bg ${RELAY_PORT}`)
+	const candidates = [443, Number(RELAY_PORT), ...FUNNEL_PORTS.filter(p => p !== 443)]
+	const port = freeServePort(state, candidates)
+	if (port === null) {
+		refuseNoPort(state, candidates)
+		return
 	}
+	if (port !== 443) console.info(`  :443 carries ${describeTaken(state, 443)}, so the relay goes on :${port} instead.`)
+	const url = serveUrl(host, port)
+	const failed = mountRelay(bin, 'serve', port)
+	if (failed) {
+		console.info(`\n  ⚠ could not configure tailscale serve (${failed}). Run by hand:\n      ${byHand('serve', port)}`)
+		return
+	}
+	console.info(`✓ tailscale serve → ${url} proxies 127.0.0.1:${RELAY_PORT} (tailnet-only)`)
 }
 
 /**
@@ -356,38 +428,64 @@ function ensureTailscale(): void {
 	pinHostname(bin)
 	const dns = magicDnsName(bin)
 	if (dns) writeUrlHost(dns) // baseline for drift detection (server startup + `service status` compare against this)
-	const url = `https://${dns ?? '<node>'}/`
+	const host = dns ?? '<node>'
 	const mode = resolveExposeMode()
-	const state = tailscaleState(bin, dns)
+	const state = tailscaleState(bin)
 
 	if (mode === 'tailnet') {
-		if (state.funnelOn) {
-			try {
-				execFileSync(bin, ['funnel', 'reset'], { stdio: 'pipe' })
-			} catch {
-				// best-effort; ensureServeOnly re-asserts the proxy below
-			}
-			ensureServeOnly(bin, url, { proxyOk: false, funnelOn: false })
-		} else {
-			ensureServeOnly(bin, url, state)
-		}
+		ensureServeOnly(bin, dns, state)
 		return
 	}
 
 	// public (Funnel)
-	if (state.proxyOk && state.funnelOn) {
-		console.info(`✓ tailscale funnel already exposes ${url} → 127.0.0.1:${RELAY_PORT} (public, token-gated)`)
+	if (state.port !== null) {
+		const url = serveUrl(host, state.port)
+		if (state.funnelOn) {
+			console.info(`✓ tailscale funnel already exposes ${url} → 127.0.0.1:${RELAY_PORT} (public, token-gated)`)
+			return
+		}
+		if (state.shared.length) {
+			leaveShared(url, state, 'public')
+			return
+		}
+		if (!FUNNEL_PORTS.includes(state.port)) {
+			console.info(`\n  ⚠ the relay is fronted tailnet-only at ${url}, and Funnel cannot listen on :${state.port}`)
+			console.info(
+				`    (only ${FUNNEL_PORTS.join(', ')}). Left as is — \`conductor-remote config\` will show the mismatch.`
+			)
+			console.info(`    To go public, move it to a Funnel port by hand:  ${byHand('funnel', '<443|8443|10000>')}`)
+			return
+		}
+		const failed = mountRelay(bin, 'funnel', state.port)
+		if (failed) {
+			funnelRefused(failed)
+			ensureServeOnly(bin, dns, state)
+			return
+		}
+		console.info(`✓ tailscale funnel → ${url} now public over the internet (token-gated) → 127.0.0.1:${RELAY_PORT}`)
 		return
 	}
-	try {
-		execFileSync(bin, ['funnel', '--bg', '--yes', RELAY_PORT], { stdio: 'pipe' })
-		console.info(`✓ tailscale funnel → ${url} now public over the internet (token-gated) → 127.0.0.1:${RELAY_PORT}`)
-	} catch (err) {
-		console.info(`\n  ⚠ could not enable Funnel (${err instanceof Error ? err.message.trim() : err}).`)
-		console.info('    Funnel must be enabled for this tailnet: open the URL Tailscale printed above, or add the')
-		console.info('    "funnel" nodeAttr in Admin console ▸ Access controls. Falling back to tailnet-only for now.')
-		ensureServeOnly(bin, url, state)
+	const port = freeServePort(state, FUNNEL_PORTS)
+	if (port === null) {
+		refuseNoPort(state, FUNNEL_PORTS)
+		return
 	}
+	if (port !== 443) console.info(`  :443 carries ${describeTaken(state, 443)}, so the relay goes on :${port} instead.`)
+	const failed = mountRelay(bin, 'funnel', port)
+	if (failed) {
+		funnelRefused(failed)
+		ensureServeOnly(bin, dns, state)
+		return
+	}
+	console.info(
+		`✓ tailscale funnel → ${serveUrl(host, port)} now public over the internet (token-gated) → 127.0.0.1:${RELAY_PORT}`
+	)
+}
+
+function funnelRefused(error: string): void {
+	console.info(`\n  ⚠ could not enable Funnel (${error}).`)
+	console.info('    Funnel must be enabled for this tailnet: open the URL Tailscale printed above, or add the')
+	console.info('    "funnel" nodeAttr in Admin console ▸ Access controls. Falling back to tailnet-only for now.')
 }
 
 /** Print a scannable QR of `url` (theme-independent black-on-white). Never fatal — QR is a convenience. */
@@ -408,10 +506,10 @@ function printUrl(): void {
 		if (drift.length) console.info(`\n${drift.join('\n')}`)
 	}
 	const dns = bin ? magicDnsName(bin) : null
-	const state = bin ? tailscaleState(bin, dns) : { proxyOk: false, funnelOn: false }
-	if (dns && state.proxyOk) {
+	const state = bin ? tailscaleState(bin) : relayServeState({}, RELAY_PORT)
+	if (dns && state.port !== null) {
 		const scope = state.funnelOn ? 'public — any browser, token-gated' : 'same Tailnet only'
-		const url = `https://${dns}/${frag}`
+		const url = `${serveUrl(dns, state.port)}${frag}`
 		console.info(`\n  Phone URL (HTTPS, ${scope}):\n    ${url}`)
 		if (token) {
 			console.info('\n  Scan to open on your phone:')
@@ -422,7 +520,7 @@ function printUrl(): void {
 	// Nothing fronting yet — the relay is only on loopback.
 	console.info(`\n  Local URL:\n    http://127.0.0.1:${RELAY_PORT}/${frag}`)
 	console.info(
-		`\n  ⚠ Not reachable from your phone yet. Run \`tailscale funnel --bg ${RELAY_PORT}\` (public) or \`tailscale serve --bg ${RELAY_PORT}\` (tailnet)${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
+		`\n  ⚠ Not reachable from your phone yet. Run \`yarn deploy\` (it picks a free port), or by hand \`tailscale funnel --bg ${RELAY_PORT}\` (public) / \`tailscale serve --bg ${RELAY_PORT}\` (tailnet)${dns ? ` → https://${dns}/` : ''}, then \`yarn service status\`.`
 	)
 }
 
@@ -636,6 +734,17 @@ function config(): void {
 		// no token file yet
 	}
 	rows.push({ name: 'token', value: token, source: 'token file' })
+	// The HTTPS port is a live Tailscale fact, not a plist knob: :443 by default, elsewhere once another
+	// service holds :443 (see ensureServeOnly), and the phone URL carries whichever it is. Read against the
+	// daemon's own port, since this shell's RELAY_PORT is not the one the relay listens on.
+	const bin = tailscaleBin()
+	const livePort = env.RELAY_PORT ?? '8787'
+	const live = bin ? tailscaleState(bin, livePort) : relayServeState({}, livePort)
+	rows.push({
+		name: 'https-port',
+		value: live.port === null ? '(not fronted)' : String(live.port),
+		source: 'tailscale serve'
+	})
 
 	const width = Math.max(...rows.map(r => r.name.length))
 	const valueWidth = Math.max(...rows.map(r => r.value.length))
@@ -649,24 +758,33 @@ function config(): void {
 	// The cross-check worth having. A posture the relay believes and a Tailscale that is doing something
 	// else is invisible in every other command, and it is self-healing in the wrong direction: the funnel
 	// watchdog only runs for `public`, so a relay that thinks it is public will re-register Funnel.
-	const bin = tailscaleBin()
 	const configured = rows.find(r => r.name === 'expose')?.value
 	if (!bin || !configured) return
-	const dns = magicDnsName(bin)
-	const live = tailscaleState(bin, dns)
-	const liveMode = live.funnelOn ? 'public' : live.proxyOk ? 'tailnet' : null
+	const liveMode = live.funnelOn ? 'public' : live.port !== null ? 'tailnet' : null
+	const where = live.port !== null && live.port !== 443 ? ` on :${live.port}` : ''
+	const funnelable = live.port === null || FUNNEL_PORTS.includes(live.port)
 	console.info('')
 	if (liveMode === null) {
-		console.info(`  \u26a0 tailscale is not fronting 127.0.0.1:${RELAY_PORT} at all — the phone URL is not wired.`)
+		console.info(`  \u26a0 tailscale is not fronting 127.0.0.1:${livePort} at all — the phone URL is not wired.`)
 		console.info('    Fix with: conductor-remote service install')
 	} else if (liveMode === configured) {
 		console.info(
-			`  \u2713 tailscale agrees: ${liveMode === 'public' ? 'Funnel on (internet-facing)' : 'serve only (tailnet)'}`
+			`  \u2713 tailscale agrees: ${liveMode === 'public' ? 'Funnel on (internet-facing)' : 'serve only (tailnet)'}${where}`
 		)
 	} else {
-		console.info(`  \u26a0 tailscale says ${liveMode}, the daemon is configured ${configured}. They must match:`)
+		console.info(
+			`  \u26a0 tailscale says ${liveMode}${where}, the daemon is configured ${configured}. They must match:`
+		)
 		console.info(`    the funnel watchdog only runs for \`public\`, so the two can heal each other apart.`)
-		console.info(`    Fix with: conductor-remote service install --expose ${configured}`)
+		if (configured === 'public' && !funnelable) {
+			console.info(
+				`    Funnel cannot listen on :${live.port} (only ${FUNNEL_PORTS.join(', ')}), so either move the relay by hand`
+			)
+			console.info(`    (tailscale funnel --bg --yes --https=<443|8443|10000> ${livePort}) or match the daemon to it:`)
+			console.info('    conductor-remote service install --expose tailnet')
+		} else {
+			console.info(`    Fix with: conductor-remote service install --expose ${configured}`)
+		}
 	}
 }
 

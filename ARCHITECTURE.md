@@ -60,7 +60,8 @@ src/              Node relay (dev: run as .ts via Node type-stripping; tarball: 
   webpush.ts      Web Push protocol: VAPID (ES256) + aes128gcm payloads, node:crypto only
   logbuf.ts       console capture (ring + stamped stdout) + log-file tail → GET /api/logs, token redacted
   autoupdate.ts   self-update from npm; exit()s to reload, so both queues persist to disk
-  tailscale.ts    magicdns name, expose posture (funnel|serve), tailscale binary, relay port
+  tailscale.ts    magicdns name, expose posture (funnel|serve), tailscale binary, relay port,
+                  serve-status parser (which HTTPS port fronts the relay, and who holds the rest)
   funnel-watchdog.ts  end-to-end probe of the PUBLIC ingress; re-registers a stale funnel, and
                   can move the Mac to a fallback network when it has no route at all
   settings.ts     relay preferences the phone edits (fallback SSIDs, autoRejoin) → stateDir()/settings.json
@@ -89,7 +90,8 @@ web/              React PWA (Vite root)
                   identity intact), transcript-actions (where a Fork control may sit), highlight
                   (eleven languages, registered one at a time), fileMentions (turns `src/git.ts`
                   in a message into a source link, worktree file list as the existence check;
-                  absolute and ~ paths pass through for the relay to allow)
+                  absolute and ~ paths pass through for the relay to allow), clipboard (copyText,
+                  behind the Copy on a response and on every fenced block)
   src/components/ Header, WorkspaceList, SessionView, Transcript, Markdown + Code, DiffView,
                   Composer (AgentBar renders inside its card, with AgentControls / ModelPicker),
                   WorkspaceMenu (the status groups, plus Archive), MergeBanner, MessageNav,

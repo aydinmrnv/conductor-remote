@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronDown, Copy, GitFork, Hourglass, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, GitFork, Hourglass, Loader2 } from 'lucide-react'
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -15,7 +15,7 @@ import { Code } from './Code.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
 import { MessageNav } from './MessageNav.tsx'
 import { Patch } from './Patch.tsx'
-import { Empty, Spinner, UnlockLink } from './ui.tsx'
+import { CopyButton, Empty, Spinner, UnlockLink } from './ui.tsx'
 
 /** The three useful transcript cuts that `split_chat` exposes through MCP. */
 export interface SplitFormat {
@@ -477,7 +477,6 @@ function ChatActions({
 	through?: number
 	onFork?: (format: SplitFormat) => Promise<void>
 }) {
-	const [copied, setCopied] = useState(false)
 	const [menuOpen, setMenuOpen] = useState(false)
 	const [forking, setForking] = useState(false)
 	const [forkError, setForkError] = useState<string | null>(null)
@@ -490,16 +489,6 @@ function ChatActions({
 		const timer = setInterval(() => setNow(Date.now()), 60_000)
 		return () => clearInterval(timer)
 	}, [])
-
-	const copy = async () => {
-		try {
-			await copyText(text)
-			setCopied(true)
-			window.setTimeout(() => setCopied(false), 1800)
-		} catch {
-			setCopied(false)
-		}
-	}
 
 	const took = startedAt ? Date.parse(at) - Date.parse(startedAt) : Number.NaN
 	const meta = [took > 0 ? elapsed(took) : null, timeAgo(at, now)].filter(Boolean).join(' · ')
@@ -522,14 +511,11 @@ function ChatActions({
 		<div className="flex max-w-full flex-col items-start gap-1">
 			<div className="flex items-center gap-2">
 				{!working && meta ? <span className="text-[11px] tabular-nums text-faint">{meta}</span> : null}
-				<button
-					type="button"
-					onClick={() => void copy()}
-					aria-label={copied ? 'Copied response' : 'Copy response'}
-					className="flex size-7 items-center justify-center rounded-lg border border-border-soft bg-surface/70 text-muted transition active:bg-surface-2"
-				>
-					{copied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
-				</button>
+				<CopyButton
+					text={text}
+					label="response"
+					className="size-7 rounded-lg border border-border-soft bg-surface/70"
+				/>
 				{onFork ? (
 					<div className="relative">
 						<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
@@ -606,20 +592,6 @@ function ForkOption({ label, detail, onClick }: { label: string; detail: string;
 			<span className="text-[11px] text-faint">{detail}</span>
 		</button>
 	)
-}
-
-/** Clipboard's async API is unavailable in a few embedded browsers, so keep a small fallback. */
-async function copyText(text: string): Promise<void> {
-	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
-	const input = document.createElement('textarea')
-	input.value = text
-	input.setAttribute('readonly', '')
-	input.style.cssText = 'position:fixed;opacity:0'
-	document.body.append(input)
-	input.select()
-	const copied = document.execCommand('copy')
-	input.remove()
-	if (!copied) throw new Error('Clipboard unavailable')
 }
 
 /**
