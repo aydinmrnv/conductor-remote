@@ -24,6 +24,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { stateDir } from './config.ts'
 import type { Workspace } from './reads.ts'
+import type { ServeStatus } from './tailscale.ts'
 import { magicDnsName, tailscaleBin } from './tailscale.ts'
 import { setRunTask } from './writes.ts'
 
@@ -76,11 +77,6 @@ interface DevProxy {
 	port: number
 	token: string
 	close: () => Promise<void>
-}
-
-interface ServeStatus {
-	TCP?: Record<string, { HTTPS?: boolean }>
-	Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
 }
 
 function validPort(value: number): boolean {

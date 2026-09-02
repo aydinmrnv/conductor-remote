@@ -29,7 +29,14 @@ import https from 'node:https'
 import net from 'node:net'
 import { promisify } from 'node:util'
 import { readSettings } from './settings.ts'
-import { magicDnsName, readExposeMode, relayPort, tailscaleBin } from './tailscale.ts'
+import {
+	magicDnsName,
+	parseServeStatus,
+	readExposeMode,
+	relayPort,
+	relayServeState,
+	tailscaleBin
+} from './tailscale.ts'
 import { hasDefaultRoute, joinNetwork, preferredNetworks } from './wifi.ts'
 import { joinInstantHotspot } from './writes.ts'
 
@@ -128,7 +135,30 @@ function tcpOpen(ip: string, port: number, timeoutMs: number): Promise<boolean> 
 	})
 }
 
+/**
+ * The heal is `funnel reset` + `funnel --bg <port>`, which mounts the relay on :443. That is refused when
+ * :443 carries a mount that is not the relay's, or the relay is served on another port — the arrangement
+ * once another service needs :443 (OpenAI's cloud dials nothing else, measured 2026-09-02, so the voice
+ * listener holds :443 and the relay sits tailnet-only on :8787). The probe above was never reaching the
+ * relay in that case, and the heal would delete the mount it did reach. Fails closed: a status that cannot
+ * be read blocks the heal, never allows it.
+ */
+async function reRegisterBlocked(bin: string, port: string): Promise<string | null> {
+	try {
+		const { stdout } = await execFileP(bin, ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 10_000 })
+		const state = relayServeState(parseServeStatus(stdout), port)
+		const foreign = state.taken.get(443)
+		if (foreign?.length) return `:443 carries ${foreign.join(', ')}`
+		if (state.port !== null && state.port !== 443) return `the relay is served on :${state.port}, not :443`
+		return null
+	} catch (err) {
+		return `could not read tailscale serve status (${err instanceof Error ? err.message.trim() : String(err)})`
+	}
+}
+
 async function reRegisterFunnel(bin: string, port: string): Promise<void> {
+	const blocked = await reRegisterBlocked(bin, port)
+	if (blocked) throw new Error(`not re-registering, ${blocked}`)
 	await execFileP(bin, ['funnel', 'reset'], { timeout: 15_000 })
 	await execFileP(bin, ['funnel', '--bg', '--yes', port], { timeout: 20_000 })
 }
@@ -163,6 +193,7 @@ let fails = 0
 let dnsFails = 0
 let lastHealAt = 0
 let lastRejoinAt = 0
+let blockedLogged: string | null = null
 
 const REJOIN_COOLDOWN_MS = 5 * 60 * 1000 // a network switch is disruptive; never churn on one
 const REJOIN_SETTLE_MS = 12 * 1000 // DHCP + tailscaled noticing the new endpoint
@@ -296,6 +327,15 @@ async function tick(host: string, bin: string, port: string, intervalMs: number)
 		return again(intervalMs)
 	}
 	if (Date.now() - lastHealAt < HEAL_COOLDOWN_MS) return again(intervalMs)
+
+	// A block is a standing fact, so it is logged when it changes and not once a minute for as long as it holds.
+	const blocked = await reRegisterBlocked(bin, port)
+	if (blocked) {
+		if (blocked !== blockedLogged) log(`ingress probe failing (${fails}), but not re-registering: ${blocked}`)
+		blockedLogged = blocked
+		return again(intervalMs)
+	}
+	blockedLogged = null
 
 	log(
 		`funnel ingress stale (${fails} failed probes, ingress TCP-reachable) — re-registering: funnel reset && funnel --bg ${port}`
