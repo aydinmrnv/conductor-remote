@@ -34,6 +34,7 @@ import type {
 	AgentResult,
 	ArchiveResult,
 	CreateWorkspaceResult,
+	DefaultModelResult,
 	LogsResponse,
 	MessagesResponse,
 	ModelCatalogResponse,
@@ -65,7 +66,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 export const SERVER_INFO = { name: 'conductor-remote', version: '1' }
 
 export const INSTRUCTIONS =
-	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
+	'Drives local Conductor agents through the conductor-remote relay. search_chats and read_chat reach archived workspaces, which is where most finished work lives. create_workspace opens its workspace link without direct UI control; requested agent settings and the first prompt are applied later through Conductor’s UI. dismiss_prompt, keep_awake and relay_logs touch no UI. send_prompt, split_chat, stop_turn, set_agent_options, set_default_model, a live list_models call, set_workspace_status and archive_workspace drive the real Mac UI and steal focus for a few seconds — confirm with the user before using them on a chat they did not name. archive_workspace also deletes the worktree and stops whatever is running there.'
 
 /** Reads are quick; a UI write is measured in tens of seconds (writes.ts ▸ SEND_ATTEMPT_MS). */
 export const READ_TIMEOUT_MS = 10_000
@@ -638,7 +639,10 @@ export function createTools(call: RelayCall): Tool[] {
 					if (!data.groups.length)
 						return 'no models are cached yet — read a chat’s live picker with session_id and workspace_id'
 					return data.groups
-						.map(group => `## ${group.agentType}\n${group.models.map(model => `- ${model}`).join('\n')}`)
+						.map(
+							group =>
+								`## ${group.agentType}\n${group.models.map(model => `- ${model}${model === data.defaultModel ? ' ★ default' : ''}`).join('\n')}`
+						)
 						.join('\n\n')
 				}
 				const workspaceId = need(args, 'workspace_id')
@@ -647,7 +651,38 @@ export function createTools(call: RelayCall): Tool[] {
 					{ timeoutMs: WRITE_TIMEOUT_MS }
 				)
 				if (!data.ok) throw new Error(data.error ?? 'could not read the model menu')
-				return data.models?.length ? data.models.join('\n') : 'the menu listed no models'
+				return data.models?.length
+					? data.models.map(model => `${model}${model === data.defaultModel ? ' ★ default' : ''}`).join('\n')
+					: 'the menu listed no models'
+			}
+		},
+		{
+			name: 'set_default_model',
+			description:
+				'Star a model as Conductor’s user-wide default. This mirrors the desktop picker’s combined “set as default and select” action, so it also switches the target chat to that model for its next turn. DRIVES THE REAL UI and changes a global preference — ask the user first.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					session_id: { type: 'string', description: 'Chat whose live model picker should be used.' },
+					workspace_id: {
+						type: 'string',
+						description: 'Required in practice — the relay asserts the pane against it before pressing.'
+					},
+					model: { type: 'string', description: 'A label from list_models. An unambiguous prefix is enough.' }
+				},
+				required: ['session_id', 'workspace_id', 'model']
+			},
+			run: async args => {
+				const sessionId = need(args, 'session_id')
+				const workspaceId = need(args, 'workspace_id')
+				const model = need(args, 'model')
+				const data = await call<DefaultModelResult>(routes.defaultModel.path(sessionId), {
+					method: routes.defaultModel.method,
+					body: { workspaceId, model },
+					timeoutMs: WRITE_TIMEOUT_MS
+				})
+				if (!data.ok) throw new Error(data.error ?? 'the default model did not change')
+				return `${data.defaultModel ?? model} is now the default and selected for this chat`
 			}
 		},
 		{

@@ -206,12 +206,24 @@ export interface AgentResult {
 export interface ModelsResult {
 	ok: boolean
 	models?: string[]
+	/** The exact picker label whose star is selected. */
+	defaultModel?: string
 	error?: string
 }
 
 /** GET /api/models — labels previously observed in Conductor's picker, without opening its UI. */
 export interface ModelCatalogResponse {
 	groups: CachedModelGroup[]
+	/** The newest default observed in any live picker. */
+	defaultModel?: string
+}
+
+/** POST /api/sessions/:id/default-model — the star is re-read before success. */
+export interface DefaultModelResult {
+	ok: boolean
+	defaultModel?: string
+	session?: SessionRow
+	error?: string
 }
 
 /** POST /api/workspaces — returns as soon as the row exists; the prompt is delivered later. */

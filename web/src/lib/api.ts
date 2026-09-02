@@ -8,6 +8,7 @@ import type {
 	AgentResult,
 	ArchiveResult,
 	CreateWorkspaceResult,
+	DefaultModelResult,
 	DevServerResult,
 	DevServerState,
 	FilePreviewResponse,
@@ -346,6 +347,16 @@ export const client = {
 		api<ModelsResult>(
 			`${routes.models.path(sessionId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
 			{},
+			ACTION_TIMEOUT_MS
+		),
+	/** Star a model as Conductor's default; the desktop action also selects it for this chat. */
+	setDefaultModel: (sessionId: string, model: string, workspaceId: string) =>
+		api<DefaultModelResult>(
+			routes.defaultModel.path(sessionId),
+			{
+				method: routes.defaultModel.method,
+				body: JSON.stringify({ model, workspaceId })
+			},
 			ACTION_TIMEOUT_MS
 		),
 	/**

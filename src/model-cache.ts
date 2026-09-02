@@ -13,6 +13,8 @@ import { modelPickerLabel } from './shared.ts'
 export interface CachedModelGroup {
 	agentType: string
 	models: string[]
+	/** The user-wide picker row Conductor last showed with its star selected. */
+	defaultModel?: string
 	updatedAt: number
 }
 
@@ -45,21 +47,28 @@ export class ModelCache {
 		return this.entries.map(entry => ({ ...entry, models: [...entry.models] }))
 	}
 
+	/** The newest live picker read wins when upgrading from caches that disagree. */
+	defaultModel(): string | undefined {
+		return [...this.entries].sort((a, b) => b.updatedAt - a.updatedAt).find(entry => entry.defaultModel)?.defaultModel
+	}
+
 	/** Record the menu that was read from one chat. An empty or failed read changes nothing. */
-	remember(agentType: string | null | undefined, models: string[]): void {
+	remember(agentType: string | null | undefined, models: string[], defaultModel?: string): void {
 		const next = clean(models)
 		if (!next.length) return
 		const key = group(agentType ?? '')
+		const selectedDefault = clean(defaultModel ? [defaultModel] : [])[0] ?? this.defaultModel()
 		const entry: CachedModelGroup = {
 			agentType: key,
 			// A live menu is authoritative. Replacing its group drops a model Conductor
 			// stopped offering instead of leaving a stale choice in a later workspace.
 			models: next,
+			defaultModel: selectedDefault,
 			updatedAt: Date.now()
 		}
-		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry].sort((a, b) =>
-			a.agentType.localeCompare(b.agentType)
-		)
+		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry]
+			.map(existing => ({ ...existing, defaultModel: selectedDefault ?? existing.defaultModel }))
+			.sort((a, b) => a.agentType.localeCompare(b.agentType))
 		this.save()
 	}
 
@@ -71,11 +80,20 @@ export class ModelCache {
 		const entry: CachedModelGroup = {
 			agentType: key,
 			models: clean([...(current?.models ?? []), model]),
+			defaultModel: current?.defaultModel ?? this.defaultModel(),
 			updatedAt: Date.now()
 		}
 		this.entries = [...this.entries.filter(existing => existing.agentType !== key), entry].sort((a, b) =>
 			a.agentType.localeCompare(b.agentType)
 		)
+		this.save()
+	}
+
+	/** A successful star press is authoritative for every harness's copy of the same picker. */
+	rememberDefault(model: string): void {
+		const selected = clean([model])[0]
+		if (!selected) return
+		this.entries = this.entries.map(entry => ({ ...entry, defaultModel: selected }))
 		this.save()
 	}
 
@@ -88,6 +106,8 @@ export class ModelCache {
 				.map(entry => ({
 					agentType: group(entry.agentType),
 					models: clean(entry.models.filter((model): model is string => typeof model === 'string')),
+					defaultModel:
+						typeof entry.defaultModel === 'string' ? clean([entry.defaultModel])[0] || undefined : undefined,
 					updatedAt: Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0
 				}))
 				.filter(entry => entry.models.length)

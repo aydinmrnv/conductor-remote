@@ -37,6 +37,19 @@ touching the app. Relevant tables:
 - `repos` — `id, name, root_path, default_branch`. `root_path` is the primary checkout; worktrees live at `<workspacesRoot>/<repo.name>/<directory_name>`.
 - `diff_comments`, `terminal_sessions`, `attachments`, `settings` — secondary.
 
+Model state splits across those sources. A chat's live choice is durable in
+`sessions.model`; effort is provider-specific (`claude_effort_level` for Claude,
+`codex_thinking_level` for Codex). The similarly named defaults still present in
+the DB's `settings` table are legacy rows, not the current preference source:
+on 2026-09-02 the DB still said Codex `high` while the TOML and newly created
+Codex chats used `xhigh`; starring `5.6 Terra` changed neither
+`settings.default_model` nor either default-effort row (all retained their June timestamps). It rewrote
+`~/.conductor/settings.toml` under `[models]` and changed the target chat's
+`sessions.model`, because the star's actual AX label is **“Set … as default and
+select.”** Starring `5.6 Sol` restored both live values; the DB settings rows
+again did not move. Default reads therefore come from the starred picker / user
+settings TOML, never those stale DB rows, while per-chat reads remain SQLite.
+
 Crucially, **Conductor's `sessions.id` equals the Claude Code `claude_session_id`** — the app is a GUI over Claude Code sessions.
 
 ### Diffs

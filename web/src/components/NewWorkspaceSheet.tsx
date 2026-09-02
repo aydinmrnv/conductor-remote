@@ -112,6 +112,7 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	const attachmentError = attachments.some(attachment => attachment.status === 'error')
 	const hasInitialPrompt = !!prompt.trim() || readyAttachments.length > 0
 	const models = modelCatalog.data?.groups.flatMap(group => group.models) ?? []
+	const defaultModel = modelCatalog.data?.defaultModel
 	const anyAgentChoice = Object.keys(agent).length > 0
 	const stageAgent = (patch: AgentPatch) =>
 		setAgent(current => {
@@ -384,12 +385,13 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 					/>
 					<div className="mt-1 flex items-start gap-1 px-1">
 						<AgentControls
-							model={agent.model ?? 'Model'}
-							providerModel={agent.model ?? null}
+							model={agent.model ?? defaultModel ?? 'Model'}
+							providerModel={agent.model ?? defaultModel ?? null}
 							agentType={null}
 							models={models}
 							modelsFetching={modelCatalog.isFetching}
 							modelsError={modelCatalog.isError}
+							defaultModel={defaultModel}
 							fast={agent.fast}
 							effort={agent.effort}
 							plan={agent.plan}
@@ -398,7 +400,9 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							fastStaged={agent.fast !== undefined}
 							effortStaged={agent.effort !== undefined}
 							planStaged={agent.plan !== undefined}
-							onModelChange={model => stageAgent({ model: model === agent.model ? undefined : model })}
+							onModelChange={model =>
+								stageAgent({ model: model === (agent.model ?? defaultModel) ? undefined : model })
+							}
 							onFastChange={() =>
 								stageAgent({ fast: agent.fast === undefined ? true : agent.fast ? false : undefined })
 							}
