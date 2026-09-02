@@ -24,6 +24,7 @@
 import type { UpdateStatus } from './autoupdate.ts'
 import type { DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
+import type { GithubIssue } from './github.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
 import type { CachedModelGroup } from './model-cache.ts'
 import type { NoSleepState } from './nosleep.ts'
@@ -38,6 +39,7 @@ import type { ActuatorInfo, SendResult as ActuatorSendResult } from './writes.ts
 
 export type { BackgroundTask } from './background-tasks.ts'
 export type { DiffFile, WorkspaceDiff } from './git.ts'
+export type { GithubIssue } from './github.ts'
 export type { RepoIcon } from './icons.ts'
 export type { LogLevel } from './logbuf.ts'
 export type { MergeMethod, MergeResult } from './merge.ts'
@@ -107,6 +109,19 @@ export interface SearchResponse {
 /** GET /api/repos */
 export interface ReposResponse {
 	repos: RepoRow[]
+}
+
+/** GET /api/repos/:name/issues — the repo's open issues, from the Mac's `gh`. */
+export interface RepoIssuesResponse {
+	repo: string
+	issues: GithubIssue[]
+}
+
+/** GET /api/repos/:name/issues?issue= — one issue with its body, and the first prompt it makes. */
+export interface RepoIssueResponse {
+	issue: GithubIssue
+	/** What "Create from this issue" would send: title, link and body. */
+	prompt: string
 }
 
 /** GET /api/files/:reference — a bounded source preview for a chat file link. */

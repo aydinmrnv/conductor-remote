@@ -8,11 +8,13 @@ import { attachmentPrompt, writeAttachment } from './attachments.ts'
 import { startAutoUpdate, updateStatus } from './autoupdate.ts'
 import { loadConfig, stateDir } from './config.ts'
 import { ConductorDb } from './db.ts'
+import { linearIssueId } from './deeplink.ts'
 import { DevServerController } from './dev-server.ts'
 import { isAllowedPreviewPath, parseFileReference } from './file-preview.ts'
 import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { listSourceFiles, workspaceDiff } from './git.ts'
+import { getIssue, ghError, issuePrompt, listIssues } from './github.ts'
 import {
 	installLogCapture,
 	isManaged,
@@ -61,6 +63,7 @@ import {
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
 import { renderTranscript, transcriptThrough } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
+import type { RepoIssueResponse, RepoIssuesResponse } from './wire.ts'
 import {
 	type AgentOptions,
 	archiveWorkspace,
@@ -1156,8 +1159,17 @@ const server = http.createServer(async (req, res) => {
 					send?: boolean
 					sendImmediately?: boolean
 					attachmentIds?: string[]
+					/** A Linear issue (`ENG-123` or its link): Conductor fetches it and picks the repo itself. */
+					linearId?: string
 				}
 				const attachmentIds = body.attachmentIds ?? []
+				if (body.linearId !== undefined && typeof body.linearId !== 'string')
+					return json(req, res, 400, { error: 'linearId must be a string' })
+				const linearId = body.linearId?.trim() ? linearIssueId(body.linearId) : null
+				if (body.linearId?.trim() && !linearId)
+					return json(req, res, 400, {
+						error: 'linearId must be an identifier like ENG-123 or a linear.app issue link'
+					})
 				if (body.model !== undefined && typeof body.model !== 'string')
 					return json(req, res, 400, { error: 'model must be a picker label' })
 				if (body.effort !== undefined && typeof body.effort !== 'string')
@@ -1185,14 +1197,15 @@ const server = http.createServer(async (req, res) => {
 				const prompt = [...attachments.map(attachment => attachment.token), (body.prompt ?? '').trim()]
 					.filter(Boolean)
 					.join('\n')
-				if (!prompt && !body.repo) return json(req, res, 400, { error: 'need a repo or a prompt' })
+				if (!prompt && !body.repo && !linearId)
+					return json(req, res, 400, { error: 'need a repo, a prompt or a Linear issue' })
 				// Resolve the repo to a real path: an unmatched `path` would silently land
 				// the workspace in whichever repo Conductor happens to list first.
 				const repo = body.repo ? reads.listRepos().find(r => r.name === body.repo) : undefined
 				if (body.repo && !repo) return json(req, res, 404, { error: `unknown repo ${body.repo}` })
 				if (repo && !repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
 				const before = new Set(reads.listWorkspaces().map(w => w.id))
-				const result = await createWorkspace(prompt, repo?.root_path ?? null)
+				const result = await createWorkspace(prompt, repo?.root_path ?? null, linearId)
 				if (!result.ok) return json(req, res, 502, result)
 				// The deep link is fire-and-forget, so the new row is the only proof it worked.
 				// Creating a worktree takes a beat longer than opening a chat does.
@@ -1238,6 +1251,29 @@ const server = http.createServer(async (req, res) => {
 						failed?.error &&
 						`Workspace created; the initial ${configureAgent ? 'agent settings and prompt' : 'prompt'} didn’t finish (${failed.error}).`
 				})
+			}
+
+			// GET /api/repos/:name/issues[?issue=<number|url>] — open issues through the Mac's own
+			// `gh` login (private repos included), or one issue with its body plus the prompt a
+			// "Create from this issue" workspace starts with.
+			const issuesOf = routeParam(routes.repoIssues, req.method, pathname)
+			if (issuesOf) {
+				const repo = reads.listRepos().find(r => r.name === issuesOf)
+				if (!repo) return json(req, res, 404, { error: `unknown repo ${issuesOf}` })
+				if (!repo.root_path) return json(req, res, 409, { error: `${repo.name} has no checkout path` })
+				const ref = url.searchParams.get('issue')?.trim()
+				try {
+					if (ref) {
+						const issue = await getIssue(repo.root_path, ref)
+						return json(req, res, 200, { issue, prompt: issuePrompt(issue) } satisfies RepoIssueResponse)
+					}
+					return json(req, res, 200, {
+						repo: repo.name,
+						issues: await listIssues(repo.root_path)
+					} satisfies RepoIssuesResponse)
+				} catch (err) {
+					return json(req, res, 502, { error: ghError(err) })
+				}
 			}
 
 			// GET /api/repos/:name/icon — the repo's resolved sidebar icon (see src/icons.ts)

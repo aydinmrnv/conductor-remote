@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { createWorkspaceLink } from './deeplink.ts'
 import type { Workspace } from './reads.ts'
 import { isLockedError, modelPickerLabel } from './shared.ts'
 import { sidecarAvailable, sidecarSendUserMessage } from './sidecar.ts'
@@ -961,20 +962,19 @@ return my listModels()`.trim()
  * The link is fire-and-forget: it reports that Conductor was *handed* the URL,
  * never that a workspace appeared. The caller watches the DB for that.
  */
-export async function createWorkspace(prompt: string, repoPath: string | null): Promise<SendResult> {
-	if (!prompt.trim() && !repoPath) {
-		return { ok: false, strategy: 'deeplink', error: 'a new workspace needs a repo or a first prompt' }
+export async function createWorkspace(
+	prompt: string,
+	repoPath: string | null,
+	linearId: string | null = null
+): Promise<SendResult> {
+	const link = createWorkspaceLink(CONDUCTOR_SCHEME, prompt, repoPath, linearId)
+	if (!link) {
+		return { ok: false, strategy: 'deeplink', error: 'a new workspace needs a repo, a first prompt or a Linear issue' }
 	}
-	const query = [
-		prompt.trim() ? `prompt=${encodeURIComponent(prompt)}` : '',
-		repoPath ? `path=${encodeURIComponent(repoPath)}` : ''
-	]
-		.filter(Boolean)
-		.join('&')
 	try {
 		// Serialized with the AX writes: creating a workspace pulls Conductor forward and
 		// switches which one is showing, which is precisely what a concurrent send assumes.
-		await uiTurn(() => exec('open', [`${CONDUCTOR_SCHEME}://${query}`], { timeout: 15000 }))
+		await uiTurn(() => exec('open', [link], { timeout: 15000 }))
 		return { ok: true, strategy: 'deeplink' }
 	} catch (err) {
 		return { ok: false, strategy: 'deeplink', error: osaError(err) }

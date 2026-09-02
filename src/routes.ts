@@ -69,6 +69,8 @@ export const routes = {
 	/** Picker labels the relay has previously read from Conductor, grouped by harness. */
 	modelCatalog: flat('GET', '/api/models'),
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
+	/** Open GitHub issues of a repo via the Mac's own `gh` login; `?issue=<number|url>` reads one with its body. */
+	repoIssues: param('GET', '/api/repos/:repo/issues'),
 	/** A temporary image emitted in a chat message, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),
 	/** A source-file preview linked from agent Markdown. */
