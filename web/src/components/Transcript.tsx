@@ -5,7 +5,7 @@ import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { elapsed, messagePreview, messageTime, timeAgo, timestampMs } from '../lib/format.ts'
-import { languageForTool } from '../lib/highlight.ts'
+import { languageForTool, languageForToolOutput } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../lib/transcript-actions.ts'
@@ -731,7 +731,11 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 						{e.diff ? (
 							<Patch patch={e.output} />
 						) : (
-							<Mono text={e.output} className={e.error ? 'text-del/80' : 'text-muted'} />
+							<Mono
+								text={e.output}
+								className={e.error ? 'text-del/80' : 'text-muted'}
+								language={e.error ? null : languageForToolOutput(e.tool, e.detail)}
+							/>
 						)}
 					</div>
 				) : null}

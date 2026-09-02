@@ -1388,11 +1388,13 @@ yarn service  # {status,restart,uninstall} the LaunchAgent
     20× slower (0.24ms per command, 47ms per file, plus 36ms compiling grammars
     before the first line is coloured). So the languages are registered one at a time
     and anything unregistered renders plain, exactly as it did before.
-    Three places show it and each gets it differently. A **Bash step** colours only in
+    Four places show it and each gets it differently. A **Bash step** colours only in
     the *open* body — the closed row is one truncated line, and colouring it would
     tokenise every step on a chat's first paint (256 Bash calls in the largest chat
-    here). A **fenced block** in a message rides `Markdown`'s existing memo, so it
-    tokenises once per message ever shown. The **source preview** is the one that
+    here). A **Read step** resolves its result's language from the file path already
+    carried as its detail, using only the registered set above; failed reads and unknown
+    extensions stay plain. A **fenced block** in a message rides `Markdown`'s existing
+    memo, so it tokenises once per message ever shown. The **source preview** is the one that
     needs `lowlight` rather than bare highlight.js: it draws its own element per line
     for the gutter, and a token routinely covers several lines (a block comment, a
     template literal), so highlight.js's HTML string cannot be split at `\n` without
