@@ -1262,6 +1262,19 @@ bind trap below), not by unit test.
   tailnet (Admin console nodeAttr) or it falls back to tailnet-only and says so.
   `curl 127.0.0.1:8787` works for local checks; `yarn service status` prints the URL
   and whether it's public or tailnet-only.
+  **The relay is not always on :443, and the deploy must never assume it is.** Funnel
+  listens on 443, 8443 and 10000 only, and OpenAI's cloud dials nothing but 443
+  (measured 2026-09-02), so a voice listener that needs a webhook owns `:443` via
+  Funnel and the relay sits tailnet-only on `:8787` — expect that to be the norm.
+  `relayServeState` (`src/tailscale.ts`) reads every `host:port` key in
+  `serve status --json` for the `/` mount that proxies to the relay, so `status`
+  prints `https://<node>:8787/` with its QR. The writes follow one rule: a mapping is
+  kept wherever it lives, a port that carries someone else's mount is never written
+  to (a fresh mount steps to the next free port, a shared port is reported), and
+  `funnel reset` is gone from the deploy — it wiped every mount on the node, and
+  serving a port again without `funnel` drops that port's Funnel flag on its own.
+  The watchdog refuses its heal on the same evidence, because `funnel --bg 8787`
+  mounts on :443 whatever is there.
 - **Workspace dev-server forwards are always tailnet-only, regardless of `EXPOSE`.**
   `src/dev-server.ts` presses Conductor's selected Run/Stop task through the same
   fail-closed Accessibility path as other writes; Conductor still owns the process
