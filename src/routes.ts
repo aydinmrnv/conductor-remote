@@ -71,6 +71,10 @@ export const routes = {
 	repoIcon: param('GET', '/api/repos/:repo/icon'),
 	/** Open GitHub issues of a repo via the Mac's own `gh` login; `?issue=<number|url>` reads one with its body. */
 	repoIssues: param('GET', '/api/repos/:repo/issues'),
+	/** Linear issues assigned to the relay's Linear key; `configured:false` when there is no key yet. */
+	linearIssues: flat('GET', '/api/linear/issues'),
+	/** Store or clear the relay's Linear API key. */
+	linearKey: flat('PATCH', '/api/linear/key'),
 	/** A temporary image emitted in a chat message, fetched with the phone's auth header. */
 	localImage: param('GET', '/api/local-images/:path'),
 	/** A source-file preview linked from agent Markdown. */

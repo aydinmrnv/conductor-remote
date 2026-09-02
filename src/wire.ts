@@ -25,6 +25,7 @@ import type { UpdateStatus } from './autoupdate.ts'
 import type { DevServerResult, DevServerState } from './dev-server.ts'
 import type { FirstPrompt } from './firstprompt.ts'
 import type { GithubIssue } from './github.ts'
+import type { LinearIssue } from './linear.ts'
 import type { LogEntry, LogFileInfo } from './logbuf.ts'
 import type { CachedModelGroup } from './model-cache.ts'
 import type { NoSleepState } from './nosleep.ts'
@@ -41,6 +42,7 @@ export type { BackgroundTask } from './background-tasks.ts'
 export type { DiffFile, WorkspaceDiff } from './git.ts'
 export type { GithubIssue } from './github.ts'
 export type { RepoIcon } from './icons.ts'
+export type { LinearIssue } from './linear.ts'
 export type { LogLevel } from './logbuf.ts'
 export type { MergeMethod, MergeResult } from './merge.ts'
 export type { NoSleepResult } from './nosleep.ts'
@@ -115,6 +117,22 @@ export interface ReposResponse {
 export interface RepoIssuesResponse {
 	repo: string
 	issues: GithubIssue[]
+}
+
+/** GET /api/linear/issues — what the relay's Linear key can see, or that there is no key. */
+export interface LinearIssuesResponse {
+	configured: boolean
+	/** The key's user, for the Settings screen to show who the list belongs to. */
+	viewer: string | null
+	issues: LinearIssue[]
+}
+
+/** PATCH /api/linear/key { apiKey: string | null } */
+export interface LinearKeyResult {
+	ok: boolean
+	configured: boolean
+	viewer?: string | null
+	error?: string
 }
 
 /** GET /api/repos/:name/issues?issue= — one issue with its body, and the first prompt it makes. */

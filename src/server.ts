@@ -15,6 +15,7 @@ import { FirstPromptQueue } from './firstprompt.ts'
 import { startFunnelWatchdog } from './funnel-watchdog.ts'
 import { listSourceFiles, workspaceDiff } from './git.ts'
 import { getIssue, ghError, issuePrompt, listIssues } from './github.ts'
+import { linearApiKey, listAssignedIssues, saveLinearApiKey } from './linear.ts'
 import {
 	installLogCapture,
 	isManaged,
@@ -63,7 +64,7 @@ import {
 import { driftWarningLines, readExposeMode, tailscaleBin } from './tailscale.ts'
 import { renderTranscript, transcriptThrough } from './transcript.ts'
 import { autoJoinHotspotMode, currentSsid, looksLikeHotspot, preferredNetworks } from './wifi.ts'
-import type { RepoIssueResponse, RepoIssuesResponse } from './wire.ts'
+import type { LinearIssuesResponse, LinearKeyResult, RepoIssueResponse, RepoIssuesResponse } from './wire.ts'
 import {
 	type AgentOptions,
 	archiveWorkspace,
@@ -1251,6 +1252,42 @@ const server = http.createServer(async (req, res) => {
 						failed?.error &&
 						`Workspace created; the initial ${configureAgent ? 'agent settings and prompt' : 'prompt'} didn’t finish (${failed.error}).`
 				})
+			}
+
+			// GET /api/linear/issues — issues assigned to the relay's Linear key (see src/linear.ts).
+			// No key is an answer, not an error: the phone shows how to add one.
+			if (isRoute(routes.linearIssues, req.method, pathname)) {
+				const key = linearApiKey()
+				if (!key)
+					return json(req, res, 200, { configured: false, viewer: null, issues: [] } satisfies LinearIssuesResponse)
+				try {
+					const { viewer, issues } = await listAssignedIssues(key)
+					return json(req, res, 200, { configured: true, viewer, issues } satisfies LinearIssuesResponse)
+				} catch (err) {
+					return json(req, res, 502, { error: err instanceof Error ? err.message : String(err) })
+				}
+			}
+
+			// PATCH /api/linear/key { apiKey } — store the key (checked against Linear first) or clear it with null.
+			if (isRoute(routes.linearKey, req.method, pathname)) {
+				const body = JSON.parse((await readBody(req)) || '{}') as { apiKey?: string | null }
+				if (body.apiKey !== null && typeof body.apiKey !== 'string')
+					return json(req, res, 400, { error: 'apiKey must be a string, or null to forget it' })
+				if (!body.apiKey?.trim()) {
+					saveLinearApiKey(null)
+					return json(req, res, 200, { ok: true, configured: false } satisfies LinearKeyResult)
+				}
+				try {
+					const { viewer } = await listAssignedIssues(body.apiKey.trim())
+					saveLinearApiKey(body.apiKey)
+					return json(req, res, 200, { ok: true, configured: true, viewer } satisfies LinearKeyResult)
+				} catch (err) {
+					return json(req, res, 400, {
+						ok: false,
+						configured: !!linearApiKey(),
+						error: err instanceof Error ? err.message : String(err)
+					} satisfies LinearKeyResult)
+				}
 			}
 
 			// GET /api/repos/:name/issues[?issue=<number|url>] — open issues through the Mac's own
