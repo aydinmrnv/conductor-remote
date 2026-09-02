@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, GitFork, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, GitFork, Hourglass, Loader2 } from 'lucide-react'
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSendPrompt, useTranscript } from '../hooks.ts'
 import { client } from '../lib/api.ts'
@@ -9,7 +9,7 @@ import { languageForTool } from '../lib/highlight.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { isUnconfirmed, type PendingMessage } from '../lib/pending.ts'
 import { assistantTurnEnds, latestAssistantForActions, turnOrigin } from '../lib/transcript-actions.ts'
-import type { PendingPrompt, TranscriptEntry } from '../lib/types.ts'
+import type { BackgroundTask, PendingPrompt, TranscriptEntry } from '../lib/types.ts'
 import { useApp } from '../store.ts'
 import { Code } from './Code.tsx'
 import { ChatLink, Markdown, sourceReference } from './Markdown.tsx'
@@ -32,12 +32,19 @@ export function Transcript({
 	workingSince,
 	turnStartedAt,
 	queued,
+	waiting,
 	poll,
 	onFork
 }: {
 	sessionId: string | null
 	workspaceId: string
 	working?: boolean
+	/**
+	 * Background tasks the chat is waiting on (`Session.background_tasks`). Conductor
+	 * reads the chat `idle` meanwhile, so `working` is off and this is the only sign
+	 * the agent will be back.
+	 */
+	waiting?: BackgroundTask[]
 	/** Epoch ms the current answer started (see SessionView) — the elapsed timer's origin. */
 	workingSince?: number | null
 	/**
@@ -121,11 +128,12 @@ export function Transcript({
 		atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
 	}
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries, a new optimistic bubble, or the working indicator toggling to keep the view pinned
+	const waitingCount = waiting?.length ?? 0
+	// biome-ignore lint/correctness/useExhaustiveDependencies: fire on new entries, a new optimistic bubble, or an indicator toggling to keep the view pinned
 	useLayoutEffect(() => {
 		const el = scroller.current
 		if (el && atBottom.current) el.scrollTop = el.scrollHeight
-	}, [entries, visiblePending.length, working])
+	}, [entries, visiblePending.length, working, waitingCount])
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset scroll intent when switching sessions
 	useEffect(() => {
@@ -226,6 +234,9 @@ export function Transcript({
 								onDismiss={() => dismiss(showQueued)}
 							/>
 						) : null}
+						{waiting?.map(task => (
+							<WaitingIndicator key={task.taskId} task={task} />
+						))}
 						{/* The agent can publish a short update, then carry on with tools. Keep its
 					    live indicator after every transcript row so activity always reads as the
 					    newest item, rather than attaching it to that earlier update. */}
@@ -605,6 +616,32 @@ function WorkingIndicator({ since }: { since?: number | null }) {
 				<span className="typing-dot" />
 			</div>
 			{since ? <span className="text-[11px] tabular-nums text-faint">{elapsed(now - since)}</span> : null}
+		</div>
+	)
+}
+
+/**
+ * The desktop's "Waiting for task" row: a background command or subagent the agent
+ * handed off and will be resumed by. Drawn in the working indicator's place, because
+ * that is what it is — the turn ended and the chat reads `idle`, but the agent is
+ * coming back on its own — with the task's own description and how long it has waited.
+ */
+function WaitingIndicator({ task }: { task: BackgroundTask }) {
+	const since = Date.parse(task.since)
+	const [now, setNow] = useState(() => Date.now())
+	useEffect(() => {
+		setNow(Date.now())
+		const timer = setInterval(() => setNow(Date.now()), 1000)
+		return () => clearInterval(timer)
+	}, [])
+	return (
+		<div className="fade-in flex min-w-0 items-center gap-2 px-0.5 py-1.5 text-[12.5px] text-muted">
+			<Hourglass size={13} className="shrink-0 text-faint" />
+			<span className="shrink-0 text-faint">Waiting for task</span>
+			<span className="min-w-0 flex-1 truncate">{task.description}</span>
+			{Number.isNaN(since) ? null : (
+				<span className="shrink-0 text-[11px] tabular-nums text-faint">{elapsed(now - since)}</span>
+			)}
 		</div>
 	)
 }

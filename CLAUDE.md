@@ -54,6 +54,24 @@ Two asymmetric halves — keep them separate:
     reports null and the phone just shows the dots with no timer. It rides on the
     2s session poll for free — `idx_session_messages_sent_at(session_id, sent_at)`
     serves it directly.
+  - **A chat waiting on a background task reads `idle`, and the desktop's "Waiting
+    for task" row is in the SDK frames, not in `sessions`.** A `Bash` call with
+    `run_in_background` (or a background Agent) writes `system/task_started`
+    `{task_id, tool_use_id, description, task_type}`, the turn ends and `status` goes
+    `idle`; when the command finishes, `system/task_notification {task_id, status}`
+    closes it and the agent is resumed with a fresh `init`. So the phone saw a finished
+    turn and nothing more, and the notifier says "done" at the wait as well as at the
+    end. Measured 2026-09-02: 4,905 of 4,930 tasks closed — p50 6s, p90 98s, 7 over
+    an hour, one 14h — and `sessions.status` was `idle` on 7 of the 8 chats with one
+    open. `reads.listSessions` ▸ `background_tasks` (`src/background-tasks.ts`) is the
+    open set, started and not yet notified, **gated on the agent process**: Conductor
+    runs one `claude --resume=<session>` child per active chat and a task dies with
+    it — every one of the 25 never closed sits before a process restart — while an
+    abort does *not* end one (6 completed straight through "aborted by user"). So the
+    notification and the process's death are the only closes, and the process list is
+    `ps -axo pid=,lstart=,args=` on a 5s cache, **args only** — the environment
+    carries Conductor's tokens and is never requested. Cost: the frame scan is 4–8ms
+    on the largest chats here and runs only for a chat with a live process.
 - **Deep links carry the two writes that aren't fragile — creating a workspace
   and focusing one.** The *documented* links
   (conductor.build/docs/reference/deep-links) are
