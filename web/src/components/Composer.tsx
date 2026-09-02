@@ -3,6 +3,7 @@ import { ArrowUp, Info, LoaderCircle, Paperclip, Square, WifiOff, X } from 'luci
 import { useEffect, useRef, useState } from 'react'
 import { useSendPrompt } from '../hooks.ts'
 import { client } from '../lib/api.ts'
+import { enterSubmits } from '../lib/keys.ts'
 import { isLockedError } from '../lib/lock.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { ActuatorInfo, Attachment, Session } from '../lib/types.ts'
@@ -326,8 +327,10 @@ export function Composer({
 						event.preventDefault()
 						chooseFiles(files)
 					}}
+					// On a touch keyboard Enter breaks the line instead (lib/keys.ts): there is
+					// no Shift+Enter on a phone, and the Send button is right there.
 					onKeyDown={e => {
-						if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+						if (enterSubmits(e)) {
 							e.preventDefault()
 							send(e.metaKey || e.ctrlKey)
 						}

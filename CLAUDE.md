@@ -1147,6 +1147,17 @@ handler scan, and the relay/web import boundary.
   against a stubbed `self`, the way the browser loads it, so there is no browser and no
   service worker. Portable, so the ubuntu job runs it.
 
+- `tests/enter-submits.test.ts` — which Enter sends (`web/src/lib/keys.ts` ▸
+  `enterSubmits`). A phone's keyboard has no Shift+Enter, so its return key is the only
+  way to break a line, and for a while every one of them sent the prompt — half a
+  sentence at a time. So on a touch device (`pointer: coarse`, read at the keypress
+  because an iPad grows a fine pointer when a trackpad connects) Enter inserts the
+  newline and the Send button sends; a hardware keyboard keeps Enter-sends and
+  Shift+Enter; Cmd/Ctrl+Enter sends on both, and on the chat composer still means
+  Conductor's own queue-behind-the-answer. Both ways of getting it wrong are silent —
+  a phone that sends mid-sentence, or a desktop whose Enter stops sending — and the
+  device answer is injected, so it needs no browser. Portable, so the ubuntu job runs it.
+
 - `tests/routes.test.ts` — the `/api` route table (`src/routes.ts`). Every route
   matches the path it builds, the parameter survives encoding verbatim, no route answers
   another route's path, and a route answers its own method only. It earns its place on

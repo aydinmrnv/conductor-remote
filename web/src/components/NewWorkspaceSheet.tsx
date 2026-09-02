@@ -7,6 +7,7 @@ import { useModelCatalog, useRepos } from '../hooks.ts'
 import { client } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { NEW_WORKSPACE_DRAFT } from '../lib/draft.ts'
+import { enterSubmits } from '../lib/keys.ts'
 import { requestPrefsFlush } from '../lib/prefs.ts'
 import type { AgentPatch } from '../lib/types.ts'
 import { useApp } from '../store.ts'
@@ -371,10 +372,11 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 							event.preventDefault()
 							chooseFiles(files)
 						}}
-						// The chord the chat composer already uses. isComposing keeps an IME's
-						// own Enter (picking a candidate) from creating the workspace.
+						// The same rule as the chat composer (lib/keys.ts): Enter creates on a
+						// hardware keyboard, breaks the line on a touch one, and an IME's own
+						// Enter (picking a candidate) never creates the workspace.
 						onKeyDown={e => {
-							if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+							if (enterSubmits(e)) {
 								e.preventDefault()
 								void create()
 							}
