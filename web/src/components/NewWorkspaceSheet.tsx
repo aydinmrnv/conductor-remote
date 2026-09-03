@@ -258,228 +258,240 @@ export function NewWorkspaceSheet({ onClose }: { onClose: () => void }) {
 	// Portalled to <body> for the same reason as ConnectSheet/LogsSheet: the drawer <aside> it's
 	// opened from has a `transform`, which would make `fixed inset-0` mean "the drawer", not "the screen".
 	return createPortal(
-		<div className="fixed inset-0 z-50 flex flex-col bg-bg">
-			<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5">
-				<span className="flex-1 text-[15px] font-semibold">New workspace</span>
-				<button
-					type="button"
-					onClick={close}
-					aria-label="Close"
-					className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-				>
-					<X size={20} />
-				</button>
-			</header>
-
-			<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-				<div className="relative">
+		<div className="fixed inset-0 z-50 flex flex-col md:items-center md:justify-center md:bg-black/50 md:p-6 md:backdrop-blur-sm">
+			<div
+				role="dialog"
+				aria-modal="true"
+				aria-label="New workspace"
+				className="fade-in flex h-full w-full flex-col bg-background md:h-auto md:max-h-[85vh] md:w-[44rem] md:max-w-full md:rounded-3xl md:border md:border-border/60 md:bg-card/90 md:shadow-2xl md:backdrop-blur-xl"
+			>
+				<header className="pt-safe flex items-center gap-2 border-b border-border-soft px-3 pb-2.5 md:px-5 md:pt-4 md:pb-3">
+					<span className="flex-1 text-[15px] font-semibold">New workspace</span>
 					<button
 						type="button"
-						onClick={() => setPickerOpen(o => !o)}
-						aria-haspopup="menu"
-						aria-expanded={pickerOpen}
-						className="flex w-full items-center gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 text-left transition active:bg-surface-2"
+						onClick={close}
+						aria-label="Close"
+						className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 					>
-						{selected ? <RepoAvatar icon={selected.icon} name={selected.name} artwork="inset" /> : null}
-						<span className="min-w-0 flex-1 truncate text-[15px] font-medium">{selected?.name ?? 'Choose a repo'}</span>
-						<ChevronDown size={18} className={cn('shrink-0 text-muted transition', pickerOpen && 'rotate-180')} />
+						<X size={20} />
 					</button>
-					{pickerOpen ? (
-						<ul className="absolute inset-x-0 top-full z-10 mt-1 max-h-72 overflow-y-auto rounded-2xl border border-border bg-surface py-1 shadow-xl">
-							{repos.map(r => (
-								<li key={r.name}>
-									<button
-										type="button"
-										onClick={() => {
-											setRepo(r.name)
-											setLastNewWorkspaceRepo(r.name)
-											setPickerOpen(false)
-										}}
-										className="flex w-full items-center gap-3 px-3 py-2 text-left active:bg-surface-2"
-									>
-										<RepoAvatar icon={r.icon} name={r.name} artwork="inset" />
-										<span className="min-w-0 flex-1 truncate text-[15px]">{r.name}</span>
-										{r.name === repo ? <Check size={16} className="shrink-0 text-accent" /> : null}
-									</button>
-								</li>
-							))}
-						</ul>
-					) : null}
-				</div>
-				<fieldset
-					aria-label="First message"
-					onDragEnter={dragEnter}
-					onDragLeave={dragLeave}
-					onDragOver={dragOver}
-					onDrop={drop}
-					className={cn(
-						'relative m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60',
-						draggingFiles && 'border-accent bg-accent-soft'
-					)}
-				>
-					<input
-						ref={fileInput}
-						type="file"
-						multiple
-						className="hidden"
-						onChange={event => {
-							chooseFiles(event.target.files)
-							event.target.value = ''
-						}}
-					/>
-					{attachments.length ? (
-						<div className="flex flex-wrap gap-1 px-2 pb-1">
-							{attachments.map(attachment => (
-								<div
-									key={attachment.id}
-									title={attachment.error ?? attachment.name}
-									className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted"
-								>
-									{attachment.status === 'uploading' ? (
-										<LoaderCircle size={12} className="shrink-0 animate-spin" />
-									) : null}
-									<span className="truncate">
-										{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
-									</span>
-									<button
-										type="button"
-										onClick={() => removeAttachment(attachment.id)}
-										aria-label={`Remove ${attachment.name}`}
-										className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
-									>
-										<X size={13} />
-									</button>
-								</div>
-							))}
-						</div>
-					) : null}
-					<textarea
-						value={prompt}
-						onChange={e => setPrompt(e.target.value)}
-						onFocus={() => setFocusedDraft(NEW_WORKSPACE_DRAFT)}
-						onBlur={() => {
-							if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
-							requestPrefsFlush()
-						}}
-						placeholder="What should the agent do? (optional)"
-						rows={6}
-						// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
-						autoFocus
-						// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
-						className="block w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint"
-						onPaste={event => {
-							const files = event.clipboardData.files
-							if (!files.length) return
-							event.preventDefault()
-							chooseFiles(files)
-						}}
-						// The same rule as the chat composer (lib/keys.ts): Enter creates on a
-						// hardware keyboard, breaks the line on a touch one, and an IME's own
-						// Enter (picking a candidate) never creates the workspace.
-						onKeyDown={e => {
-							if (enterSubmits(e)) {
-								e.preventDefault()
-								void create()
-							}
-						}}
-					/>
-					<div className="mt-1 flex items-start gap-1 px-1">
-						<AgentControls
-							model={agent.model ?? defaultModel ?? 'Model'}
-							providerModel={agent.model ?? defaultModel ?? null}
-							agentType={null}
-							models={models}
-							modelsFetching={modelCatalog.isFetching}
-							modelsError={modelCatalog.isError}
-							defaultModel={defaultModel}
-							fast={agent.fast}
-							effort={agent.effort}
-							plan={agent.plan}
-							showEmptyEffort
-							modelStaged={agent.model !== undefined}
-							fastStaged={agent.fast !== undefined}
-							effortStaged={agent.effort !== undefined}
-							planStaged={agent.plan !== undefined}
-							onModelChange={model =>
-								stageAgent({ model: model === (agent.model ?? defaultModel) ? undefined : model })
-							}
-							onFastChange={() =>
-								stageAgent({ fast: agent.fast === undefined ? true : agent.fast ? false : undefined })
-							}
-							onEffortChange={() =>
-								stageAgent({
-									effort: agent.effort === 'ultracode' ? undefined : nextEffort(agent.effort)
-								})
-							}
-							onPlanChange={() =>
-								stageAgent({ plan: agent.plan === undefined ? true : agent.plan ? false : undefined })
-							}
-							status={anyAgentChoice ? 'Applies when the workspace opens' : undefined}
-						/>
+				</header>
+
+				<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+					<div className="relative">
 						<button
 							type="button"
-							onClick={() => fileInput.current?.click()}
-							disabled={!online}
-							aria-label="Attach files"
-							className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
+							onClick={() => setPickerOpen(o => !o)}
+							aria-haspopup="menu"
+							aria-expanded={pickerOpen}
+							className="flex w-full items-center gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 text-left transition active:bg-surface-2"
 						>
-							<Paperclip size={17} />
+							{selected ? <RepoAvatar icon={selected.icon} name={selected.name} artwork="inset" /> : null}
+							<span className="min-w-0 flex-1 truncate text-[15px] font-medium">
+								{selected?.name ?? 'Choose a repo'}
+							</span>
+							<ChevronDown
+								size={18}
+								className={cn('shrink-0 text-muted-foreground transition', pickerOpen && 'rotate-180')}
+							/>
 						</button>
+						{pickerOpen ? (
+							<ul className="absolute inset-x-0 top-full z-10 mt-1 max-h-72 overflow-y-auto rounded-2xl border border-border bg-surface py-1 shadow-xl">
+								{repos.map(r => (
+									<li key={r.name}>
+										<button
+											type="button"
+											onClick={() => {
+												setRepo(r.name)
+												setLastNewWorkspaceRepo(r.name)
+												setPickerOpen(false)
+											}}
+											className="flex w-full items-center gap-3 px-3 py-2 text-left active:bg-surface-2"
+										>
+											<RepoAvatar icon={r.icon} name={r.name} artwork="inset" />
+											<span className="min-w-0 flex-1 truncate text-[15px]">{r.name}</span>
+											{r.name === repo ? <Check size={16} className="shrink-0 text-primary" /> : null}
+										</button>
+									</li>
+								))}
+							</ul>
+						) : null}
 					</div>
-					{draggingFiles ? (
-						<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">
-							Drop files to attach
-						</div>
-					) : null}
-				</fieldset>
-				{/* A real checkbox behind a drawn one: the whole row is the tap target, and the
-				    box keeps its keyboard and VoiceOver behaviour. Disabled with no first message
-				    rather than hidden, or it would reflow the sheet under your thumb as you type. */}
-				<label
-					className={cn(
-						'flex items-start gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 transition active:bg-surface-2',
-						!hasInitialPrompt && 'opacity-40'
-					)}
-				>
-					<input
-						type="checkbox"
-						checked={sendNow}
-						disabled={!hasInitialPrompt}
-						onChange={e => {
-							setSendNow(e.target.checked)
-							saveSendNow(e.target.checked)
-						}}
-						className="sr-only"
-					/>
-					<span
+					<fieldset
+						aria-label="First message"
+						onDragEnter={dragEnter}
+						onDragLeave={dragLeave}
+						onDragOver={dragOver}
+						onDrop={drop}
 						className={cn(
-							'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-md border transition',
-							sendNow ? 'border-accent bg-accent text-bg' : 'border-border'
+							'relative m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-primary/60',
+							draggingFiles && 'border-primary bg-accent-soft'
 						)}
 					>
-						{sendNow ? <Check size={13} strokeWidth={3} /> : null}
-					</span>
-					<span className="min-w-0 flex-1">
-						<span className="block text-[15px] font-medium">Send immediately</span>
-						<span className="block text-xs text-muted">
-							{sendNow
-								? 'The prompt goes as soon as the chat and attached files are ready, without waiting for setup.'
-								: 'The prompt waits until the worktree has finished setting up.'}
+						<input
+							ref={fileInput}
+							type="file"
+							multiple
+							className="hidden"
+							onChange={event => {
+								chooseFiles(event.target.files)
+								event.target.value = ''
+							}}
+						/>
+						{attachments.length ? (
+							<div className="flex flex-wrap gap-1 px-2 pb-1">
+								{attachments.map(attachment => (
+									<div
+										key={attachment.id}
+										title={attachment.error ?? attachment.name}
+										className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted-foreground"
+									>
+										{attachment.status === 'uploading' ? (
+											<LoaderCircle size={12} className="shrink-0 animate-spin" />
+										) : null}
+										<span className="truncate">
+											{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
+										</span>
+										<button
+											type="button"
+											onClick={() => removeAttachment(attachment.id)}
+											aria-label={`Remove ${attachment.name}`}
+											className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
+										>
+											<X size={13} />
+										</button>
+									</div>
+								))}
+							</div>
+						) : null}
+						<textarea
+							value={prompt}
+							onChange={e => setPrompt(e.target.value)}
+							onFocus={() => setFocusedDraft(NEW_WORKSPACE_DRAFT)}
+							onBlur={() => {
+								if (useApp.getState().focusedDraft === NEW_WORKSPACE_DRAFT) setFocusedDraft(null)
+								requestPrefsFlush()
+							}}
+							placeholder="What should the agent do? (optional)"
+							rows={6}
+							// biome-ignore lint/a11y/noAutofocus: the sheet exists only to type this
+							autoFocus
+							// text-base or iOS auto-zooms on focus and won't zoom back out (see Composer).
+							className="block w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint"
+							onPaste={event => {
+								const files = event.clipboardData.files
+								if (!files.length) return
+								event.preventDefault()
+								chooseFiles(files)
+							}}
+							// The same rule as the chat composer (lib/keys.ts): Enter creates on a
+							// hardware keyboard, breaks the line on a touch one, and an IME's own
+							// Enter (picking a candidate) never creates the workspace.
+							onKeyDown={e => {
+								if (enterSubmits(e)) {
+									e.preventDefault()
+									void create()
+								}
+							}}
+						/>
+						<div className="mt-1 flex items-start gap-1 px-1">
+							<AgentControls
+								model={agent.model ?? defaultModel ?? 'Model'}
+								providerModel={agent.model ?? defaultModel ?? null}
+								agentType={null}
+								models={models}
+								modelsFetching={modelCatalog.isFetching}
+								modelsError={modelCatalog.isError}
+								defaultModel={defaultModel}
+								fast={agent.fast}
+								effort={agent.effort}
+								plan={agent.plan}
+								showEmptyEffort
+								modelStaged={agent.model !== undefined}
+								fastStaged={agent.fast !== undefined}
+								effortStaged={agent.effort !== undefined}
+								planStaged={agent.plan !== undefined}
+								onModelChange={model =>
+									stageAgent({ model: model === (agent.model ?? defaultModel) ? undefined : model })
+								}
+								onFastChange={() =>
+									stageAgent({ fast: agent.fast === undefined ? true : agent.fast ? false : undefined })
+								}
+								onEffortChange={() =>
+									stageAgent({
+										effort: agent.effort === 'ultracode' ? undefined : nextEffort(agent.effort)
+									})
+								}
+								onPlanChange={() =>
+									stageAgent({ plan: agent.plan === undefined ? true : agent.plan ? false : undefined })
+								}
+								status={anyAgentChoice ? 'Applies when the workspace opens' : undefined}
+							/>
+							<button
+								type="button"
+								onClick={() => fileInput.current?.click()}
+								disabled={!online}
+								aria-label="Attach files"
+								className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition active:bg-surface-2 active:text-text disabled:text-faint"
+							>
+								<Paperclip size={17} />
+							</button>
+						</div>
+						{draggingFiles ? (
+							<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary bg-accent-soft/90 text-sm font-medium text-primary">
+								Drop files to attach
+							</div>
+						) : null}
+					</fieldset>
+					{/* A real checkbox behind a drawn one: the whole row is the tap target, and the
+				    box keeps its keyboard and VoiceOver behaviour. Disabled with no first message
+				    rather than hidden, or it would reflow the sheet under your thumb as you type. */}
+					<label
+						className={cn(
+							'flex items-start gap-3 rounded-2xl border border-border bg-surface px-3 py-2.5 transition active:bg-surface-2',
+							!hasInitialPrompt && 'opacity-40'
+						)}
+					>
+						<input
+							type="checkbox"
+							checked={sendNow}
+							disabled={!hasInitialPrompt}
+							onChange={e => {
+								setSendNow(e.target.checked)
+								saveSendNow(e.target.checked)
+							}}
+							className="sr-only"
+						/>
+						<span
+							className={cn(
+								'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-md border transition',
+								sendNow ? 'border-primary bg-primary text-bg' : 'border-border'
+							)}
+						>
+							{sendNow ? <Check size={13} strokeWidth={3} /> : null}
 						</span>
-					</span>
-				</label>
-				{error ? <div className="text-xs text-del">{error}</div> : null}
-			</div>
+						<span className="min-w-0 flex-1">
+							<span className="block text-[15px] font-medium">Send immediately</span>
+							<span className="block text-xs text-muted-foreground">
+								{sendNow
+									? 'The prompt goes as soon as the chat and attached files are ready, without waiting for setup.'
+									: 'The prompt waits until the worktree has finished setting up.'}
+							</span>
+						</span>
+					</label>
+					{error ? <div className="text-xs text-del">{error}</div> : null}
+				</div>
 
-			<div className="pb-safe border-t border-border-soft p-3">
-				<button
-					type="button"
-					onClick={create}
-					disabled={!repo || busy || uploading || attachmentError || !online}
-					className="w-full rounded-2xl bg-accent px-4 py-3 text-[15px] font-semibold text-bg transition active:scale-[0.985] disabled:opacity-40"
-				>
-					{busy ? 'Creating…' : hasInitialPrompt ? 'Create & start' : 'Create empty workspace'}
-				</button>
+				<div className="pb-safe border-t border-border-soft p-3">
+					<button
+						type="button"
+						onClick={create}
+						disabled={!repo || busy || uploading || attachmentError || !online}
+						className="w-full rounded-2xl bg-primary px-4 py-3 text-[15px] font-semibold text-bg transition active:scale-[0.985] disabled:opacity-40"
+					>
+						{busy ? 'Creating…' : hasInitialPrompt ? 'Create & start' : 'Create empty workspace'}
+					</button>
+				</div>
 			</div>
 		</div>,
 		document.body

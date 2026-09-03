@@ -233,151 +233,153 @@ export function Composer({
 	const canSend = (!!text.trim() || readyAttachments.length > 0) && !uploading
 
 	return (
-		<div className="pb-safe border-t border-border-soft bg-bg px-3 pt-2">
-			{!online ? (
-				<div className="mb-2 flex items-center gap-1.5 rounded-lg bg-del/10 px-3 py-1.5 text-xs text-del">
-					<WifiOff size={12} />
-					Offline — drafts are saved, sending resumes when the relay is back
-				</div>
-			) : (
-				!precise && (
-					<div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] text-faint">
-						<Info size={12} />
-						{actuator?.caveat || 'Sends to the focused session'}
+		<div className="pb-safe border-t border-border/60 bg-background/70 px-3 pt-2 backdrop-blur-xl md:border-t-0 md:bg-transparent md:px-6 md:pb-5 md:backdrop-blur-none">
+			<div className="mx-auto w-full max-w-[86ch]">
+				{!online ? (
+					<div className="mb-2 flex items-center gap-1.5 rounded-lg bg-del/10 px-3 py-1.5 text-xs text-del">
+						<WifiOff size={12} />
+						Offline — drafts are saved, sending resumes when the relay is back
 					</div>
-				)
-			)}
-			{stopError ? (
-				<div className="mb-2 rounded-lg border border-del/40 bg-del/10 px-3 py-1.5 text-xs text-del">
-					<button type="button" onClick={() => setStopError(null)} className="block w-full text-left">
-						{stopError}
-					</button>
-					{isLockedError(stopError) ? <UnlockLink className="mt-1 inline-block" /> : null}
-				</div>
-			) : null}
-			{/* `has-[textarea:focus]`, not `focus-within`: the controls inside the card take
+				) : (
+					!precise && (
+						<div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] text-faint">
+							<Info size={12} />
+							{actuator?.caveat || 'Sends to the focused session'}
+						</div>
+					)
+				)}
+				{stopError ? (
+					<div className="mb-2 rounded-lg border border-del/40 bg-del/10 px-3 py-1.5 text-xs text-del">
+						<button type="button" onClick={() => setStopError(null)} className="block w-full text-left">
+							{stopError}
+						</button>
+						{isLockedError(stopError) ? <UnlockLink className="mt-1 inline-block" /> : null}
+					</div>
+				) : null}
+				{/* `has-[textarea:focus]`, not `focus-within`: the controls inside the card take
 			    focus too, and lighting the whole card up on a Plan tap reads as a typo. */}
-			<fieldset
-				aria-label="Message composer"
-				onDragEnter={dragEnter}
-				onDragLeave={dragLeave}
-				onDragOver={dragOver}
-				onDrop={drop}
-				className={`m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 has-[textarea:focus]:border-accent/60 ${draggingFiles ? 'border-accent bg-accent-soft' : ''}`}
-			>
-				<input
-					ref={fileInput}
-					type="file"
-					multiple
-					className="hidden"
-					onChange={event => {
-						chooseFiles(event.target.files)
-						event.target.value = ''
-					}}
-				/>
-				{activeAttachments.length ? (
-					<div className="flex flex-wrap gap-1 px-2 pb-1">
-						{activeAttachments.map(attachment => (
-							<div
-								key={attachment.id}
-								title={attachment.error ?? attachment.name}
-								className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted"
-							>
-								{attachment.status === 'uploading' ? (
-									<LoaderCircle size={12} className="shrink-0 animate-spin" />
-								) : null}
-								<span className="truncate">
-									{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
-								</span>
-								<button
-									type="button"
-									onClick={() => removeAttachment(attachment.id)}
-									aria-label={`Remove ${attachment.name}`}
-									className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
+				<fieldset
+					aria-label="Message composer"
+					onDragEnter={dragEnter}
+					onDragLeave={dragLeave}
+					onDragOver={dragOver}
+					onDrop={drop}
+					className={`m-0 min-w-0 rounded-2xl border border-border bg-surface p-2 transition-[border-color,box-shadow] has-[textarea:focus]:border-primary/60 has-[textarea:focus]:shadow-[0_0_0_4px_color-mix(in_oklab,var(--primary)_12%,transparent)] md:bg-card/80 md:backdrop-blur-xl ${draggingFiles ? 'border-primary bg-accent-soft' : ''}`}
+				>
+					<input
+						ref={fileInput}
+						type="file"
+						multiple
+						className="hidden"
+						onChange={event => {
+							chooseFiles(event.target.files)
+							event.target.value = ''
+						}}
+					/>
+					{activeAttachments.length ? (
+						<div className="flex flex-wrap gap-1 px-2 pb-1">
+							{activeAttachments.map(attachment => (
+								<div
+									key={attachment.id}
+									title={attachment.error ?? attachment.name}
+									className="flex max-w-full items-center gap-1 rounded-lg bg-surface-2 py-1 pl-2 pr-1 text-xs text-muted-foreground"
 								>
-									<X size={13} />
-								</button>
-							</div>
-						))}
-					</div>
-				) : null}
-				{draggingFiles ? (
-					<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-accent bg-accent-soft/90 text-sm font-medium text-accent">
-						Drop files to attach
-					</div>
-				) : null}
-				<textarea
-					ref={ref}
-					rows={1}
-					value={text}
-					disabled={disabled}
-					placeholder={disabled ? 'No active session' : 'Send a prompt…'}
-					// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
-					// takes focus, and never zooms back out on blur.
-					className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
-					onChange={e => setDraft(draftKey, e.target.value)}
-					onFocus={() => setFocusedDraft(draftKey)}
-					onBlur={() => {
-						if (useApp.getState().focusedDraft === draftKey) setFocusedDraft(null)
-						requestPrefsFlush()
-					}}
-					onPaste={event => {
-						const files = event.clipboardData.files
-						if (!files.length) return
-						event.preventDefault()
-						chooseFiles(files)
-					}}
-					// On a touch keyboard Enter breaks the line instead (lib/keys.ts): there is
-					// no Shift+Enter on a phone, and the Send button is right there.
-					onKeyDown={e => {
-						if (enterSubmits(e)) {
-							e.preventDefault()
-							send(e.metaKey || e.ctrlKey)
-						}
-					}}
-				/>
-				<div className="mt-1 flex items-start gap-1">
-					{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
-					<button
-						type="button"
-						onClick={() => fileInput.current?.click()}
-						disabled={disabled || !online}
-						aria-label="Attach files"
-						className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text disabled:text-faint"
-					>
-						<Paperclip size={17} />
-					</button>
-					{canStop ? (
+									{attachment.status === 'uploading' ? (
+										<LoaderCircle size={12} className="shrink-0 animate-spin" />
+									) : null}
+									<span className="truncate">
+										{attachment.status === 'error' ? `${attachment.name}: ${attachment.error}` : attachment.name}
+									</span>
+									<button
+										type="button"
+										onClick={() => removeAttachment(attachment.id)}
+										aria-label={`Remove ${attachment.name}`}
+										className="flex size-5 shrink-0 items-center justify-center rounded active:bg-surface"
+									>
+										<X size={13} />
+									</button>
+								</div>
+							))}
+						</div>
+					) : null}
+					{draggingFiles ? (
+						<div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary bg-accent-soft/90 text-sm font-medium text-primary">
+							Drop files to attach
+						</div>
+					) : null}
+					<textarea
+						ref={ref}
+						rows={1}
+						value={text}
+						disabled={disabled}
+						placeholder={disabled ? 'No active session' : 'Send a prompt…'}
+						// text-base is load-bearing: iOS auto-zooms the page when a field under 16px
+						// takes focus, and never zooms back out on blur.
+						className="block max-h-40 w-full resize-none bg-transparent px-2 py-1 text-base outline-none placeholder:text-faint disabled:opacity-50"
+						onChange={e => setDraft(draftKey, e.target.value)}
+						onFocus={() => setFocusedDraft(draftKey)}
+						onBlur={() => {
+							if (useApp.getState().focusedDraft === draftKey) setFocusedDraft(null)
+							requestPrefsFlush()
+						}}
+						onPaste={event => {
+							const files = event.clipboardData.files
+							if (!files.length) return
+							event.preventDefault()
+							chooseFiles(files)
+						}}
+						// On a touch keyboard Enter breaks the line instead (lib/keys.ts): there is
+						// no Shift+Enter on a phone, and the Send button is right there.
+						onKeyDown={e => {
+							if (enterSubmits(e)) {
+								e.preventDefault()
+								send(e.metaKey || e.ctrlKey)
+							}
+						}}
+					/>
+					<div className="mt-1 flex items-start gap-1">
+						{session ? <AgentBar session={session} workspaceId={workspaceId} /> : <span className="flex-1" />}
 						<button
 							type="button"
-							onClick={stop}
-							disabled={stopping || !online}
-							aria-label="Stop the agent"
-							className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-text transition active:bg-surface-2 disabled:text-faint"
+							onClick={() => fileInput.current?.click()}
+							disabled={disabled || !online}
+							aria-label="Attach files"
+							className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition active:bg-surface-2 active:text-text disabled:text-faint"
 						>
-							{stopping ? (
-								<span className="size-4 animate-spin rounded-full border-2 border-border border-t-text" />
-							) : (
-								<Square size={14} fill="currentColor" />
-							)}
+							<Paperclip size={17} />
 						</button>
-					) : null}
-					{/* Send hides while a working chat has nothing to steer with — the same
+						{canStop ? (
+							<button
+								type="button"
+								onClick={stop}
+								disabled={stopping || !online}
+								aria-label="Stop the agent"
+								className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border text-text transition active:bg-surface-2 disabled:text-faint"
+							>
+								{stopping ? (
+									<span className="size-4 animate-spin rounded-full border-2 border-border border-t-text" />
+								) : (
+									<Square size={14} fill="currentColor" />
+								)}
+							</button>
+						) : null}
+						{/* Send hides while a working chat has nothing to steer with — the same
 					    empty-box rule the desktop composer uses, so the two never disagree
 					    about what a tap in that corner does. */}
-					{canStop && !canSend ? null : (
-						<button
-							type="button"
-							onClick={() => send()}
-							disabled={disabled || !canSend || !online}
-							aria-label="Send"
-							className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
-						>
-							<ArrowUp size={18} />
-						</button>
-					)}
-				</div>
-			</fieldset>
+						{canStop && !canSend ? null : (
+							<button
+								type="button"
+								onClick={() => send()}
+								disabled={disabled || !canSend || !online}
+								aria-label="Send"
+								className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition active:scale-95 disabled:bg-surface-2 disabled:text-faint"
+							>
+								<ArrowUp size={18} />
+							</button>
+						)}
+					</div>
+				</fieldset>
+			</div>
 		</div>
 	)
 }

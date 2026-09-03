@@ -164,15 +164,19 @@ export function ReloadPrompt() {
 
 	return (
 		<div className="pb-safe fade-in fixed inset-x-0 bottom-0 z-[60] mx-auto flex max-w-sm items-center gap-3 rounded-t-2xl border border-border-soft bg-surface px-4 py-3 shadow-xl">
-			<RefreshCw size={15} className="shrink-0 text-accent" />
+			<RefreshCw size={15} className="shrink-0 text-primary" />
 			<span className="flex-1 text-sm">New version ready</span>
-			<button type="button" onClick={snooze} className="rounded-lg px-2 py-1 text-xs text-muted active:bg-surface-2">
+			<button
+				type="button"
+				onClick={snooze}
+				className="rounded-lg px-2 py-1 text-xs text-muted-foreground active:bg-surface-2"
+			>
 				Later
 			</button>
 			<button
 				type="button"
 				onClick={apply}
-				className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-black transition active:scale-95"
+				className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-black transition active:scale-95"
 			>
 				Update
 			</button>

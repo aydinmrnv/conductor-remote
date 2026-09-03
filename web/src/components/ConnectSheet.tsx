@@ -60,12 +60,12 @@ export function ConnectSheet({
 	// document can't rescue it either — `html,body{overflow:hidden}` (see index.css), by design.
 	return createPortal(
 		<>
-			<div className="fixed inset-0 z-50 bg-black/60" onClick={onClose} aria-hidden />
+			<div className="fixed inset-0 z-50 bg-black/60 md:backdrop-blur-sm" onClick={onClose} aria-hidden />
 			<div
 				role="dialog"
 				aria-modal="true"
 				aria-label="Connect a device"
-				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[85dvh] max-w-sm flex-col items-center gap-4 rounded-t-3xl border border-border-soft bg-surface p-5 shadow-xl md:inset-0 md:m-auto md:h-fit md:rounded-3xl"
+				className="fade-in pb-safe fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[85dvh] max-w-sm flex-col items-center gap-4 rounded-t-3xl border border-border-soft bg-surface p-5 shadow-xl md:inset-0 md:m-auto md:h-fit md:rounded-3xl md:border-border/60 md:bg-card/90 md:backdrop-blur-xl"
 			>
 				<div className="flex w-full shrink-0 items-center justify-between">
 					<h2 className="text-base font-semibold">Connect a device</h2>
@@ -91,7 +91,7 @@ export function ConnectSheet({
 							type="button"
 							onClick={onClose}
 							aria-label="Close"
-							className="flex size-8 items-center justify-center rounded-full text-muted active:bg-surface-2"
+							className="flex size-8 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 						>
 							<X size={18} />
 						</button>
@@ -103,7 +103,7 @@ export function ConnectSheet({
 				{confirming ? (
 					<div className="fade-in w-full shrink-0 rounded-xl border border-del/40 bg-del/10 px-3 py-2.5 text-left">
 						<p className="text-sm font-medium">Disconnect this device?</p>
-						<p className="mt-1 text-xs text-muted">
+						<p className="mt-1 text-xs text-muted-foreground">
 							This forgets your access token. To get back in you’ll need the link or QR from the Mac running the relay —
 							this screen can’t show it to you again.
 						</p>
@@ -126,7 +126,7 @@ export function ConnectSheet({
 					</div>
 				) : null}
 				<div className="flex w-full min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain">
-					<p className="text-center text-sm text-muted">
+					<p className="text-center text-sm text-muted-foreground">
 						Scan on another phone, or re-add this to your home screen. The link carries your access token.
 					</p>
 					<div className="shrink-0 rounded-2xl bg-white p-3">
@@ -149,7 +149,11 @@ export function ConnectSheet({
 							<span className={stale ? 'text-working' : undefined}>app v{__APP_VERSION__}</span>
 							{stale ? ' · update pending' : ''}
 						</span>
-						<button type="button" onClick={onLogs} className="shrink-0 text-muted underline-offset-2 hover:underline">
+						<button
+							type="button"
+							onClick={onLogs}
+							className="shrink-0 text-muted-foreground underline-offset-2 hover:underline"
+						>
 							Logs
 						</button>
 					</div>
@@ -193,7 +197,7 @@ function NotificationsRow() {
 		<div className="w-full shrink-0 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex min-w-0 items-center gap-2 text-sm">
-					<Bell size={16} className={cn('shrink-0', push.enabled ? 'text-accent' : 'text-muted')} />
+					<Bell size={16} className={cn('shrink-0', push.enabled ? 'text-primary' : 'text-muted-foreground')} />
 					<span>Notifications</span>
 				</div>
 				<button
@@ -205,7 +209,7 @@ function NotificationsRow() {
 					onClick={() => void (push.enabled ? push.disable() : push.enable())}
 					className={cn(
 						'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-						push.enabled ? 'bg-accent' : 'border border-border bg-surface',
+						push.enabled ? 'bg-primary' : 'border border-border bg-surface',
 						(unavailable || blocked || push.busy) && 'opacity-40'
 					)}
 				>
@@ -219,14 +223,14 @@ function NotificationsRow() {
 					/>
 				</button>
 			</div>
-			<p className="mt-1 text-xs text-muted">{explain}</p>
+			<p className="mt-1 text-xs text-muted-foreground">{explain}</p>
 			{push.error ? <p className="mt-1 text-xs text-del">{push.error}</p> : null}
 			{push.enabled ? (
 				<button
 					type="button"
 					onClick={() => void push.test()}
 					disabled={push.busy}
-					className="mt-1.5 text-xs text-muted underline-offset-2 hover:underline disabled:opacity-50"
+					className="mt-1.5 text-xs text-muted-foreground underline-offset-2 hover:underline disabled:opacity-50"
 				>
 					Send a test notification
 				</button>
@@ -310,7 +314,7 @@ function MacRow() {
 		<div className="flex w-full shrink-0 flex-col gap-2.5 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex min-w-0 items-center gap-2 text-sm">
-					<Sun size={16} className={cn('shrink-0', nosleep?.armed ? 'text-accent' : 'text-muted')} />
+					<Sun size={16} className={cn('shrink-0', nosleep?.armed ? 'text-primary' : 'text-muted-foreground')} />
 					<span>Keep the Mac awake</span>
 				</div>
 				{nosleep?.armed ? (
@@ -351,7 +355,7 @@ function MacRow() {
 					</div>
 				)}
 			</div>
-			<p className="text-xs text-muted">
+			<p className="text-xs text-muted-foreground">
 				{!data
 					? 'Checking…'
 					: !nosleep?.available
@@ -375,7 +379,10 @@ function MacRow() {
 			<div className="border-t border-border pt-2.5">
 				<div className="flex items-center justify-between gap-3">
 					<div className="flex min-w-0 items-center gap-2 text-sm">
-						<Wifi size={16} className={cn('shrink-0', data?.settings.autoRejoin ? 'text-accent' : 'text-muted')} />
+						<Wifi
+							size={16}
+							className={cn('shrink-0', data?.settings.autoRejoin ? 'text-primary' : 'text-muted-foreground')}
+						/>
 						<span>Fallback network</span>
 					</div>
 					{fallback ? (
@@ -391,7 +398,7 @@ function MacRow() {
 				</div>
 
 				{fallback ? (
-					<p className="mt-1 text-xs text-muted">
+					<p className="mt-1 text-xs text-muted-foreground">
 						If the Mac loses its connection it joins <span className="text-fg">{fallback}</span> and re-registers.
 					</p>
 				) : (
@@ -454,7 +461,7 @@ function NetworkPicker({
 }) {
 	const [query, setQuery] = useState('')
 
-	if (known.length === 0) return <p className="mt-1 text-xs text-muted">No saved Wi-Fi networks to offer.</p>
+	if (known.length === 0) return <p className="mt-1 text-xs text-muted-foreground">No saved Wi-Fi networks to offer.</p>
 
 	const hot = new Set(hotspots)
 	const q = query.trim().toLowerCase()
@@ -464,7 +471,7 @@ function NetworkPicker({
 
 	return (
 		<>
-			<p className="mt-1 text-xs text-muted">
+			<p className="mt-1 text-xs text-muted-foreground">
 				Turn your hotspot on before you leave, and the Mac can move to it if the office Wi-Fi drops.
 			</p>
 			<input

@@ -7,7 +7,7 @@ import type { LogEntry, LogLevel } from '../lib/types.ts'
 import { Empty, Spinner } from './ui.tsx'
 
 const LEVEL_CLASS: Record<LogLevel, string> = {
-	info: 'text-muted',
+	info: 'text-muted-foreground',
 	warn: 'text-working',
 	error: 'text-del'
 }
@@ -103,12 +103,12 @@ export function LogsSheet({ onClose }: { onClose: () => void }) {
 				role="dialog"
 				aria-modal="true"
 				aria-label="Relay logs"
-				className="fade-in pt-safe pb-safe fixed inset-0 z-50 mx-auto flex flex-col bg-bg md:inset-6 md:rounded-3xl md:border md:border-border-soft"
+				className="fade-in pt-safe pb-safe fixed inset-0 z-50 mx-auto flex flex-col bg-background md:inset-10 md:rounded-3xl md:border md:border-border/60 md:bg-card/90 md:shadow-2xl md:backdrop-blur-xl"
 			>
 				<div className="flex items-center justify-between gap-2 border-b border-border-soft px-4 py-3">
 					<div className="min-w-0">
 						<h2 className="text-base font-semibold">Relay logs</h2>
-						<p className="truncate text-xs text-muted">
+						<p className="truncate text-xs text-muted-foreground">
 							{data
 								? `${shown.length} line${shown.length === 1 ? '' : 's'} · relay started ${ageSince(data.now - data.startedAt)}`
 								: 'Loading…'}
@@ -118,7 +118,7 @@ export function LogsSheet({ onClose }: { onClose: () => void }) {
 						type="button"
 						onClick={onClose}
 						aria-label="Close"
-						className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+						className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 					>
 						<X size={18} />
 					</button>

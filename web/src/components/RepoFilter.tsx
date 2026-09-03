@@ -65,8 +65,8 @@ function RepoOption({
 			<span className="min-w-0 flex-1 truncate">{label}</span>
 			<span
 				className={cn(
-					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent',
-					checked ? 'border-accent bg-accent text-white' : 'border-faint bg-surface'
+					'flex size-4 shrink-0 items-center justify-center rounded border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary',
+					checked ? 'border-primary bg-primary text-white' : 'border-faint bg-surface'
 				)}
 			>
 				{checked ? <Check size={12} strokeWidth={3} /> : null}

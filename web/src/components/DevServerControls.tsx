@@ -19,7 +19,7 @@ function openForward(url: string) {
 }
 
 const controlClass =
-	'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40'
+	'flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition active:bg-surface-2 disabled:opacity-40'
 
 /** Start, expose, open and stop the workspace's selected Conductor Run task. */
 export function DevServerControls({ workspaceId }: { workspaceId: string }) {

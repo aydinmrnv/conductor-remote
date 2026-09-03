@@ -93,7 +93,7 @@ export function ChatLink({ href, children, onClick, ...props }: React.ComponentP
 		return (
 			<span
 				title={attachment}
-				className="inline-flex max-w-full items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 align-baseline text-[0.9em] font-medium text-muted"
+				className="inline-flex max-w-full items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 align-baseline text-[0.9em] font-medium text-muted-foreground"
 			>
 				<Paperclip size={12} className="shrink-0" />
 				<span className="truncate">{children}</span>
@@ -175,20 +175,22 @@ function FilePreviewSheet({ reference, onClose }: { reference: string; onClose: 
 				<header className="flex items-center gap-3 border-b border-border-soft px-4 py-3">
 					<div className="min-w-0 flex-1">
 						<h2 className="text-base font-semibold">Source</h2>
-						<p className="truncate font-mono text-xs text-muted">{preview?.path ?? reference}</p>
+						<p className="truncate font-mono text-xs text-muted-foreground">{preview?.path ?? reference}</p>
 					</div>
 					<button
 						type="button"
 						onClick={onClose}
 						aria-label="Close source preview"
-						className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+						className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 					>
 						<X size={18} />
 					</button>
 				</header>
 				<div className="min-h-0 flex-1 overflow-auto">
 					{!preview && !error ? <Spinner label="Reading source…" /> : null}
-					{error ? <p className="mx-auto max-w-xs px-6 py-16 text-center text-sm text-muted">{error}</p> : null}
+					{error ? (
+						<p className="mx-auto max-w-xs px-6 py-16 text-center text-sm text-muted-foreground">{error}</p>
+					) : null}
 					{preview ? (
 						isMarkdownFile(preview.path) ? (
 							<MarkdownFile preview={preview} />
@@ -237,7 +239,7 @@ function SourceLines({
 	}, [preview.content, language])
 	return (
 		<>
-			<pre className="min-w-max p-3 font-mono text-[11.5px] leading-[1.5] text-muted">
+			<pre className="min-w-max p-3 font-mono text-[11.5px] leading-[1.5] text-muted-foreground">
 				{text.map((line, index) => {
 					const number = preview.lineStart + index
 					const selected = number === preview.line
@@ -317,7 +319,7 @@ function FileMention({
 				onClick={() => setPreviewing(true)}
 				className="max-w-full align-baseline text-left"
 			>
-				<code {...props} className="text-accent underline decoration-dotted underline-offset-2">
+				<code {...props} className="text-primary underline decoration-dotted underline-offset-2">
 					{children}
 				</code>
 			</button>

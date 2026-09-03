@@ -1,4 +1,77 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn/ui tokens, mapped onto this app's palette so `bg-background`, `text-muted-foreground`
+   and the rest of the component library agree with the older `bg-surface`/`text-muted`
+   utilities below. The app renders dark (html.dark); the light set is here for completeness. */
+:root {
+	--radius: 0.75rem;
+	--background: oklch(0.985 0.002 270);
+	--foreground: oklch(0.18 0.01 270);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.18 0.01 270);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.18 0.01 270);
+	--primary: oklch(0.55 0.2 285);
+	--primary-foreground: oklch(0.99 0 0);
+	--secondary: oklch(0.95 0.005 270);
+	--secondary-foreground: oklch(0.25 0.01 270);
+	--muted: oklch(0.95 0.005 270);
+	--muted-foreground: oklch(0.5 0.01 270);
+	--accent: oklch(0.94 0.02 285);
+	--accent-foreground: oklch(0.25 0.05 285);
+	--destructive: oklch(0.6 0.2 25);
+	--border: oklch(0.9 0.005 270);
+	--input: oklch(0.9 0.005 270);
+	--ring: oklch(0.55 0.2 285);
+}
+.dark {
+	--background: #0a0b0e;
+	--foreground: #e7e9ee;
+	--card: #14161b;
+	--card-foreground: #e7e9ee;
+	--popover: #14161b;
+	--popover-foreground: #e7e9ee;
+	--primary: #8b7dff;
+	--primary-foreground: #0a0b0e;
+	--secondary: #1b1e26;
+	--secondary-foreground: #e7e9ee;
+	--muted: #1b1e26;
+	--muted-foreground: #8b909d;
+	--accent: #2a2650;
+	--accent-foreground: #c9c2ff;
+	--destructive: #ff6b6b;
+	--border: #262a33;
+	--input: #262a33;
+	--ring: #8b7dff;
+}
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--radius-2xl: calc(var(--radius) + 8px);
+}
 
 @theme {
 	--color-bg: #0a0b0e;
@@ -7,10 +80,8 @@
 	--color-border: #262a33;
 	--color-border-soft: #1e222a;
 	--color-text: #e7e9ee;
-	--color-muted: #8b909d;
 	--color-faint: #5c616d;
 
-	--color-accent: #8b7dff;
 	--color-accent-soft: #2a2650;
 
 	--color-working: #f5a623;
@@ -26,8 +97,8 @@
 	--color-add: #3ecf8e;
 	--color-del: #ff6b6b;
 
-	--font-sans: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
+	--font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+	--font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @layer base {
@@ -126,14 +197,38 @@
 		width: 0;
 		height: 0;
 	}
+	/* A pointer can aim at a scrollbar; a thumb cannot. Thin, quiet, and only there. */
+	@media (pointer: fine) {
+		::-webkit-scrollbar {
+			width: 8px;
+			height: 8px;
+		}
+		::-webkit-scrollbar-thumb {
+			border-radius: 999px;
+			background: color-mix(in srgb, var(--color-border) 90%, transparent);
+			border: 2px solid transparent;
+			background-clip: padding-box;
+		}
+		::-webkit-scrollbar-thumb:hover {
+			background: var(--color-muted-foreground);
+			background-clip: padding-box;
+		}
+	}
+	::selection {
+		background: color-mix(in srgb, var(--color-primary) 35%, transparent);
+	}
 }
 
 @layer components {
+	/* Translucent panel over the ambient background — sidebars, sheets, the composer. */
+	.glass {
+		@apply border border-border/60 bg-card/60 backdrop-blur-xl;
+	}
 	.card {
 		@apply flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3.5 text-left transition active:scale-[0.985] active:bg-surface-2;
 	}
 	.pill {
-		@apply rounded-full px-3.5 py-1.5 text-sm font-medium text-muted transition;
+		@apply rounded-full px-3.5 py-1.5 text-sm font-medium text-muted-foreground transition;
 	}
 	.pill-active {
 		@apply bg-surface-2 text-text;
@@ -142,7 +237,7 @@
 	   matches the textarea's own text inset, so every label inside the composer
 	   card starts on the same vertical rule as the prompt. */
 	.ctl {
-		@apply rounded-full px-2 py-1 text-[13px] font-medium text-muted transition;
+		@apply rounded-full px-2 py-1 text-[13px] font-medium text-muted-foreground transition;
 	}
 	.ctl-on {
 		@apply bg-surface-2 text-text;
@@ -150,7 +245,7 @@
 	/* Chosen on the phone, not yet pushed into Conductor — it rides along with the
 	   next message. Deliberately the accent, so "staged" can't read as "on". */
 	.ctl-staged {
-		@apply bg-accent-soft text-accent;
+		@apply bg-accent-soft text-primary;
 	}
 	.dot {
 		@apply size-2.5 shrink-0 rounded-full bg-faint;
@@ -181,7 +276,7 @@
 	}
 	/* One dot of the transcript's three-dot "agent is working" bubble; siblings stagger. */
 	.typing-dot {
-		@apply size-1.5 rounded-full bg-muted;
+		@apply size-1.5 rounded-full bg-muted-foreground;
 		animation: typing 1.2s ease-in-out infinite;
 	}
 	.typing-dot:nth-child(2) {
@@ -266,7 +361,7 @@
 		line-height: 1.5;
 	}
 	.md a {
-		color: var(--color-accent);
+		color: var(--color-primary);
 		text-decoration: underline;
 		text-underline-offset: 2px;
 	}
@@ -274,7 +369,7 @@
 		margin: 0.5em 0;
 		border-left: 2px solid var(--color-border);
 		padding-left: 0.75em;
-		color: var(--color-muted);
+		color: var(--color-muted-foreground);
 	}
 	.md hr {
 		margin: 1.25em 0;
@@ -330,7 +425,7 @@
 	.hljs-selector-tag,
 	.hljs-doctag,
 	.hljs-meta .hljs-keyword {
-		color: var(--color-accent);
+		color: var(--color-primary);
 	}
 	.hljs-string,
 	.hljs-regexp,

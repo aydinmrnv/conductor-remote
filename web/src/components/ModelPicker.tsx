@@ -101,7 +101,7 @@ export function ModelPicker({
 													className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-3 pr-1 text-left text-sm"
 												>
 													<span className="min-w-0 flex-1 truncate">{model}</span>
-													<Check size={13} className={cn('shrink-0 text-accent', value !== model && 'invisible')} />
+													<Check size={13} className={cn('shrink-0 text-primary', value !== model && 'invisible')} />
 												</button>
 												{onSetDefault ? (
 													<button
@@ -117,7 +117,7 @@ export function ModelPicker({
 														aria-pressed={isDefault}
 														className={cn(
 															'flex w-9 shrink-0 items-center justify-center text-faint disabled:opacity-60',
-															isDefault && 'text-accent'
+															isDefault && 'text-primary'
 														)}
 													>
 														{settingDefault === model ? (
@@ -131,7 +131,7 @@ export function ModelPicker({
 														size={14}
 														fill="currentColor"
 														aria-label={`${model} is the default model`}
-														className="mx-3 self-center text-accent"
+														className="mx-3 self-center text-primary"
 													/>
 												) : null}
 											</div>
@@ -140,7 +140,7 @@ export function ModelPicker({
 								</fieldset>
 							))
 						) : (
-							<div className="px-3 py-2 text-sm text-muted">
+							<div className="px-3 py-2 text-sm text-muted-foreground">
 								{isFetching ? 'Reading Conductor’s model list…' : empty}
 							</div>
 						)}

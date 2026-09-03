@@ -97,7 +97,7 @@ export function SessionView() {
 				{isLoading || (missing && loadingAny) ? (
 					<Spinner />
 				) : (
-					<div className="p-6 text-center text-sm text-muted">Workspace not found.</div>
+					<div className="p-6 text-center text-sm text-muted-foreground">Workspace not found.</div>
 				)}
 			</div>
 		)
@@ -167,7 +167,7 @@ export function SessionView() {
 									aria-label="Toggle diff panel"
 									aria-pressed={diffOpen}
 									className={cn(
-										'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2',
+										'flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition active:bg-surface-2',
 										diffOpen && 'bg-surface-2 text-text'
 									)}
 								>
@@ -264,7 +264,7 @@ function SessionTabs({
 						<span className="max-w-36 truncate">{s.title || 'Untitled'}</span>
 						<ContextPercent used={s.context_used_percent} />
 						{/* `unread_count` is a 0/1 flag, so a dot — not the meaningless number "1". */}
-						{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-accent" /> : null}
+						{isUnread(s, readMarks) ? <span className="dot size-1.5 bg-primary" /> : null}
 					</button>
 				))}
 			</div>
@@ -273,7 +273,7 @@ function SessionTabs({
 				onClick={onNewChat}
 				disabled={creating}
 				aria-label="New chat, same files"
-				className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40"
+				className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition active:bg-surface-2 disabled:opacity-40"
 			>
 				<Plus size={18} />
 			</button>
@@ -308,7 +308,7 @@ function DiffPanel({ workspaceId, onClose }: { workspaceId: string; onClose: () 
 					type="button"
 					onClick={onClose}
 					aria-label="Close diff panel"
-					className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+					className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 				>
 					<X size={20} />
 				</button>

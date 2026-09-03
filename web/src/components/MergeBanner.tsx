@@ -56,11 +56,11 @@ function pickAction(ws: Workspace, local?: LocalState): Action | null {
 
 const STATUS: Record<Action, { label: string; tone: string; icon?: ReactNode }> = {
 	push: { label: 'Uncommitted changes', tone: 'text-working', icon: <UploadCloud size={14} /> },
-	resolve: { label: 'Merge conflicts', tone: 'text-muted', icon: <AlertTriangle size={14} /> },
+	resolve: { label: 'Merge conflicts', tone: 'text-muted-foreground', icon: <AlertTriangle size={14} /> },
 	merge: { label: 'Ready to merge', tone: 'text-add' },
 	checks: { label: 'Checks running', tone: 'text-working', icon: <Loader2 size={14} className="animate-spin" /> },
 	failed: { label: 'Checks failed', tone: 'text-del', icon: <XCircle size={14} /> },
-	draft: { label: 'Draft', tone: 'text-muted' },
+	draft: { label: 'Draft', tone: 'text-muted-foreground' },
 	merged: { label: 'Merged', tone: 'text-pr-merged', icon: <GitMerge size={14} /> }
 }
 
@@ -141,7 +141,7 @@ export function MergeBanner({ ws, local }: { ws: Workspace; local?: LocalState }
 					rel="noreferrer"
 					className={cn(
 						'flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-0.5 font-mono text-[11px] active:bg-surface',
-						action === 'merged' ? 'bg-pr-merged/15 text-pr-merged' : 'bg-surface-2 text-muted'
+						action === 'merged' ? 'bg-pr-merged/15 text-pr-merged' : 'bg-surface-2 text-muted-foreground'
 					)}
 				>
 					#{ws.pr_number}
@@ -223,7 +223,11 @@ function Cta({
 
 function CancelBtn({ onClick }: { onClick: () => void }) {
 	return (
-		<button type="button" onClick={onClick} className="rounded-lg px-2 py-1 text-xs text-muted active:bg-surface-2">
+		<button
+			type="button"
+			onClick={onClick}
+			className="rounded-lg px-2 py-1 text-xs text-muted-foreground active:bg-surface-2"
+		>
 			Cancel
 		</button>
 	)

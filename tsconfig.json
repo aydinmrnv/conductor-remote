@@ -17,7 +17,9 @@
 		"isolatedModules": true,
 		"moduleDetection": "force",
 		"jsx": "react-jsx",
-		"types": ["node", "vite/client"]
+		"types": ["node", "vite/client"],
+		"baseUrl": ".",
+		"paths": { "@/*": ["./web/src/*"] }
 	},
 	"include": ["web/src", "src", "scripts", "tests", "numux.config.ts", "vite.config.ts", "vitest.config.ts"]
 }

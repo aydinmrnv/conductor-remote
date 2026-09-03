@@ -32,7 +32,7 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 
 	return (
 		<>
-			<div className="border-b border-border-soft px-3 py-2 text-xs text-muted">
+			<div className="border-b border-border-soft px-3 py-2 text-xs text-muted-foreground">
 				vs <span className="font-mono text-faint">{data.base}</span> · {data.files.length} file
 				{data.files.length === 1 ? '' : 's'}
 			</div>
@@ -42,7 +42,7 @@ function DiffBody({ workspaceId }: { workspaceId: string }) {
 			<ul className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 px-3 py-3 font-mono text-[12px]">
 				{data.files.map(f => (
 					<li key={f.path} className="col-span-3 grid grid-cols-subgrid items-center">
-						<span className="truncate text-muted">{f.path}</span>
+						<span className="truncate text-muted-foreground">{f.path}</span>
 						<span className="text-right text-add">{f.added ? `+${f.added}` : null}</span>
 						<span className="text-right text-del">{f.removed ? `−${f.removed}` : null}</span>
 					</li>

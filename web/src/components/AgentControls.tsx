@@ -100,8 +100,8 @@ export function AgentControls({
 								aria-haspopup="menu"
 								aria-expanded={picking}
 								className={cn(
-									'flex h-8 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
-									modelStaged && 'text-accent'
+									'flex h-8 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted-foreground transition active:bg-surface-2 active:text-text',
+									modelStaged && 'text-primary'
 								)}
 							>
 								<ProviderMark agentType={agentType} model={providerModel} className="size-[15px]" />
@@ -116,9 +116,9 @@ export function AgentControls({
 					aria-label={`Fast mode ${fast === undefined ? 'default' : fast ? 'on' : 'off'}`}
 					aria-pressed={fast === true}
 					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition active:bg-surface-2 active:text-text',
 						fast && 'text-text',
-						fastStaged && 'text-accent'
+						fastStaged && 'text-primary'
 					)}
 				>
 					<Zap size={17} />
@@ -129,8 +129,8 @@ export function AgentControls({
 						onClick={onEffortChange}
 						aria-label={`Reasoning effort: ${effort ? EFFORT_LABELS[effort] : 'default'}`}
 						className={cn(
-							'flex h-8 shrink-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted transition active:bg-surface-2 active:text-text',
-							effortStaged && 'text-accent'
+							'flex h-8 shrink-0 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-muted-foreground transition active:bg-surface-2 active:text-text',
+							effortStaged && 'text-primary'
 						)}
 					>
 						<EffortBars effort={effort ?? ''} />
@@ -143,9 +143,9 @@ export function AgentControls({
 					aria-label={`Plan mode ${plan === undefined ? 'default' : plan ? 'on' : 'off'}`}
 					aria-pressed={plan === true}
 					className={cn(
-						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted transition active:bg-surface-2 active:text-text',
+						'flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition active:bg-surface-2 active:text-text',
 						plan && 'text-text',
-						planStaged && 'text-accent'
+						planStaged && 'text-primary'
 					)}
 				>
 					<MapIcon size={17} />

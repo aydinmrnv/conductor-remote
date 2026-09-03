@@ -27,8 +27,8 @@ export function Patch({ patch, truncated, className }: { patch: string; truncate
 function lineClass(line: string): string {
 	if (line.startsWith('+') && !line.startsWith('+++')) return 'text-add'
 	if (line.startsWith('-') && !line.startsWith('---')) return 'text-del'
-	if (line.startsWith('@@')) return 'text-accent'
+	if (line.startsWith('@@')) return 'text-primary'
 	if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('+++') || line.startsWith('---'))
 		return 'text-faint'
-	return 'text-muted'
+	return 'text-muted-foreground'
 }

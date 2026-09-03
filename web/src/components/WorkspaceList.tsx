@@ -1,6 +1,9 @@
-import { ChevronDown, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { ChevronDown, PanelLeftClose, Plus, QrCode, Search, SlidersHorizontal } from 'lucide-react'
+import { motion } from 'motion/react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { Kbd, KbdGroup } from '@/components/ui/kbd'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useModelCatalog, useWorkspaces } from '../hooks.ts'
 import { cn } from '../lib/cn.ts'
 import {
@@ -18,7 +21,9 @@ import {
 	workspaceStatusLabel,
 	workspaceTitle
 } from '../lib/format.ts'
+import { modKey } from '../lib/media.ts'
 import { unreadCount } from '../lib/read.ts'
+import { useShortcuts } from '../lib/shortcuts.ts'
 import type { CachedModelGroup, Workspace } from '../lib/types.ts'
 import { type GroupBy, type SortBy, useApp, type ViewPrefs } from '../store.ts'
 import { ProviderMark } from './AgentIcons.tsx'
@@ -84,8 +89,8 @@ function groupWorkspaces(list: Workspace[], groupBy: GroupBy): Group[] {
 		.map(r => ({ key: `repo:${r}`, label: r || 'No repo', items: buckets.get(r) ?? [] }))
 }
 
-/** Workspace list — floating drawer on phones, persistent left rail on md+. */
-export function WorkspaceList({ selectedId }: { selectedId?: string }) {
+/** Workspace list — the home screen on phones, the rail on md+ (collapsible from its header). */
+export function WorkspaceList({ selectedId, onCollapse }: { selectedId?: string; onCollapse?: () => void }) {
 	const navigate = useNavigate()
 	const setSidebarOpen = useApp(s => s.setSidebarOpen)
 	const view = useApp(s => s.view)
@@ -96,6 +101,21 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 	const [newOpen, setNewOpen] = useState(false)
 	const [logsOpen, setLogsOpen] = useState(false)
 	const [searchOpen, setSearchOpen] = useState(false)
+	// ⌘K and ⌘N are the desktop's way in; the list is always mounted, so they live here.
+	const shortcuts = useMemo(
+		() => ({
+			'mod+k': (e: KeyboardEvent) => {
+				e.preventDefault()
+				setSearchOpen(o => !o)
+			},
+			'mod+n': (e: KeyboardEvent) => {
+				e.preventDefault()
+				setNewOpen(true)
+			}
+		}),
+		[]
+	)
+	useShortcuts(shortcuts)
 	const { data, isLoading, isError, error } = useWorkspaces()
 	const workspaces = data?.workspaces ?? []
 	// Conductor's own names for the models these rows run on, read once for the whole
@@ -169,47 +189,33 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 				<Header
 					title="Workspaces"
 					subtitle={subtitle}
+					leading={
+						onCollapse ? (
+							<IconAction label="Collapse sidebar" kbd="B" onClick={onCollapse} className="-ml-1 hidden md:flex">
+								<PanelLeftClose size={18} />
+							</IconAction>
+						) : undefined
+					}
 					right={
 						/* No close button. The drawer already closes four other ways — the scrim, an
 						   edge swipe back, picking a workspace, the header toggle it opened from — and
 						   on md+ it is a static rail that cannot close at all, so the X was a control
 						   that did nothing half the time and cost a slot on the phone the whole time. */
 						<>
-							<button
-								type="button"
-								onClick={() => setSearchOpen(true)}
-								aria-label="Search workspaces and chats"
-								title="Search (⌘K)"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
+							<IconAction label="Search" kbd="K" onClick={() => setSearchOpen(true)}>
 								<Search size={18} />
-							</button>
-							<button
-								type="button"
-								onClick={() => setControlsOpen(o => !o)}
-								aria-label="View options"
-								className="relative flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
+							</IconAction>
+							<IconAction label="View options" onClick={() => setControlsOpen(o => !o)}>
 								<SlidersHorizontal size={18} />
-								{filtered ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent" /> : null}
-							</button>
-							<button
-								type="button"
-								onClick={() => setConnectOpen(true)}
-								aria-label="Connect a device"
-								className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
-							>
+								{filtered ? <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary" /> : null}
+							</IconAction>
+							<IconAction label="Connect a device" onClick={() => setConnectOpen(true)}>
 								<QrCode size={18} />
-							</button>
+							</IconAction>
 							{/* Last, and the only filled one: it is the thing you came here to do. */}
-							<button
-								type="button"
-								onClick={() => setNewOpen(true)}
-								aria-label="New workspace"
-								className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-text active:bg-surface-2"
-							>
+							<IconAction label="New workspace" kbd="N" onClick={() => setNewOpen(true)} primary>
 								<Plus size={20} />
-							</button>
+							</IconAction>
 						</>
 					}
 				/>
@@ -240,7 +246,9 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 									>
 										<GroupDot status={g.status} />
 										<span className="truncate">{g.label}</span>
-										{collapsed ? <span className="font-normal text-muted text-xs">{g.items.length}</span> : null}
+										{collapsed ? (
+											<span className="font-normal text-muted-foreground text-xs">{g.items.length}</span>
+										) : null}
 										<ChevronDown
 											size={14}
 											className={cn('ml-auto shrink-0 text-faint transition-transform', collapsed && '-rotate-90')}
@@ -252,7 +260,13 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 										{g.items.map(w => {
 											const unread = unreadCount(w, readMarks)
 											return (
-												<li key={w.id} className="fade-in">
+												<motion.li
+													key={w.id}
+													layout="position"
+													initial={{ opacity: 0, y: 6 }}
+													animate={{ opacity: 1, y: 0 }}
+													transition={{ duration: 0.18, ease: 'easeOut' }}
+												>
 													{/* Tighter than the shared `.card` (px-4 py-3.5): this row is the one
 													    card the app draws by the dozen, and the nav already pads it by 12px,
 													    so the card's own inset was double-spending the phone's narrow rail.
@@ -260,8 +274,8 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 													<button
 														type="button"
 														className={cn(
-															'card w-full px-3 py-2.5',
-															w.id === selectedId ? 'border-accent/50 bg-surface-2' : unread && 'border-l-accent'
+															'card w-full px-3 py-2.5 md:hover:border-border md:hover:bg-surface-2/70',
+															w.id === selectedId ? 'border-primary/50 bg-surface-2' : unread && 'border-l-accent'
 														)}
 														onClick={() => open(w.id)}
 													>
@@ -272,7 +286,7 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 															modelGroups={modelGroups}
 														/>
 													</button>
-												</li>
+												</motion.li>
 											)
 										})}
 									</ul>
@@ -306,6 +320,53 @@ export function WorkspaceList({ selectedId }: { selectedId?: string }) {
 			) : null}
 			{logsOpen ? <LogsSheet onClose={() => setLogsOpen(false)} /> : null}
 		</div>
+	)
+}
+
+/** A header icon button with its tooltip and shortcut; the phone gets the same button without the hover chrome. */
+function IconAction({
+	label,
+	kbd,
+	onClick,
+	primary,
+	className,
+	children
+}: {
+	label: string
+	kbd?: string
+	onClick: () => void
+	primary?: boolean
+	className?: string
+	children: React.ReactNode
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					onClick={onClick}
+					aria-label={label}
+					className={cn(
+						'relative flex size-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-surface-2 md:hover:bg-surface-2',
+						primary ? '-mr-1 text-text' : 'text-muted-foreground md:hover:text-text',
+						className
+					)}
+				>
+					{children}
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">
+				<span className="flex items-center gap-2">
+					{label}
+					{kbd ? (
+						<KbdGroup>
+							<Kbd>{modKey}</Kbd>
+							<Kbd>{kbd}</Kbd>
+						</KbdGroup>
+					) : null}
+				</span>
+			</TooltipContent>
+		</Tooltip>
 	)
 }
 
@@ -434,7 +495,7 @@ function ViewSwitch({
 			onClick={() => onChange(!checked)}
 			className={cn(
 				'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-				checked ? 'bg-accent' : 'border border-border bg-surface-2'
+				checked ? 'bg-primary' : 'border border-border bg-surface-2'
 			)}
 		>
 			{/* `left-0.5` is load-bearing — see the note on the Connect sheet's twin. */}
@@ -450,7 +511,7 @@ function ViewSwitch({
 
 function ControlRow({ id, label, children }: { id: string; label: string; children: ReactNode }) {
 	return (
-		<div className="flex items-center justify-between gap-3 text-sm text-muted">
+		<div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
 			<label htmlFor={id}>{label}</label>
 			{children}
 		</div>
@@ -524,7 +585,7 @@ function WorkspaceCard({
 						className={cn(
 							'min-w-0 flex-1 truncate text-sm leading-none',
 							unread ? 'font-bold' : 'font-medium',
-							unread || selected ? 'text-text' : 'text-muted'
+							unread || selected ? 'text-text' : 'text-muted-foreground'
 						)}
 					>
 						{workspaceTitle(w)}
@@ -532,7 +593,7 @@ function WorkspaceCard({
 					{w.pinned_at ? <span className="shrink-0 text-xs text-faint">📌</span> : null}
 					{/* Unread is a per-chat flag, so one unread chat has no number worth printing — a
 					    dot says it; the count only appears once several chats here have news. */}
-					{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-accent" /> : null}
+					{unread > 1 ? <Badge>{unread}</Badge> : unread ? <span className="dot size-2 bg-primary" /> : null}
 				</div>
 				{/* Context usage is *not* here: a workspace holds several chats and this card can only
 				    speak for the active one, so the number read as the workspace's. It lives on the
@@ -540,7 +601,7 @@ function WorkspaceCard({
 				{/* Age first: it is the one thing every row is scanned for, and the left edge is
 				    where that scan already is. The model sits at the right edge, where a column
 				    of marks reads at a glance and a long name has somewhere to truncate. */}
-				<div className="flex min-w-0 items-end gap-2 text-xs text-muted">
+				<div className="flex min-w-0 items-end gap-2 text-xs text-muted-foreground">
 					<span className="shrink-0 text-[11px] text-faint">{relativeAge(w.updated_at)}</span>
 					{model ? (
 						<span className="ml-auto flex min-w-0 items-center gap-1 text-[11px]">

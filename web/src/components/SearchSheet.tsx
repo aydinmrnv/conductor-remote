@@ -73,12 +73,12 @@ export function SearchSheet({
 	// opens from carries a `transform`, which would make `fixed` mean "the drawer".
 	return createPortal(
 		<>
-			<div className="fixed inset-0 z-50 bg-black/50" onClick={onClose} aria-hidden />
+			<div className="fixed inset-0 z-50 bg-black/50 md:backdrop-blur-sm" onClick={onClose} aria-hidden />
 			<div
 				role="dialog"
 				aria-modal="true"
 				aria-label="Search workspaces and chats"
-				className="app-height fade-in pt-safe fixed inset-x-0 top-0 z-50 flex flex-col bg-bg md:inset-x-auto md:left-1/2 md:top-16 md:max-h-[70vh] md:w-[36rem] md:max-w-[92vw] md:-translate-x-1/2 md:rounded-2xl md:border md:border-border md:shadow-2xl"
+				className="app-height fade-in pt-safe fixed inset-x-0 top-0 z-50 flex flex-col bg-background md:inset-x-auto md:left-1/2 md:top-[12vh] md:max-h-[70vh] md:w-[40rem] md:max-w-[92vw] md:-translate-x-1/2 md:rounded-3xl md:border md:border-border/60 md:bg-card/90 md:shadow-2xl md:backdrop-blur-xl"
 			>
 				<div className="relative flex items-center gap-2 border-b border-border-soft px-3 py-2.5">
 					<div className="relative min-w-0 flex-1">
@@ -98,7 +98,7 @@ export function SearchSheet({
 							onChange={e => setQuery(e.target.value)}
 							placeholder="Search workspaces and chats"
 							aria-label="Search workspaces and chats"
-							className="w-full rounded-xl border border-border bg-surface py-2 pl-8 pr-9 text-sm text-text placeholder:text-faint focus:border-accent/50 focus:outline-none"
+							className="w-full rounded-xl border border-border bg-surface py-2 pl-8 pr-9 text-sm text-text placeholder:text-faint focus:border-primary/50 focus:outline-none"
 						/>
 						{query ? (
 							<button
@@ -108,7 +108,7 @@ export function SearchSheet({
 									inputRef.current?.focus()
 								}}
 								aria-label="Clear search"
-								className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted active:bg-surface-2"
+								className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 							>
 								<X size={15} />
 							</button>
@@ -124,7 +124,9 @@ export function SearchSheet({
 						aria-expanded={pickerOpen}
 						className={cn(
 							'flex h-9 shrink-0 items-center justify-center gap-1 rounded-full text-sm active:bg-surface-2',
-							filtered ? 'max-w-36 border border-accent/50 bg-accent/10 px-2.5 text-text' : 'size-9 text-muted'
+							filtered
+								? 'max-w-36 border border-primary/50 bg-primary/10 px-2.5 text-text'
+								: 'size-9 text-muted-foreground'
 						)}
 					>
 						<Filter size={filtered ? 14 : 18} className="shrink-0" />
@@ -142,7 +144,7 @@ export function SearchSheet({
 						type="button"
 						onClick={onClose}
 						aria-label="Close search"
-						className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"
+						className="-mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-surface-2"
 					>
 						<X size={20} />
 					</button>

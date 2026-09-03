@@ -172,7 +172,7 @@ function ResultRow({
 							</span>
 						) : null}
 					</div>
-					<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted">
+					<div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
 						{w.repo_name ? <span className="shrink-0 font-mono text-faint">{w.repo_name}</span> : null}
 						{w.branch ? <Chip className="min-w-0 flex-1 truncate">{w.branch}</Chip> : null}
 						{viaCodename ? <Chip className="shrink-0 text-faint">dir {w.directory_name}</Chip> : null}
@@ -195,7 +195,7 @@ function ResultRow({
 	return (
 		<button
 			type="button"
-			className={cn(CARD, selected && 'border-accent/50 bg-surface-2')}
+			className={cn(CARD, selected && 'border-primary/50 bg-surface-2')}
 			onClick={() => onOpen(w.id, row.sessionId)}
 		>
 			{body}
@@ -212,7 +212,7 @@ const ROLE_LABEL: Record<SearchRole, string> = { user: 'you', assistant: 'agent'
 
 function SnippetLine({ snippet }: { snippet: SearchSnippet }) {
 	return (
-		<p className="line-clamp-2 text-left text-xs leading-snug text-muted">
+		<p className="line-clamp-2 text-left text-xs leading-snug text-muted-foreground">
 			<span
 				className={`mr-1.5 text-[10px] uppercase tracking-wide ${snippet.role === 'thinking' ? 'text-faint italic' : 'text-faint'}`}
 			>
@@ -221,7 +221,7 @@ function SnippetLine({ snippet }: { snippet: SearchSnippet }) {
 			{splitSnippet(snippet.text).map((run, i) =>
 				run.hit ? (
 					// biome-ignore lint/suspicious/noArrayIndexKey: runs are positional slices of one string
-					<mark key={i} className="rounded bg-accent/25 px-0.5 text-text">
+					<mark key={i} className="rounded bg-primary/25 px-0.5 text-text">
 						{run.text}
 					</mark>
 				) : (

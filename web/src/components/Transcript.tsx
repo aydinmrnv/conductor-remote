@@ -162,7 +162,11 @@ export function Transcript({
 
 	return (
 		<div className="relative flex min-h-0 min-w-0 flex-1">
-			<div ref={scroller} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+			<div
+				ref={scroller}
+				onScroll={onScroll}
+				className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 md:px-6 md:py-6"
+			>
 				{loading && empty ? (
 					<Spinner label="Loading transcript…" />
 				) : error && empty ? (
@@ -170,7 +174,7 @@ export function Transcript({
 				) : empty && !working ? (
 					<Empty>No messages yet.</Empty>
 				) : (
-					<div className="flex min-w-0 flex-col gap-2.5">
+					<div className="mx-auto flex min-w-0 max-w-[82ch] flex-col gap-2.5">
 						{rows.map(row =>
 							row.kind === 'steps' ? (
 								<StepGroup key={row.key} entries={row.entries} />
@@ -306,7 +310,7 @@ const StepGroup = memo(function StepGroup({ entries }: { entries: TranscriptEntr
 				<span className="shrink-0 font-mono text-[11px] text-faint transition-transform group-open/steps:rotate-90">
 					▸
 				</span>
-				<span className="shrink-0 text-[12.5px] text-muted">{entries.length} steps</span>
+				<span className="shrink-0 text-[12.5px] text-muted-foreground">{entries.length} steps</span>
 				<span className="min-w-0 flex-1 truncate text-[11px] text-faint group-open/steps:invisible">{lastLabel}</span>
 				{failed ? <span className="shrink-0 text-[11px] text-del">{failed} failed</span> : null}
 			</summary>
@@ -430,7 +434,7 @@ const Entry = memo(function Entry({ e }: { e: TranscriptEntry }) {
 					<span className="mr-1 inline-block transition-transform group-open/think:rotate-90">▸</span>
 					Thinking
 				</summary>
-				<div className="mt-1 border-l-2 border-border-soft pl-3 text-[13px] italic leading-relaxed text-muted">
+				<div className="mt-1 border-l-2 border-border-soft pl-3 text-[13px] italic leading-relaxed text-muted-foreground">
 					<Markdown>{e.text}</Markdown>
 				</div>
 			</details>
@@ -518,7 +522,7 @@ function ChatActions({
 				/>
 				{onFork ? (
 					<div className="relative">
-						<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted">
+						<div className="flex items-center overflow-hidden rounded-lg border border-border-soft bg-surface/70 text-muted-foreground">
 							<button
 								type="button"
 								onClick={() => void fork({ thinking: true, tools: false })}
@@ -635,7 +639,7 @@ function WaitingIndicator({ task }: { task: BackgroundTask }) {
 		return () => clearInterval(timer)
 	}, [])
 	return (
-		<div className="fade-in flex min-w-0 items-center gap-2 px-0.5 py-1.5 text-[12.5px] text-muted">
+		<div className="fade-in flex min-w-0 items-center gap-2 px-0.5 py-1.5 text-[12.5px] text-muted-foreground">
 			<Hourglass size={13} className="shrink-0 text-faint" />
 			<span className="shrink-0 text-faint">Waiting for task</span>
 			<span className="min-w-0 flex-1 truncate">{task.description}</span>
@@ -675,7 +679,7 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 		return (
 			<div className="flex min-w-0 items-baseline gap-2 overflow-hidden whitespace-nowrap rounded-xl border border-border-soft bg-surface/60 px-3 py-1.5">
 				<span className="shrink-0 font-mono text-[11px] text-faint">·</span>
-				<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
+				<span className="max-w-full truncate text-[12.5px] text-muted-foreground">{e.text}</span>
 			</div>
 		)
 	}
@@ -692,14 +696,14 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 				<span className="shrink-0 font-mono text-[11px] text-faint transition-transform group-open/tool:rotate-90">
 					▸
 				</span>
-				<span className="max-w-full truncate text-[12.5px] text-muted">{e.text}</span>
+				<span className="max-w-full truncate text-[12.5px] text-muted-foreground">{e.text}</span>
 				{e.detail ? (
 					source ? (
 						<ChatLink
 							href={source}
 							title={`Open ${e.detail}`}
 							onClick={event => event.stopPropagation()}
-							className="min-w-0 flex-1 truncate font-mono text-[11px] text-accent underline underline-offset-2 group-open/tool:invisible"
+							className="min-w-0 flex-1 truncate font-mono text-[11px] text-primary underline underline-offset-2 group-open/tool:invisible"
 						>
 							{e.detail}
 						</ChatLink>
@@ -717,12 +721,12 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 						<ChatLink
 							href={source}
 							title={`Open ${e.detail}`}
-							className="block whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-accent underline underline-offset-2 [overflow-wrap:anywhere]"
+							className="block whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-primary underline underline-offset-2 [overflow-wrap:anywhere]"
 						>
 							{e.detail}
 						</ChatLink>
 					) : (
-						<Mono text={e.detail} className="text-muted" language={languageForTool(e.tool)} />
+						<Mono text={e.detail} className="text-muted-foreground" language={languageForTool(e.tool)} />
 					)
 				) : null}
 				{e.output ? (
@@ -733,7 +737,7 @@ const ToolEntry = memo(function ToolEntry({ e }: { e: TranscriptEntry }) {
 						) : (
 							<Mono
 								text={e.output}
-								className={e.error ? 'text-del/80' : 'text-muted'}
+								className={e.error ? 'text-del/80' : 'text-muted-foreground'}
 								language={e.error ? null : languageForToolOutput(e.tool, e.detail)}
 							/>
 						)}

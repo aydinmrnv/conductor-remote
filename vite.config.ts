@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
@@ -29,6 +30,9 @@ export default defineConfig({
 		__APP_VERSION__: JSON.stringify(appVersion)
 	},
 	root: 'web',
+	resolve: {
+		alias: { '@': path.resolve(import.meta.dirname, 'web/src') }
+	},
 	// Repo-root `public/` (outside the `web` root) so Conductor's repo-icon lookup —
 	// which only scans root-level paths like `public/apple-touch-icon.png` — finds
 	// the same assets the PWA serves, with no duplicated icon file.

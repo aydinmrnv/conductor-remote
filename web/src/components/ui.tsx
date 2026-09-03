@@ -52,7 +52,7 @@ export function OfflineBanner() {
 	}, [online])
 	if (updating)
 		return (
-			<div className="fade-in flex items-center gap-1.5 bg-accent/10 px-3 py-1.5 text-xs text-accent">
+			<div className="fade-in flex items-center gap-1.5 bg-primary/10 px-3 py-1.5 text-xs text-primary">
 				<RefreshCw size={13} className="animate-spin" />
 				<span>Updating relay to {update?.latest ?? 'latest'}… reconnecting</span>
 			</div>
@@ -76,7 +76,7 @@ export function UnlockLink({ className }: { className?: string }) {
 	const href = unlockUrl()
 	if (!href) return null
 	return (
-		<a href={href} className={cn('font-semibold text-accent underline underline-offset-2', className)}>
+		<a href={href} className={cn('font-semibold text-primary underline underline-offset-2', className)}>
 			Unlock the Mac
 		</a>
 	)
@@ -108,16 +108,18 @@ export function CopyButton({
 			type="button"
 			onClick={() => void copy()}
 			aria-label={copied ? `Copied ${label}` : `Copy ${label}`}
-			className={cn('flex items-center justify-center text-muted transition active:bg-surface-2', className)}
+			className={cn('flex items-center justify-center text-muted-foreground transition active:bg-surface-2', className)}
 		>
-			{copied ? <Check size={size} className="text-accent" /> : <Copy size={size} />}
+			{copied ? <Check size={size} className="text-primary" /> : <Copy size={size} />}
 		</button>
 	)
 }
 
 export function Chip({ children, className }: { children: ReactNode; className?: string }) {
 	return (
-		<span className={cn('rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-muted', className)}>
+		<span
+			className={cn('rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground', className)}
+		>
 			{children}
 		</span>
 	)
@@ -125,7 +127,7 @@ export function Chip({ children, className }: { children: ReactNode; className?:
 
 export function Badge({ children }: { children: ReactNode }) {
 	return (
-		<span className="grid min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">
+		<span className="grid min-w-5 place-items-center rounded-full bg-primary px-1.5 text-[11px] font-bold text-white">
 			{children}
 		</span>
 	)
@@ -165,7 +167,7 @@ export function RelayUnreachable({ error }: { error: unknown }) {
 	if (noNetwork)
 		return (
 			<Empty>
-				<WifiOff size={20} className="mx-auto mb-3 text-muted" />
+				<WifiOff size={20} className="mx-auto mb-3 text-muted-foreground" />
 				<div className="font-medium text-text">This phone is offline</div>
 				<div className="mt-1">Check Wi-Fi or cellular. The list comes back on its own.</div>
 			</Empty>
@@ -177,7 +179,7 @@ export function RelayUnreachable({ error }: { error: unknown }) {
 			<div className="font-medium text-text">
 				{unreachable ? 'Can’t reach the relay' : 'The relay answered with an error'}
 			</div>
-			<div className="mt-1 break-words font-mono text-[11px] text-muted">{message}</div>
+			<div className="mt-1 break-words font-mono text-[11px] text-muted-foreground">{message}</div>
 			{unreachable ? (
 				<ul className="mt-4 space-y-2 text-left">
 					<li>Is the Mac awake and online?</li>
@@ -194,19 +196,20 @@ export function RelayUnreachable({ error }: { error: unknown }) {
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-	return <div className="mx-auto max-w-xs px-6 py-16 text-center text-sm text-muted">{children}</div>
+	return <div className="mx-auto max-w-xs px-6 py-16 text-center text-sm text-muted-foreground">{children}</div>
 }
 
 export function Spinner({ label }: { label?: string }) {
 	return (
-		<div className="flex items-center justify-center gap-2 py-16 text-sm text-muted">
+		<div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
 			<span className="size-4 animate-spin rounded-full border-2 border-border border-t-accent" />
 			{label}
 		</div>
 	)
 }
 
-const AVATAR_TILE = 'grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 font-semibold text-muted'
+const AVATAR_TILE =
+	'grid size-8 place-items-center overflow-hidden rounded-lg bg-surface-2 font-semibold text-muted-foreground'
 
 /**
  * How a surface draws the *artwork* inside the tile. `inset` holds a raster icon to the
@@ -243,7 +246,7 @@ export function RepoAvatar({ icon, name, artwork }: { icon: RepoIcon | null; nam
 		const Glyph = LUCIDE_ICONS[icon.value]
 		return Glyph ? (
 			<div className={AVATAR_TILE}>
-				<Glyph size={18} className="text-muted" />
+				<Glyph size={18} className="text-muted-foreground" />
 			</div>
 		) : (
 			monogram

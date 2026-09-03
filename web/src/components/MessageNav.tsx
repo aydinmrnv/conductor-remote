@@ -320,12 +320,12 @@ export function MessageNav({ scroller }: { scroller: RefObject<HTMLDivElement | 
 						aria-haspopup="dialog"
 						aria-expanded={open}
 						aria-label={`Your messages — ${marks.length} in this chat`}
-						className="flex items-center gap-1.5 border-border-soft border-x px-3.5 text-muted transition active:bg-surface active:text-text focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+						className="flex items-center gap-1.5 border-border-soft border-x px-3.5 text-muted-foreground transition active:bg-surface active:text-text focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2"
 					>
 						<List size={16} className="shrink-0" />
 						<span className="font-mono text-[13px] tabular-nums">
 							<span className="text-text">{current + 1 || '–'}</span>
-							<span className="text-muted">/{marks.length}</span>
+							<span className="text-muted-foreground">/{marks.length}</span>
 						</span>
 					</button>
 					<Step dir="down" onClick={() => next !== null && jumpTo(next)} disabled={next === null} />
@@ -357,7 +357,7 @@ function RowMeta({ mark }: { mark: Mark }) {
 	const label =
 		mark.state === 'sending' ? 'sending…' : mark.state === 'queued' ? 'queued' : mark.ts && relativeTime(mark.ts)
 	if (!label) return null
-	return <span className="shrink-0 text-[11px] text-muted tabular-nums">{label}</span>
+	return <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{label}</span>
 }
 
 /** One arrow of the pill: a 48px target, dimmed and inert at either end of the chat. */
@@ -369,7 +369,7 @@ function Step({ dir, onClick, disabled }: { dir: 'up' | 'down'; onClick: () => v
 			onClick={onClick}
 			disabled={disabled}
 			aria-label={dir === 'up' ? 'Jump to your previous message' : 'Jump to your next message'}
-			className="flex w-12 items-center justify-center text-muted transition active:bg-surface active:text-text disabled:text-faint/40 focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+			className="flex w-12 items-center justify-center text-muted-foreground transition active:bg-surface active:text-text disabled:text-faint/40 focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2"
 		>
 			<Icon size={19} />
 		</button>
@@ -424,7 +424,7 @@ function MessageSheet({
 						type="button"
 						onClick={onClose}
 						aria-label="Close"
-						className="-mr-2 flex size-11 items-center justify-center rounded-full text-muted transition active:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+						className="-mr-2 flex size-11 items-center justify-center rounded-full text-muted-foreground transition active:bg-surface-2 focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2"
 					>
 						<X size={19} />
 					</button>
@@ -440,14 +440,14 @@ function MessageSheet({
 							className={cn(
 								// Centred, not top-aligned: a one-line prompt in a 56px row would
 								// otherwise hang from the top with its own number floating beside it.
-								'flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left transition active:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2',
+								'flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left transition active:bg-surface-2 focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2',
 								i === current && 'bg-surface-2/60'
 							)}
 						>
 							<span
 								className={cn(
 									'w-5 shrink-0 text-right font-mono text-[11px] tabular-nums',
-									i === current ? 'text-accent' : 'text-muted'
+									i === current ? 'text-primary' : 'text-muted-foreground'
 								)}
 							>
 								{i + 1}

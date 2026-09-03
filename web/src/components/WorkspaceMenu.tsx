@@ -91,7 +91,7 @@ export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspa
 				aria-label={`Workspace menu: ${workspaceStatusLabel(current)}`}
 				aria-expanded={open}
 				className={cn(
-					'flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition active:bg-surface-2 disabled:opacity-40',
+					'flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition active:bg-surface-2 disabled:opacity-40',
 					open && 'bg-surface-2 text-text'
 				)}
 			>
@@ -114,7 +114,7 @@ export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspa
 						{confirmingArchive ? (
 							<div className="p-3">
 								<div className="text-sm font-semibold">Archive workspace?</div>
-								<p className="mt-1 text-xs leading-snug text-muted">
+								<p className="mt-1 text-xs leading-snug text-muted-foreground">
 									{agentsRunning > 0
 										? 'Agents are still running in this workspace. Archiving will stop them and end any in-progress work.'
 										: 'Its worktree is deleted. The chat stays readable and searchable.'}
@@ -147,7 +147,7 @@ export function WorkspaceMenu({ workspace, agentsRunning }: { workspace: Workspa
 									>
 										<StatusGlyph status={s} />
 										<span className="flex-1">{workspaceStatusLabel(s)}</span>
-										{s === current ? <Check size={15} className="text-accent" /> : null}
+										{s === current ? <Check size={15} className="text-primary" /> : null}
 									</button>
 								))}
 								<button
